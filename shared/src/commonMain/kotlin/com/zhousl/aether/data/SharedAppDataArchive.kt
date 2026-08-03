@@ -278,6 +278,9 @@ private fun AppSettings.toAndroidAppSettingsJson(): JsonObject = buildJsonObject
     put("systemPrompt", systemPrompt)
     put("tavilyApiKey", tavilyApiKey)
     put("tavilyBaseUrl", normalizeTavilyBaseUrl(tavilyBaseUrl))
+    put("searchBackend", searchBackend.storageValue)
+    put("searxngBaseUrl", normalizeSearXngBaseUrl(searxngBaseUrl))
+    put("searxngApiKey", searxngApiKey)
     put("llmInactivityReconnectTimeoutSeconds", llmInactivityReconnectTimeoutSeconds)
     put("keepTasksRunningInBackground", keepTasksRunningInBackground)
     put("notifyOnTaskCompletion", notifyOnTaskCompletion)
@@ -352,6 +355,11 @@ private fun parseAndroidAppSettings(value: JsonObject): AppSettings {
         tavilyBaseUrl = normalizeTavilyBaseUrl(
             value.stringValueOrDefault("tavilyBaseUrl", defaults.tavilyBaseUrl),
         ),
+        searchBackend = normalizeSearchBackend(value.stringValue("searchBackend")),
+        searxngBaseUrl = normalizeSearXngBaseUrl(
+            value.stringValueOrDefault("searxngBaseUrl", defaults.searxngBaseUrl),
+        ),
+        searxngApiKey = value.stringValueOrDefault("searxngApiKey", defaults.searxngApiKey),
         llmInactivityReconnectTimeoutSeconds = normalizeLlmInactivityReconnectTimeoutSeconds(
             value.intValueOrDefault(
                 "llmInactivityReconnectTimeoutSeconds",

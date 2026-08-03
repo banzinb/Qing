@@ -145,6 +145,7 @@ import com.zhousl.aether.data.AutomaticModelPurpose
 import com.zhousl.aether.data.ChatUsageStatisticsSnapshot
 import com.zhousl.aether.data.AppLanguage
 import com.zhousl.aether.data.AppThemeMode
+import com.zhousl.aether.data.SearchBackend
 import com.zhousl.aether.data.LlmProviderConfig
 import com.zhousl.aether.data.PiProviderCatalog
 import com.zhousl.aether.data.LocalRuntimeId
@@ -172,6 +173,7 @@ import com.zhousl.aether.data.pi.PiProviderAuthState
 import com.zhousl.aether.data.findModelOption
 import com.zhousl.aether.data.normalizeLlmInactivityReconnectTimeoutSeconds
 import com.zhousl.aether.data.normalizeOldCommandHistoryRetentionHours
+import com.zhousl.aether.data.normalizeSearXngBaseUrl
 import com.zhousl.aether.data.normalizeTavilyBaseUrl
 import com.zhousl.aether.data.quickActionLabel
 import com.zhousl.aether.data.resolveAutomaticModelKey
@@ -405,6 +407,9 @@ fun SettingsScreen(
     systemPrompt: String,
     tavilyApiKey: String,
     tavilyBaseUrl: String,
+    searchBackend: SearchBackend,
+    searxngBaseUrl: String,
+    searxngApiKey: String,
     llmInactivityReconnectTimeoutSeconds: Int,
     keepTasksRunningInBackground: Boolean,
     notifyOnTaskCompletion: Boolean,
@@ -452,6 +457,9 @@ fun SettingsScreen(
     appUpdate: AppUpdateUiState,
     onSave: (
         String,
+        String,
+        String,
+        SearchBackend,
         String,
         String,
         Int,
@@ -552,6 +560,15 @@ fun SettingsScreen(
     var tavilyBaseUrlValue by rememberSaveable(stateSaver = TextFieldValue.Saver) {
         mutableStateOf(TextFieldValue(tavilyBaseUrl))
     }
+    var searchBackendValue by rememberSaveable {
+        mutableStateOf(searchBackend)
+    }
+    var searxngBaseUrlValue by rememberSaveable(stateSaver = TextFieldValue.Saver) {
+        mutableStateOf(TextFieldValue(searxngBaseUrl))
+    }
+    var searxngApiKeyValue by rememberSaveable(stateSaver = TextFieldValue.Saver) {
+        mutableStateOf(TextFieldValue(searxngApiKey))
+    }
     var llmInactivityReconnectTimeoutValue by rememberSaveable(stateSaver = TextFieldValue.Saver) {
         mutableStateOf(TextFieldValue(llmInactivityReconnectTimeoutSeconds.toString()))
     }
@@ -587,6 +604,15 @@ fun SettingsScreen(
     }
     var themeModeValue by rememberSaveable {
         mutableStateOf(themeMode)
+    }
+    LaunchedEffect(searchBackend) {
+        searchBackendValue = searchBackend
+    }
+    LaunchedEffect(searxngBaseUrl) {
+        searxngBaseUrlValue = TextFieldValue(searxngBaseUrl)
+    }
+    LaunchedEffect(searxngApiKey) {
+        searxngApiKeyValue = TextFieldValue(searxngApiKey)
     }
     LaunchedEffect(
         autoCleanOldCommandHistory,
@@ -627,6 +653,9 @@ fun SettingsScreen(
             systemPromptValue.text,
             tavilyApiKeyValue.text,
             normalizeTavilyBaseUrl(tavilyBaseUrlValue.text),
+            searchBackendValue,
+            normalizeSearXngBaseUrl(searxngBaseUrlValue.text),
+            searxngApiKeyValue.text,
             normalizeLlmInactivityReconnectTimeoutSeconds(
                 llmInactivityReconnectTimeoutValue.text.trim().toIntOrNull()
             ),
@@ -656,6 +685,9 @@ fun SettingsScreen(
             systemPromptValue.text,
             tavilyApiKeyValue.text,
             normalizeTavilyBaseUrl(tavilyBaseUrlValue.text),
+            searchBackendValue,
+            normalizeSearXngBaseUrl(searxngBaseUrlValue.text),
+            searxngApiKeyValue.text,
             normalizeLlmInactivityReconnectTimeoutSeconds(
                 llmInactivityReconnectTimeoutValue.text.trim().toIntOrNull()
             ),
@@ -685,6 +717,9 @@ fun SettingsScreen(
             systemPromptValue.text,
             tavilyApiKeyValue.text,
             normalizeTavilyBaseUrl(tavilyBaseUrlValue.text),
+            searchBackendValue,
+            normalizeSearXngBaseUrl(searxngBaseUrlValue.text),
+            searxngApiKeyValue.text,
             normalizeLlmInactivityReconnectTimeoutSeconds(
                 llmInactivityReconnectTimeoutValue.text.trim().toIntOrNull()
             ),
@@ -796,7 +831,11 @@ fun SettingsScreen(
                         else -> stringResource(R.string.settings_no_providers_configured)
                     }
                 },
-                tavilyConfigured = tavilyApiKeyValue.text.isNotBlank(),
+                searchSummary = settingsSearchSummary(
+                    backend = searchBackendValue,
+                    tavilyKey = tavilyApiKeyValue.text,
+                    searxngBaseUrl = searxngBaseUrlValue.text,
+                ),
                 reliabilitySummary = buildString {
                     append(
                         stringResource(
@@ -828,7 +867,7 @@ fun SettingsScreen(
                 statisticsSummary = buildSettingsStatisticsSummary(usageStatisticsSnapshots),
                 onReplayOnboarding = ::persistAndReplayOnboarding,
                 onNavigate = { page ->
-                    if (page == SettingsPage.AgentMode && !termuxSetupState.isReady) {
+                    if (page == SettingsPage.AgentMode && !termuxSetupState.isReady && !alpineSetupState.isReady) {
                         Toast.makeText(
                             context,
                             agentModeRequiresTermuxToastLabel,
@@ -990,10 +1029,16 @@ fun SettingsScreen(
 
             SettingsPage.WebTools -> WebToolsPage(
                 title = stringResource(R.string.settings_web_tools),
+                searchBackendValue = searchBackendValue,
+                onSearchBackendChanged = { searchBackendValue = it },
                 tavilyApiKeyValue = tavilyApiKeyValue,
                 onTavilyApiKeyChanged = { tavilyApiKeyValue = it },
                 tavilyBaseUrlValue = tavilyBaseUrlValue,
                 onTavilyBaseUrlChanged = { tavilyBaseUrlValue = it },
+                searxngBaseUrlValue = searxngBaseUrlValue,
+                onSearxngBaseUrlChanged = { searxngBaseUrlValue = it },
+                searxngApiKeyValue = searxngApiKeyValue,
+                onSearxngApiKeyChanged = { searxngApiKeyValue = it },
                 onBack = { currentPage = SettingsPage.Hub.name },
             )
 
@@ -1230,6 +1275,7 @@ fun SettingsScreen(
 
             SettingsPage.AgentMode -> AgentModeSettingsPage(
                 title = stringResource(R.string.settings_agent_mode),
+                alpineSetupState = alpineSetupState,
                 termuxSetupState = termuxSetupState,
                 agentModeAuthorizationEnabled = agentModeAuthorizationEnabledValue,
                 agentModeAuthorizationMethod = agentModeAuthorizationMethodValue,
@@ -1309,7 +1355,7 @@ fun SettingsScreen(
 private fun SettingsHub(
     generalSettingsSummary: String,
     activeProviderName: String,
-    tavilyConfigured: Boolean,
+    searchSummary: String,
     reliabilitySummary: String,
     termuxReady: Boolean,
     alpineReady: Boolean,
@@ -1392,11 +1438,7 @@ private fun SettingsHub(
                 SettingsNavRow(
                     icon = Icons.Rounded.Link,
                     title = stringResource(R.string.settings_web_tools),
-                    subtitle = if (tavilyConfigured) {
-                        stringResource(R.string.settings_tavily_configured)
-                    } else {
-                        stringResource(R.string.settings_tavily_not_configured)
-                    },
+                    subtitle = searchSummary,
                     onClick = { onNavigate(SettingsPage.WebTools) },
                 )
                 CardDivider()
@@ -1469,12 +1511,12 @@ private fun SettingsHub(
                 SettingsNavRow(
                     icon = LucideIcons.MousePointer2,
                     title = stringResource(R.string.settings_agent_mode),
-                    subtitle = if (termuxReady) {
+                    subtitle = if (termuxReady || alpineReady) {
                         stringResource(R.string.settings_agent_mode_subtitle)
                     } else {
                         stringResource(R.string.settings_requires_termux_setup)
                     },
-                    enabled = termuxReady,
+                    enabled = termuxReady || alpineReady,
                     onClick = { onNavigate(SettingsPage.AgentMode) },
                 )
             }
@@ -2986,10 +3028,16 @@ private fun ReliabilityPage(
 @Composable
 private fun WebToolsPage(
     title: String,
+    searchBackendValue: SearchBackend,
+    onSearchBackendChanged: (SearchBackend) -> Unit,
     tavilyApiKeyValue: TextFieldValue,
     onTavilyApiKeyChanged: (TextFieldValue) -> Unit,
     tavilyBaseUrlValue: TextFieldValue,
     onTavilyBaseUrlChanged: (TextFieldValue) -> Unit,
+    searxngBaseUrlValue: TextFieldValue,
+    onSearxngBaseUrlChanged: (TextFieldValue) -> Unit,
+    searxngApiKeyValue: TextFieldValue,
+    onSearxngApiKeyChanged: (TextFieldValue) -> Unit,
     onBack: () -> Unit,
 ) {
     SubPageScaffold(
@@ -2998,6 +3046,33 @@ private fun WebToolsPage(
         trailingIcon = Icons.Rounded.Check,
         onTrailingAction = onBack,
     ) {
+        SettingsCardGroup {
+            Text(
+                text = stringResource(R.string.settings_search_backend),
+                style = MaterialTheme.typography.titleMedium,
+                color = AetherOnSurface,
+            )
+            Spacer(Modifier.height(6.dp))
+            Text(
+                text = stringResource(R.string.settings_search_backend_description),
+                style = MaterialTheme.typography.bodySmall,
+                color = AetherOnSurfaceVariant,
+            )
+            Spacer(Modifier.height(14.dp))
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                SearchBackend.entries.forEach { option ->
+                    SettingsChoiceRow(
+                        title = settingsSearchBackendDisplayName(option),
+                        subtitle = settingsSearchBackendSubtitle(option),
+                        selected = option == searchBackendValue,
+                        onClick = { onSearchBackendChanged(option) },
+                    )
+                }
+            }
+        }
+
+        Spacer(Modifier.height(16.dp))
+
         SettingsCardGroup {
             ChatGptTextField(
                 label = stringResource(R.string.settings_tavily_api_key),
@@ -3013,6 +3088,21 @@ private fun WebToolsPage(
                 onValueChange = onTavilyBaseUrlChanged,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
             )
+            CardDivider()
+            ChatGptTextField(
+                label = stringResource(R.string.settings_searxng_base_url),
+                value = searxngBaseUrlValue,
+                onValueChange = onSearxngBaseUrlChanged,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+            )
+            CardDivider()
+            ChatGptTextField(
+                label = stringResource(R.string.settings_searxng_api_key),
+                value = searxngApiKeyValue,
+                onValueChange = onSearxngApiKeyChanged,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                isSecret = true,
+            )
         }
 
         Spacer(Modifier.height(8.dp))
@@ -3022,6 +3112,52 @@ private fun WebToolsPage(
             color = AetherOnSurfaceVariant,
             modifier = Modifier.padding(horizontal = 4.dp),
         )
+    }
+}
+
+@Composable
+private fun settingsSearchBackendDisplayName(backend: SearchBackend): String = when (backend) {
+    SearchBackend.Auto -> stringResource(R.string.settings_search_backend_auto)
+    SearchBackend.Tavily -> stringResource(R.string.settings_search_backend_tavily)
+    SearchBackend.Bing -> stringResource(R.string.settings_search_backend_bing)
+    SearchBackend.DuckDuckGo -> stringResource(R.string.settings_search_backend_duckduckgo)
+    SearchBackend.SearXNG -> stringResource(R.string.settings_search_backend_searxng)
+}
+
+@Composable
+private fun settingsSearchBackendSubtitle(backend: SearchBackend): String = when (backend) {
+    SearchBackend.Auto -> stringResource(R.string.settings_search_backend_auto_subtitle)
+    SearchBackend.Tavily -> stringResource(R.string.settings_search_backend_tavily_subtitle)
+    SearchBackend.Bing -> stringResource(R.string.settings_search_backend_bing_subtitle)
+    SearchBackend.DuckDuckGo -> stringResource(R.string.settings_search_backend_duckduckgo_subtitle)
+    SearchBackend.SearXNG -> stringResource(R.string.settings_search_backend_searxng_subtitle)
+}
+
+@Composable
+private fun settingsSearchSummary(
+    backend: SearchBackend,
+    tavilyKey: String,
+    searxngBaseUrl: String,
+): String = when (backend) {
+    SearchBackend.Auto -> if (tavilyKey.isNotBlank()) {
+        stringResource(R.string.settings_search_auto_with_tavily)
+    } else {
+        stringResource(R.string.settings_search_ready)
+    }
+
+    SearchBackend.Tavily -> if (tavilyKey.isNotBlank()) {
+        stringResource(R.string.settings_search_configured, "Tavily")
+    } else {
+        stringResource(R.string.settings_search_requires_config, "Tavily")
+    }
+
+    SearchBackend.Bing -> stringResource(R.string.settings_search_configured, "Bing")
+    SearchBackend.DuckDuckGo -> stringResource(R.string.settings_search_configured, "DuckDuckGo")
+
+    SearchBackend.SearXNG -> if (normalizeSearXngBaseUrl(searxngBaseUrl).isNotBlank()) {
+        stringResource(R.string.settings_search_configured, "SearXNG")
+    } else {
+        stringResource(R.string.settings_search_requires_config, "SearXNG")
     }
 }
 
@@ -5533,6 +5669,7 @@ private fun WorkspaceModeSettingsSection(
 @Composable
 private fun AgentModeSettingsPage(
     title: String,
+    alpineSetupState: LocalRuntimeSetupState,
     termuxSetupState: TermuxSetupState,
     agentModeAuthorizationEnabled: Boolean,
     agentModeAuthorizationMethod: AgentModeAuthorizationMethod,
@@ -5576,7 +5713,7 @@ private fun AgentModeSettingsPage(
         onRefreshAgentModeDisplays(agentModeAuthorizationMethod)
     }
 
-    if (!termuxSetupState.isReady) {
+    if (!termuxSetupState.isReady && !alpineSetupState.isReady) {
         LaunchedEffect(Unit) {
             onRefreshTermuxSetup()
         }

@@ -14,6 +14,7 @@ import org.json.JSONObject
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
+import org.jsoup.parser.Parser
 
 private const val DefaultFetchMarkdownChars = 20_000
 private const val MinFetchMarkdownChars = 500
@@ -160,6 +161,163 @@ class WebToolsClient(
                 json ?: error("Tavily returned non-JSON content.")
             }
         }
+    }
+
+    suspend fun searchBing(
+        query: String,
+        maxResults: Int,
+        baseUrl: String = DefaultBingSearchUrl,
+    ): Result<JSONObject> = runCatching {
+        withContext(Dispatchers.IO) {
+            val base = baseUrl.toHttpUrlOrNull()
+                ?: error("Bing search URL is invalid.")
+            val url = base.newBuilder()
+                .addQueryParameter("q", query.trim())
+                .addQueryParameter("format", "rss")
+                .addQueryParameter("count", maxResults.coerceIn(1, 20).toString())
+                .build()
+            val request = Request.Builder()
+                .url(url)
+                .header("User-Agent", DefaultUserAgent)
+                .build()
+            httpClient.newCall(request).execute().use { response ->
+                val bodyString = response.body?.string().orEmpty()
+                if (!response.isSuccessful) {
+                    error("HTTP ${response.code} from Bing search.")
+                }
+                val document = Jsoup.parse(bodyString, "", Parser.xmlParser())
+                val results = JSONArray()
+                document.select("item").take(maxResults.coerceIn(1, 20)).forEach { item ->
+                    val title = item.selectFirst("title")?.text().orEmpty().trim()
+                    val link = item.selectFirst("link")?.text().orEmpty().trim()
+                    val description = item.selectFirst("description")?.text().orEmpty().trim()
+                    if (title.isBlank() && link.isBlank()) return@forEach
+                    results.put(
+                        JSONObject().apply {
+                            if (title.isNotBlank()) put("title", title)
+                            if (link.isNotBlank()) put("url", link)
+                            if (description.isNotBlank()) put("content", description.take(400))
+                        }
+                    )
+                }
+                JSONObject()
+                    .put("query", query.trim())
+                    .put("results", results)
+            }
+        }
+    }
+
+    suspend fun searchDuckDuckGo(
+        query: String,
+        maxResults: Int,
+        baseUrl: String = DefaultDuckDuckGoSearchUrl,
+    ): Result<JSONObject> = runCatching {
+        withContext(Dispatchers.IO) {
+            val base = baseUrl.toHttpUrlOrNull()
+                ?: error("DuckDuckGo search URL is invalid.")
+            val url = base.newBuilder()
+                .addQueryParameter("q", query.trim())
+                .build()
+            val request = Request.Builder()
+                .url(url)
+                .header("User-Agent", DefaultUserAgent)
+                .build()
+            httpClient.newCall(request).execute().use { response ->
+                val bodyString = response.body?.string().orEmpty()
+                if (!response.isSuccessful) {
+                    error("HTTP ${response.code} from DuckDuckGo search.")
+                }
+                val document = Jsoup.parse(bodyString)
+                val snippets = document.select("a.result__snippet").map { it.text().trim() }
+                val results = JSONArray()
+                document.select("a.result__a").take(maxResults.coerceIn(1, 20))
+                    .forEachIndexed { index, anchor ->
+                        val title = anchor.text().trim()
+                        val href = anchor.attr("href").trim()
+                        if (title.isBlank() && href.isBlank()) return@forEachIndexed
+                        val url = decodeDuckDuckGoRedirectUrl(href)
+                        if (url.isBlank() && title.isBlank()) return@forEachIndexed
+                        results.put(
+                            JSONObject().apply {
+                                if (title.isNotBlank()) put("title", title)
+                                if (url.isNotBlank()) put("url", url)
+                                snippets.getOrNull(index)
+                                    ?.takeIf(String::isNotBlank)
+                                    ?.let { put("content", it.take(400)) }
+                            }
+                        )
+                    }
+                JSONObject()
+                    .put("query", query.trim())
+                    .put("results", results)
+            }
+        }
+    }
+
+    suspend fun searchSearxng(
+        baseUrl: String,
+        apiKey: String,
+        query: String,
+        maxResults: Int,
+    ): Result<JSONObject> = runCatching {
+        withContext(Dispatchers.IO) {
+            val normalizedBase = baseUrl.trim().trimEnd('/')
+            if (normalizedBase.isBlank()) {
+                error("SearXNG base URL is not configured.")
+            }
+            val url = normalizedBase.toHttpUrlOrNull()
+                ?.newBuilder()
+                ?.addPathSegments("search")
+                ?.addQueryParameter("q", query.trim())
+                ?.addQueryParameter("format", "json")
+                ?.addQueryParameter("max_results", maxResults.coerceIn(1, 20).toString())
+                ?.build()
+                ?: error("SearXNG base URL is invalid.")
+            val requestBuilder = Request.Builder()
+                .url(url)
+                .header("User-Agent", DefaultUserAgent)
+            apiKey.trim().takeIf(String::isNotBlank)?.let {
+                requestBuilder.header("Authorization", "Bearer $it")
+            }
+            httpClient.newCall(requestBuilder.build()).execute().use { response ->
+                val bodyString = response.body?.string().orEmpty()
+                val payload = bodyString.toJsonObjectOrNull()
+                if (!response.isSuccessful) {
+                    val message = payload?.optString("message").orEmpty()
+                        .ifBlank { "HTTP ${response.code} from SearXNG." }
+                    error(message)
+                }
+                val parsed = payload ?: error("SearXNG returned non-JSON content.")
+                val rawResults = parsed.optJSONArray("results") ?: JSONArray()
+                val results = JSONArray()
+                val limit = minOf(rawResults.length(), maxResults.coerceIn(1, 20))
+                for (index in 0 until limit) {
+                    val result = rawResults.optJSONObject(index) ?: continue
+                    val title = result.optString("title").trim()
+                    val url = result.optString("url").trim()
+                    val content = result.optString("content").trim()
+                    if (title.isBlank() && url.isBlank()) continue
+                    results.put(
+                        JSONObject().apply {
+                            if (title.isNotBlank()) put("title", title)
+                            if (url.isNotBlank()) put("url", url)
+                            if (content.isNotBlank()) put("content", content)
+                        }
+                    )
+                }
+                JSONObject()
+                    .put("query", query.trim())
+                    .put("results", results)
+            }
+        }
+    }
+
+    private fun decodeDuckDuckGoRedirectUrl(href: String): String {
+        val candidate = href.trim()
+        if (candidate.isBlank()) return ""
+        val absolute = if (candidate.startsWith("//")) "https:$candidate" else candidate
+        val parsed = absolute.toHttpUrlOrNull() ?: return absolute
+        return parsed.queryParameter("uddg")?.takeIf(String::isNotBlank) ?: absolute
     }
 
     private fun buildEndpoint(

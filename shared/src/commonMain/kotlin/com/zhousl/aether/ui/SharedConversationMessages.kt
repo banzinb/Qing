@@ -1870,12 +1870,12 @@ internal fun sharedWebSourceMetadata(
                 .ifBlank { arguments.sharedString("url") }
             sharedWebSourceMetadataFromUrl(sourceUrl)
         }
-        "tavily_search" -> sharedTavilySourceMetadata(arguments, output)
+        "web_search", "tavily_search" -> sharedSearchSourceMetadata(arguments, output)
         else -> null
     }
 }
 
-private fun sharedTavilySourceMetadata(
+private fun sharedSearchSourceMetadata(
     arguments: JsonObject?,
     output: JsonObject?,
 ): SharedWebSourceMetadata {
@@ -1885,10 +1885,10 @@ private fun sharedTavilySourceMetadata(
     val resultUrl = result.sharedString("url")
     val domain = sharedNormalizedDomain(resultUrl)
         .ifBlank { sharedFirstSearchArgumentDomain(arguments) }
-        .ifBlank { "tavily.com" }
+        .ifBlank { "search" }
     val url = sharedNormalizedHttpUrl(resultUrl)
         .ifBlank { sharedNormalizedHttpUrl(domain) }
-        .ifBlank { "https://tavily.com" }
+        .ifBlank { "https://search" }
     val faviconUrl = result.sharedString("favicon")
         .takeIf {
             (it.startsWith("http://") || it.startsWith("https://")) &&
@@ -2086,7 +2086,7 @@ internal fun summarizeSharedToolInvocationCommand(
                 append(')')
             }
         }
-        "tavily_search" -> "search ${arguments.sharedString("query").trim()}"
+        "web_search", "tavily_search" -> "search ${arguments.sharedString("query").trim()}"
         "fetch_web_url" -> "fetch ${arguments.sharedString("url").trim()}"
         "aether_config_get",
         "aether_config_set",
@@ -2889,7 +2889,7 @@ internal fun sharedToolPresentation(name: String): SharedToolPresentation = when
     "find" -> SharedToolPresentation.Find
     "ls" -> SharedToolPresentation.List
     "analyze_image" -> SharedToolPresentation.AnalyzeImage
-    "tavily_search" -> SharedToolPresentation.WebSearch
+    "web_search", "tavily_search" -> SharedToolPresentation.WebSearch
     "fetch_web_url" -> SharedToolPresentation.WebFetch
     else -> SharedToolPresentation.Generic
 }
@@ -2899,12 +2899,12 @@ private fun toolTitle(tool: SharedChatToolInvocation): String {
     val isRunning = tool.isRunning
     val arguments = remember(tool.argumentsJson) { parseSharedJsonObject(tool.argumentsJson) }
     when (tool.name.lowercase()) {
-        "tavily_search" -> return formatSharedArgumentDrivenToolTitle(
+        "web_search", "tavily_search" -> return formatSharedArgumentDrivenToolTitle(
             isRunning = isRunning,
             runningVerb = Res.string.tool_title_searching,
             completedVerb = Res.string.tool_title_searched,
             subject = arguments.sharedString("query"),
-            fallback = Res.string.tool_title_tavily_search_fallback,
+            fallback = Res.string.tool_title_web_search_fallback,
         )
         "fetch_web_url" -> return formatSharedArgumentDrivenToolTitle(
             isRunning = isRunning,

@@ -24,7 +24,7 @@ internal fun buildSharedPiAgentInstructions(
             "User-uploaded files are under attachments/. Use read or analyze_image when inspection is needed. " +
             "When linking a local file for the user to preview or share, use a Markdown link with a file:// target and the absolute path, " +
             "for example [report.pdf](file:///absolute/path/report.pdf). Do not use another URI scheme for local file links. " +
-            "Use fetch_web_url for a specific page and tavily_search for public-web discovery or current information. " +
+            "Use fetch_web_url for a specific page and web_search for public-web discovery or current information. " +
             "Prefer read, edit, write, grep, find, and ls for filesystem work, and bash for shell commands. " +
             "Independent parallel-safe tools may run together; tools marked sequential must run in order. " +
             "Only claim commands or actions that were actually performed. After using tools, summarize the result clearly."

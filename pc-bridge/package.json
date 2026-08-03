@@ -1,0 +1,14 @@
+{
+  "name": "aether-pc-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "PC Codex bridge for Aether phone agent: REST API + MCP Streamable HTTP.",
+  "scripts": {
+    "start": "node server.mjs",
+    "test": "node test/bridge-smoke.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

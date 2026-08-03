@@ -1569,7 +1569,7 @@ class SessionExecutionManager(
                 fallback = "web page",
             )
 
-            "tavily_search" -> formatReasoningToolAction(
+            "web_search", "tavily_search" -> formatReasoningToolAction(
                 isRunning = invocation.isRunning,
                 runningVerb = "Searching",
                 completedVerb = "Searched",

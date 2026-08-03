@@ -34,7 +34,7 @@ internal fun buildPiAgentInstructions(
             "User-uploaded files are under uploads/. Call analyze_image when you need to inspect a workspace image. " +
             "When linking a local file for the user to download, use a Markdown link with a file:// target and the absolute path, " +
             "for example [report.pdf](file:///absolute/path/report.pdf). Do not use another URI scheme for local file downloads. " +
-            "Use fetch_web_url for a specific page and tavily_search for public-web discovery or current information. " +
+            "Use fetch_web_url for a specific page and web_search for public-web discovery or current information. " +
             "Use aether_* tools to inspect or repair allowed Aether settings, skills, MCP servers, runtimes, Agent Mode, scheduled tasks, and diagnostics. " +
             "Never modify LLM provider credentials or model configuration through self-management tools. " +
             "Prefer read, edit, write, grep, find, and ls for filesystem work, and bash for shell commands or scripts. " +

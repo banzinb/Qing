@@ -171,7 +171,7 @@ private const val StreamingCjkChunkLength = 1
 private const val StreamingFallbackChunkLength = 18
 private const val FaviconFetchTimeoutMillis = 3_000
 private const val MinimumEpochMillis = 946_684_800_000L
-private const val TavilyFallbackDomain = "tavily.com"
+private const val SearchFallbackDomain = "search"
 private const val DefaultFaviconUserAgent =
     "Mozilla/5.0 (Linux; Android 15) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0 Mobile Safari/537.36"
 private val ToolTransitionEasing = CubicBezierEasing(0.22f, 0.84f, 0.18f, 1f)
@@ -2408,7 +2408,7 @@ private fun TimelineGlyph(
 
 private fun reasoningToolIcon(toolName: String): ImageVector = when (toolName.lowercase()) {
     "bash", "fetch_bash_output", "kill_bash" -> Icons.Rounded.Terminal
-    "fetch_web_url", "tavily_search" -> Icons.Rounded.Language
+    "fetch_web_url", "web_search", "tavily_search" -> Icons.Rounded.Language
     else -> Icons.Rounded.Build
 }
 
@@ -2489,11 +2489,11 @@ private fun webSourceMetadata(
             .ifBlank { arguments?.optString("url").orEmpty() }
         webSourceMetadataFromUrl(sourceUrl)
     }
-    "tavily_search" -> tavilySourceMetadata(arguments, output)
+    "web_search", "tavily_search" -> searchSourceMetadata(arguments, output)
     else -> null
 }
 
-private fun tavilySourceMetadata(
+private fun searchSourceMetadata(
     arguments: JSONObject?,
     output: JSONObject?,
 ): WebSourceMetadata {
@@ -2507,10 +2507,10 @@ private fun tavilySourceMetadata(
     val argumentDomain = firstSearchArgumentDomain(arguments)
     val domain = normalizedDomain(resultUrl)
         .ifBlank { argumentDomain }
-        .ifBlank { TavilyFallbackDomain }
+        .ifBlank { SearchFallbackDomain }
     val url = normalizedHttpUrl(resultUrl)
         .ifBlank { normalizedHttpUrl(domain) }
-        .ifBlank { "https://$TavilyFallbackDomain" }
+        .ifBlank { "https://$SearchFallbackDomain" }
     val faviconUrl = result?.optString("favicon").orEmpty()
         .takeIf { (it.startsWith("http://") || it.startsWith("https://")) && !it.endsWith(".svg", ignoreCase = true) }
         ?: faviconUrlForDomain(domain)
@@ -3893,12 +3893,12 @@ private fun formatToolInvocationTitleLabel(
         "analyze_image" -> context.getString(if (isRunning) R.string.tool_title_analyze_image_running else R.string.tool_title_analyze_image_done)
         "agent_display" -> formatAgentDisplayTitle(context = context, isRunning = isRunning, arguments = arguments)
         "chrome" -> formatChromeTitle(context = context, isRunning = isRunning, arguments = arguments)
-        "tavily_search" -> formatArgumentDrivenTitle(
+        "web_search", "tavily_search" -> formatArgumentDrivenTitle(
             isRunning = isRunning,
             progressiveVerb = context.getString(R.string.tool_title_searching),
             completedVerb = context.getString(R.string.tool_title_searched),
             subject = arguments?.optString("query").orEmpty(),
-            fallback = context.getString(R.string.tool_title_tavily_search_fallback),
+            fallback = context.getString(R.string.tool_title_web_search_fallback),
         )
         "fetch_web_url" -> formatArgumentDrivenTitle(
             isRunning = isRunning,
@@ -3977,7 +3977,7 @@ private fun summarizeToolInvocationCommandLabel(
         }
         "agent_display" -> summarizeAgentDisplayCommand(arguments)
         "chrome" -> summarizeChromeCommand(arguments)
-        "tavily_search" -> "search ${arguments.optString("query").trim()}"
+        "web_search", "tavily_search" -> "search ${arguments.optString("query").trim()}"
         "fetch_web_url" -> "fetch ${arguments.optString("url").trim()}"
         "aether_config_get",
         "aether_config_set",
@@ -4100,7 +4100,7 @@ private fun summarizeToolInvocationCommand(
         "ls" -> "ls ${arguments.optString("path").trim()}"
         "agent_display" -> summarizeAgentDisplayCommand(arguments)
         "chrome" -> summarizeChromeCommand(arguments)
-        "tavily_search" -> "search ${arguments.optString("query").trim()}"
+        "web_search", "tavily_search" -> "search ${arguments.optString("query").trim()}"
         "fetch_web_url" -> "fetch ${arguments.optString("url").trim()}"
         "aether_config_get",
         "aether_config_set",

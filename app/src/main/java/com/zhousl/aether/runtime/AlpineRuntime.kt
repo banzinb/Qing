@@ -863,7 +863,23 @@ class AlpineRuntime(
         hostTmpDir.mkdirs()
     }
 
+    private fun ensureGuestApkRepositories() {
+        val repositories = File(rootfsDir, "etc/apk/repositories")
+        repositories.parentFile?.mkdirs()
+        repositories.writeText(
+            """
+            https://mirrors.tuna.tsinghua.edu.cn/alpine/v3.23/main
+            https://mirrors.tuna.tsinghua.edu.cn/alpine/v3.23/community
+            https://mirrors.aliyun.com/alpine/v3.23/main
+            https://mirrors.aliyun.com/alpine/v3.23/community
+            """.trimIndent() + "\n"
+        )
+        repositories.setReadable(true, false)
+        repositories.setWritable(true, true)
+    }
+
     private fun ensureGuestNetworkConfig() {
+        ensureGuestApkRepositories()
         val resolvConf = File(rootfsDir, "etc/resolv.conf")
         if (!resolvConf.isFile || resolvConf.length() == 0L) {
             resolvConf.parentFile?.mkdirs()

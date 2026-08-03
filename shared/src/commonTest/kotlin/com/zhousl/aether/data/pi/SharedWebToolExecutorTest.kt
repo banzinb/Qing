@@ -1,6 +1,7 @@
 package com.zhousl.aether.data.pi
 
 import com.zhousl.aether.data.AppSettings
+import com.zhousl.aether.data.SearchBackend
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
 import io.ktor.http.HttpHeaders
@@ -77,7 +78,8 @@ class SharedWebToolExecutorTest {
         val search = executor.definitions[1].jsonObject
 
         assertContains(fetch["description"]?.jsonPrimitive?.content.orEmpty(), "Use this when")
-        assertContains(search["description"]?.jsonPrimitive?.content.orEmpty(), "Use this for web discovery")
+        assertEquals("web_search", search["name"]?.jsonPrimitive?.content)
+        assertContains(search["description"]?.jsonPrimitive?.content.orEmpty(), "out of the box")
         val fetchParameters = fetch["parameters"]?.jsonObject
         assertEquals(false, fetchParameters?.get("additionalProperties")?.jsonPrimitive?.boolean)
         assertEquals(
@@ -177,6 +179,122 @@ class SharedWebToolExecutorTest {
         assertContains(requestBody, "\"end_date\":\"2026-01-31\"")
     }
 
+
+    @Test
+    fun searchAutoFallsBackToBingRssWithoutTavilyKey() = runTest {
+        val engine = MockEngine { request ->
+            assertEquals("www.bing.com", request.url.host)
+            assertEquals("rss", request.url.parameters["format"])
+            assertEquals("Kotlin Multiplatform", request.url.parameters["q"])
+            respond(
+                content = """
+                    <?xml version="1.0" encoding="utf-8"?>
+                    <rss version="2.0"><channel>
+                      <item>
+                        <title>Kotlin &amp; Compose</title>
+                        <link>https://kotlinlang.org/</link>
+                        <description>Multiplatform <b>guide</b></description>
+                      </item>
+                      <item>
+                        <title>Second</title>
+                        <link>https://example.com/2</link>
+                        <description>Another result</description>
+                      </item>
+                    </channel></rss>
+                """.trimIndent(),
+                status = HttpStatusCode.OK,
+                headers = headersOf(HttpHeaders.ContentType, "application/rss+xml"),
+            )
+        }
+        val executor = SharedWebToolExecutor({ AppSettings() }, engine)
+
+        val result = executor.execute(
+            "web_search",
+            JsonObject(mapOf("query" to JsonPrimitive("Kotlin Multiplatform"))),
+        )
+
+        assertFalse(result.isError)
+        assertContains(result.outputJson, "\"backend\":\"bing\"")
+        assertContains(result.outputJson, "Kotlin & Compose")
+        assertContains(result.outputJson, "https://kotlinlang.org/")
+        assertContains(result.outputJson, "Top results:")
+        assertContains(result.outputJson, "Multiplatform guide")
+    }
+
+    @Test
+    fun searchDuckDuckGoParsesHtmlResultsAndRedirects() = runTest {
+        val engine = MockEngine { request ->
+            assertEquals("html.duckduckgo.com", request.url.host)
+            respond(
+                content = """
+                    <html>
+                      <body>
+                        <div class="result">
+                          <h2><a rel="nofollow" class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fguide&amp;rut=1">Example Guide</a></h2>
+                          <a class="result__snippet" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fguide">Short snippet text</a>
+                        </div>
+                      </body>
+                    </html>
+                """.trimIndent(),
+                status = HttpStatusCode.OK,
+                headers = headersOf(HttpHeaders.ContentType, "text/html; charset=utf-8"),
+            )
+        }
+        val executor = SharedWebToolExecutor(
+            settings = { AppSettings(searchBackend = SearchBackend.DuckDuckGo) },
+            engine = engine,
+        )
+
+        val result = executor.execute(
+            "web_search",
+            JsonObject(mapOf("query" to JsonPrimitive("Aether"))),
+        )
+
+        assertFalse(result.isError)
+        assertContains(result.outputJson, "\"backend\":\"duckduckgo\"")
+        assertContains(result.outputJson, "https://example.com/guide")
+        assertContains(result.outputJson, "Example Guide")
+        assertContains(result.outputJson, "Short snippet text")
+    }
+
+    @Test
+    fun searchSearxngUsesJsonEndpointAndBearerKey() = runTest {
+        val engine = MockEngine { request ->
+            assertEquals("searx.example", request.url.host)
+            assertEquals("/search", request.url.encodedPath)
+            assertEquals("json", request.url.parameters["format"])
+            assertEquals("Bearer searx-secret", request.headers[HttpHeaders.Authorization])
+            respond(
+                content = """
+                    {"results":[
+                      {"title":"Aether","url":"https://aether.example","content":"Mobile agent"},
+                      {"title":"Empty","url":"","content":""}
+                    ]}
+                """.trimIndent(),
+                status = HttpStatusCode.OK,
+                headers = headersOf(HttpHeaders.ContentType, "application/json"),
+            )
+        }
+        val executor = SharedWebToolExecutor(
+            settings = { AppSettings(
+                searchBackend = SearchBackend.SearXNG,
+                searxngBaseUrl = "https://searx.example/",
+                searxngApiKey = "searx-secret",
+            ) },
+            engine = engine,
+        )
+
+        val result = executor.execute(
+            "web_search",
+            JsonObject(mapOf("query" to JsonPrimitive("Aether"))),
+        )
+
+        assertFalse(result.isError)
+        assertContains(result.outputJson, "\"backend\":\"searxng\"")
+        assertContains(result.outputJson, "https://aether.example")
+        assertContains(result.outputJson, "Mobile agent")
+    }
+
     @Test
     fun searchRejectsMissingApiKeyBeforeNetworkCall() = runTest {
         var called = false
@@ -184,7 +302,10 @@ class SharedWebToolExecutorTest {
             called = true
             respond("{}")
         }
-        val executor = SharedWebToolExecutor({ AppSettings(tavilyApiKey = "") }, engine)
+        val executor = SharedWebToolExecutor(
+            { AppSettings(searchBackend = SearchBackend.Tavily, tavilyApiKey = "") },
+            engine,
+        )
 
         val result = executor.execute(
             "web_search",

@@ -37,6 +37,7 @@ google-services.json
 .agents/
 .claude/
 .trash/
+.codex-backup/
 reports/
 *-report.md
 *.bak

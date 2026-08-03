@@ -166,6 +166,7 @@ internal object DiagnosticRedactor {
         "secret",
         "password",
         "tavilykey",
+        "searxngkey",
     )
     private val largeContentKeyFragments = listOf(
         "base64",

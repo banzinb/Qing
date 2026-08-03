@@ -62,6 +62,7 @@ import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.ArrowDropDown
 import androidx.compose.material.icons.rounded.ArrowUpward
 import androidx.compose.material.icons.rounded.AttachFile
+import androidx.compose.material.icons.rounded.DesktopWindows
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
@@ -187,6 +188,7 @@ fun ConversationDrawer(
     onExportSession: (ChatSession) -> Unit,
     onDeleteSession: (String) -> Unit,
     onSettingsSelected: () -> Unit,
+    onPcCodexSelected: () -> Unit,
 ) {
     val extensionController = LocalAetherExtensionUiController.current
     val extensionPages = extensionController?.snapshot?.pages.orEmpty()
@@ -215,6 +217,13 @@ fun ConversationDrawer(
         onSettingsSelected = onSettingsSelected,
         extraContent = { dismissSearch ->
             AetherExtensionSlot(AetherExtensionSlotDrawer)
+            PcCodexDrawerLauncher(
+                onClick = {
+                    dismissSearch()
+                    onPcCodexSelected()
+                },
+                modifier = Modifier.padding(top = 6.dp),
+            )
             extensionPages.forEach { page ->
                 AetherExtensionPageLauncher(
                     page = page,
@@ -744,5 +753,53 @@ private fun DrawerFloatingChatButton(
             style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Medium),
             color = Color.White,
         )
+    }
+}
+
+@Composable
+private fun PcCodexDrawerLauncher(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(18.dp))
+            .background(AetherSurfaceHigh)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Box(
+            modifier = Modifier
+                .size(34.dp)
+                .clip(CircleShape)
+                .background(AetherSurfaceHigher),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.DesktopWindows,
+                contentDescription = null,
+                tint = AetherOnSurface,
+                modifier = Modifier.size(18.dp),
+            )
+        }
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = stringResource(R.string.pc_codex_title),
+                style = MaterialTheme.typography.bodyLarge,
+                color = AetherOnSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = stringResource(R.string.pc_codex_drawer_subtitle),
+                style = MaterialTheme.typography.bodySmall,
+                color = AetherOnSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
     }
 }

@@ -1,6 +1,10 @@
 package com.zhousl.aether.data.pi
 
 import com.zhousl.aether.data.AppSettings
+import com.zhousl.aether.data.DefaultBingSearchUrl
+import com.zhousl.aether.data.DefaultDuckDuckGoSearchUrl
+import com.zhousl.aether.data.SearchBackend
+import com.zhousl.aether.data.normalizeSearXngBaseUrl
 import com.zhousl.aether.data.normalizeTavilyBaseUrl
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
@@ -9,6 +13,7 @@ import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.client.request.bearerAuth
 import io.ktor.client.request.get
 import io.ktor.client.request.header
+import io.ktor.client.request.parameter
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
 import io.ktor.http.ContentType
@@ -62,8 +67,8 @@ class SharedWebToolExecutor(
             ),
         ))
         add(webToolDefinition(
-            name = "tavily_search",
-            description = "Search the public web with Tavily. Requires a Tavily API key in Settings > Web Tools. Use this for web discovery or current online information.",
+            name = "web_search",
+            description = "Search the public web and return ranked results. Works out of the box with the built-in free search backend; Tavily or a self-hosted SearXNG instance can be selected in Settings > Web Tools.",
             required = listOf("query"),
             properties = mapOf(
                 "query" to webStringSchema("The search query to execute."),
@@ -71,7 +76,7 @@ class SharedWebToolExecutor(
                 "search_depth" to webStringSchema("Optional search depth: basic, advanced, fast, or ultra-fast."),
                 "max_results" to webIntegerSchema("Optional maximum number of results to return, between 1 and 20."),
                 "time_range" to webStringSchema("Optional recency filter, such as day, week, month, or year. Do not combine this with start_date or end_date."),
-                "include_answer" to webBooleanSchema("Whether Tavily should include a synthesized answer."),
+                "include_answer" to webBooleanSchema("Whether the search backend should include a synthesized answer."),
                 "include_raw_content" to webBooleanSchema("Whether each result should include raw page content in Markdown."),
                 "include_domains" to webStringArraySchema("Optional list of domains to include."),
                 "exclude_domains" to webStringArraySchema("Optional list of domains to exclude."),
@@ -85,7 +90,7 @@ class SharedWebToolExecutor(
     override suspend fun execute(name: String, arguments: JsonObject): SharedHostToolResult = try {
         when (name) {
             "fetch_web_url", "web_fetch" -> fetch(arguments)
-            "tavily_search", "web_search" -> search(arguments)
+            "web_search", "tavily_search" -> search(arguments)
             else -> error("Unsupported web tool: $name")
         }
     } catch (cancellationException: CancellationException) {
@@ -138,86 +143,193 @@ class SharedWebToolExecutor(
     }
 
     private suspend fun search(arguments: JsonObject): SharedHostToolResult {
-        val current = settings()
-        val apiKey = current.tavilyApiKey.trim()
-        if (apiKey.isBlank()) {
-            return webToolFailure(
-                "Tavily API key is not configured. Add it in Settings > Web Tools before using tavily_search.",
-            )
-        }
         val query = arguments.string("query").trim()
         if (query.isBlank()) {
             return webToolFailure("Missing required 'query' argument.")
         }
+        val current = settings()
+        val maxResults = (arguments.intValue("max_results", "maxResults") ?: 5).coerceIn(1, 20)
+        val selectedBackend = current.searchBackend
         return try {
-            val endpoint = tavilySearchEndpoint(current.tavilyBaseUrl)
-            val response = client.post(endpoint) {
-                bearerAuth(apiKey)
-                contentType(ContentType.Application.Json)
-                setBody(buildJsonObject {
-                    put("query", query)
-                    put("topic", arguments.stringValue("topic").ifBlank { "general" })
-                    put("search_depth", arguments.stringValue("search_depth", "searchDepth").ifBlank { "basic" })
-                    put("max_results", (arguments.intValue("max_results", "maxResults") ?: 5).coerceIn(1, 20))
-                    put(
-                        "include_answer",
-                        if (arguments.booleanValue("include_answer", "includeAnswer") ?: true) {
-                            JsonPrimitive("basic")
-                        } else {
-                            JsonPrimitive(false)
-                        },
-                    )
-                    put(
-                        "include_raw_content",
-                        if (arguments.booleanValue("include_raw_content", "includeRawContent") ?: false) {
-                            JsonPrimitive("markdown")
-                        } else {
-                            JsonPrimitive(false)
-                        },
-                    )
-                    put("include_favicon", true)
-                    put("include_usage", true)
-                    arguments.stringValue("time_range", "timeRange").takeIf(String::isNotBlank)
-                        ?.let { put("time_range", it) }
-                    arguments.stringValue("country").takeIf(String::isNotBlank)
-                        ?.let { put("country", it) }
-                    arguments.stringValue("start_date", "startDate").takeIf(String::isNotBlank)
-                        ?.let { put("start_date", it) }
-                    arguments.stringValue("end_date", "endDate").takeIf(String::isNotBlank)
-                        ?.let { put("end_date", it) }
-                    arguments.stringArrayValue("include_domains", "includeDomains")
-                        .takeIf(List<String>::isNotEmpty)
-                        ?.let { domains ->
-                            put("include_domains", buildJsonArray {
-                                domains.forEach { add(JsonPrimitive(it)) }
-                            })
-                        }
-                    arguments.stringArrayValue("exclude_domains", "excludeDomains")
-                        .takeIf(List<String>::isNotEmpty)
-                        ?.let { domains ->
-                            put("exclude_domains", buildJsonArray {
-                                domains.forEach { add(JsonPrimitive(it)) }
-                            })
-                        }
-                })
+            val response = when (selectedBackend) {
+                SearchBackend.Tavily -> searchTavily(current, arguments, query)
+                SearchBackend.Bing -> searchBing(query, maxResults)
+                SearchBackend.DuckDuckGo -> searchDuckDuckGo(query, maxResults)
+                SearchBackend.SearXNG -> searchSearxng(current, query, maxResults)
+                SearchBackend.Auto -> if (current.tavilyApiKey.isNotBlank()) {
+                    searchTavily(current, arguments, query)
+                } else {
+                    searchBing(query, maxResults)
+                }
             }
-            val body = response.body<String>()
-            val payload = runCatching { json.parseToJsonElement(body) as? JsonObject }.getOrNull()
-            if (!response.status.isSuccess()) {
-                val message = payload?.string("detail").orEmpty()
-                    .ifBlank { payload?.string("message").orEmpty() }
-                    .ifBlank { "HTTP ${response.status.value} from Tavily." }
-                error(message)
+            val effectiveBackend = if (selectedBackend == SearchBackend.Auto) {
+                if (current.tavilyApiKey.isNotBlank()) SearchBackend.Tavily else SearchBackend.Bing
+            } else {
+                selectedBackend
             }
-            val result = payload ?: error("Tavily returned non-JSON content.")
-            SharedHostToolResult(JsonObject(result + mapOf(
+            val result = JsonObject(response + mapOf(
                 "ok" to JsonPrimitive(true),
-                "stdout" to JsonPrimitive(buildTavilySearchSummary(result)),
-            )).toString())
+                "backend" to JsonPrimitive(effectiveBackend.storageValue),
+                "stdout" to JsonPrimitive(buildWebSearchSummary(response)),
+            ))
+            SharedHostToolResult(result.toString())
         } catch (cancellationException: CancellationException) {
             throw cancellationException
         } catch (failure: Throwable) {
-            webToolFailure(failure, "Tavily search failed.", "query" to query)
+            webToolFailure(failure, "Web search failed.", "query" to query)
+        }
+    }
+
+    private suspend fun searchTavily(
+        settings: AppSettings,
+        arguments: JsonObject,
+        query: String,
+    ): JsonObject {
+        val apiKey = settings.tavilyApiKey.trim()
+        if (apiKey.isBlank()) {
+            error("Tavily API key is not configured. Add it in Settings > Web Tools before using web_search.")
+        }
+        val endpoint = tavilySearchEndpoint(settings.tavilyBaseUrl)
+        val response = client.post(endpoint) {
+            bearerAuth(apiKey)
+            contentType(ContentType.Application.Json)
+            setBody(buildJsonObject {
+                put("query", query)
+                put("topic", arguments.stringValue("topic").ifBlank { "general" })
+                put("search_depth", arguments.stringValue("search_depth", "searchDepth").ifBlank { "basic" })
+                put("max_results", (arguments.intValue("max_results", "maxResults") ?: 5).coerceIn(1, 20))
+                put(
+                    "include_answer",
+                    if (arguments.booleanValue("include_answer", "includeAnswer") ?: true) {
+                        JsonPrimitive("basic")
+                    } else {
+                        JsonPrimitive(false)
+                    },
+                )
+                put(
+                    "include_raw_content",
+                    if (arguments.booleanValue("include_raw_content", "includeRawContent") ?: false) {
+                        JsonPrimitive("markdown")
+                    } else {
+                        JsonPrimitive(false)
+                    },
+                )
+                put("include_favicon", true)
+                put("include_usage", true)
+                arguments.stringValue("time_range", "timeRange").takeIf(String::isNotBlank)
+                    ?.let { put("time_range", it) }
+                arguments.stringValue("country").takeIf(String::isNotBlank)
+                    ?.let { put("country", it) }
+                arguments.stringValue("start_date", "startDate").takeIf(String::isNotBlank)
+                    ?.let { put("start_date", it) }
+                arguments.stringValue("end_date", "endDate").takeIf(String::isNotBlank)
+                    ?.let { put("end_date", it) }
+                arguments.stringArrayValue("include_domains", "includeDomains")
+                    .takeIf(List<String>::isNotEmpty)
+                    ?.let { domains ->
+                        put("include_domains", buildJsonArray {
+                            domains.forEach { add(JsonPrimitive(it)) }
+                        })
+                    }
+                arguments.stringArrayValue("exclude_domains", "excludeDomains")
+                    .takeIf(List<String>::isNotEmpty)
+                    ?.let { domains ->
+                        put("exclude_domains", buildJsonArray {
+                            domains.forEach { add(JsonPrimitive(it)) }
+                        })
+                    }
+            })
+        }
+        val body = response.body<String>()
+        val payload = runCatching { json.parseToJsonElement(body) as? JsonObject }.getOrNull()
+        if (!response.status.isSuccess()) {
+            val message = payload?.string("detail").orEmpty()
+                .ifBlank { payload?.string("message").orEmpty() }
+                .ifBlank { "HTTP ${response.status.value} from Tavily." }
+            error(message)
+        }
+        return payload ?: error("Tavily returned non-JSON content.")
+    }
+
+    private suspend fun searchBing(
+        query: String,
+        maxResults: Int,
+    ): JsonObject {
+        val response = client.get(DefaultBingSearchUrl) {
+            parameter("q", query)
+            parameter("format", "rss")
+            parameter("count", maxResults)
+            header(HttpHeaders.UserAgent, DefaultWebUserAgent)
+        }
+        val body = response.body<String>()
+        check(response.status.isSuccess()) { "HTTP ${response.status.value} while searching Bing." }
+        return buildJsonObject {
+            put("query", query)
+            put("results", buildJsonArray {
+                parseBingRssResults(body, maxResults).forEach { add(it) }
+            })
+        }
+    }
+
+    private suspend fun searchDuckDuckGo(
+        query: String,
+        maxResults: Int,
+    ): JsonObject {
+        val response = client.get(DefaultDuckDuckGoSearchUrl) {
+            parameter("q", query)
+            header(HttpHeaders.UserAgent, DefaultWebUserAgent)
+        }
+        val body = response.body<String>()
+        check(response.status.isSuccess()) { "HTTP ${response.status.value} while searching DuckDuckGo." }
+        return buildJsonObject {
+            put("query", query)
+            put("results", buildJsonArray {
+                parseDuckDuckGoHtmlResults(body, maxResults).forEach { add(it) }
+            })
+        }
+    }
+
+    private suspend fun searchSearxng(
+        settings: AppSettings,
+        query: String,
+        maxResults: Int,
+    ): JsonObject {
+        val baseUrl = normalizeSearXngBaseUrl(settings.searxngBaseUrl)
+        if (baseUrl.isBlank()) {
+            error("SearXNG base URL is not configured. Add it in Settings > Web Tools before using web_search.")
+        }
+        val response = client.get("$baseUrl/search") {
+            parameter("q", query)
+            parameter("format", "json")
+            parameter("max_results", maxResults)
+            header(HttpHeaders.UserAgent, DefaultWebUserAgent)
+            settings.searxngApiKey.trim().takeIf(String::isNotBlank)?.let { bearerAuth(it) }
+        }
+        val body = response.body<String>()
+        val payload = runCatching { json.parseToJsonElement(body) as? JsonObject }.getOrNull()
+        if (!response.status.isSuccess()) {
+            val message = payload?.string("message").orEmpty()
+                .ifBlank { "HTTP ${response.status.value} from SearXNG." }
+            error(message)
+        }
+        val parsed = payload ?: error("SearXNG returned non-JSON content.")
+        val rawResults = parsed["results"] as? JsonArray ?: JsonArray(emptyList())
+        return buildJsonObject {
+            put("query", query)
+            put("results", buildJsonArray {
+                rawResults.take(maxResults).forEach { element ->
+                    val result = element as? JsonObject ?: return@forEach
+                    val title = result.string("title").trim()
+                    val url = result.string("url").trim()
+                    val content = result.string("content").trim()
+                    if (url.isBlank() && title.isBlank()) return@forEach
+                    add(buildJsonObject {
+                        if (title.isNotBlank()) put("title", title)
+                        if (url.isNotBlank()) put("url", url)
+                        if (content.isNotBlank()) put("content", content)
+                    })
+                }
+            })
         }
     }
 }
@@ -290,7 +402,101 @@ internal fun tavilySearchEndpoint(baseUrl: String): String {
     return if (normalized.endsWith("/search")) normalized else "$normalized/search"
 }
 
-private fun buildTavilySearchSummary(response: JsonObject): String = buildString {
+internal fun parseBingRssResults(xml: String, maxResults: Int): List<JsonObject> {
+    val itemRegex = Regex("<item\\b[^>]*>.*?</item>", RegexOption.DOT_MATCHES_ALL)
+    return itemRegex.findAll(xml).take(maxResults).mapNotNull { match ->
+        val block = match.value
+        val title = extractSharedRssField(block, "title")
+        val link = extractSharedRssField(block, "link")
+        val description = extractSharedRssField(block, "description")
+        if (link.isBlank() && title.isBlank()) return@mapNotNull null
+        buildJsonObject {
+            if (title.isNotBlank()) put("title", stripSharedHtml(title))
+            if (link.isNotBlank()) put("url", link.trim())
+            if (description.isNotBlank()) put("content", stripSharedHtml(description).take(400))
+        }
+    }.toList()
+}
+
+internal fun parseDuckDuckGoHtmlResults(html: String, maxResults: Int): List<JsonObject> {
+    val resultAnchorRegex = Regex(
+        "<a[^>]*class=\"[^\"]*result__a[^\"]*\"[^>]*>.*?</a>",
+        RegexOption.DOT_MATCHES_ALL,
+    )
+    val snippetAnchorRegex = Regex(
+        "<a[^>]*class=\"[^\"]*result__snippet[^\"]*\"[^>]*>.*?</a>",
+        RegexOption.DOT_MATCHES_ALL,
+    )
+    val resultMatches = resultAnchorRegex.findAll(html).toList()
+    val snippetMatches = snippetAnchorRegex.findAll(html).toList()
+    return resultMatches.take(maxResults).mapNotNull { match ->
+        val block = match.value
+        val href = Regex("href=\"([^\"]*)\"").find(block)?.groupValues?.getOrNull(1).orEmpty()
+        val title = stripSharedHtml(block).trim()
+        if (title.isBlank() && href.isBlank()) return@mapNotNull null
+        val snippet = snippetMatches
+            .firstOrNull { it.range.first > match.range.last }
+            ?.let { stripSharedHtml(it.value).trim() }
+            .orEmpty()
+        val url = decodeDuckDuckGoRedirectUrl(href)
+        if (url.isBlank() && title.isBlank()) return@mapNotNull null
+        buildJsonObject {
+            if (title.isNotBlank()) put("title", title)
+            if (url.isNotBlank()) put("url", url)
+            if (snippet.isNotBlank()) put("content", snippet.take(400))
+        }
+    }
+}
+
+private fun extractSharedRssField(block: String, tag: String): String {
+    val regex = Regex("""<$tag\b[^>]*>(.*?)</$tag>""", RegexOption.DOT_MATCHES_ALL)
+    return regex.find(block)?.groupValues?.getOrNull(1).orEmpty().trim()
+}
+
+private fun decodeDuckDuckGoRedirectUrl(href: String): String {
+    val candidate = href.trim()
+    if (candidate.isBlank()) return ""
+    val absolute = if (candidate.startsWith("//")) "https:$candidate" else candidate
+    return runCatching {
+        val url = Url(absolute)
+        url.parameters["uddg"].orEmpty().takeIf(String::isNotBlank) ?: absolute
+    }.getOrDefault(absolute)
+}
+
+private fun stripSharedHtml(value: String): String = value
+    .replace(Regex("<[^>]+>"), " ")
+    .replace(Regex("\\s+"), " ")
+    .trim()
+    .let(::decodeSharedHtmlEntities)
+
+private fun decodeSharedHtmlEntities(value: String): String = buildString {
+    val entityRegex = Regex("&(#[xX][0-9a-fA-F]+|#[0-9]+|[a-zA-Z]+);")
+    var last = 0
+    for (match in entityRegex.findAll(value)) {
+        append(value, last, match.range.first)
+        append(decodeSharedHtmlEntity(match.groupValues[1]))
+        last = match.range.last + 1
+    }
+    append(value, last, value.length)
+}
+
+private fun decodeSharedHtmlEntity(entity: String): String = when {
+    entity.startsWith("#x", ignoreCase = true) -> {
+        entity.substring(2).toIntOrNull(16)?.toChar()?.toString().orEmpty()
+    }
+    entity.startsWith("#") -> entity.substring(1).toIntOrNull()?.toChar()?.toString().orEmpty()
+    else -> when (entity) {
+        "amp" -> "&"
+        "lt" -> "<"
+        "gt" -> ">"
+        "quot" -> "\""
+        "apos" -> "'"
+        "nbsp" -> " "
+        else -> "&$entity;"
+    }
+}
+
+private fun buildWebSearchSummary(response: JsonObject): String = buildString {
     val answer = response.string("answer").trim()
     if (answer.isNotBlank()) append(answer)
 

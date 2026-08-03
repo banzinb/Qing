@@ -70,6 +70,9 @@ class SharedAppDataArchiveTest {
                 providerConfigId = provider.id,
                 apiKey = "legacy-secret",
                 tavilyApiKey = "tavily-secret",
+                searchBackend = SearchBackend.SearXNG,
+                searxngBaseUrl = "https://searx.example/",
+                searxngApiKey = "searx-secret",
                 defaultSelectedSkillIds = listOf("review"),
             ),
             providerConfigs = Json.parseToJsonElement(
@@ -118,6 +121,9 @@ class SharedAppDataArchiveTest {
 
         assertEquals("secret", parseProviderConfigs(decoded.providerConfigs.toString()).single().apiKey)
         assertEquals("tavily-secret", decoded.settings.tavilyApiKey)
+        assertEquals(SearchBackend.SearXNG, decoded.settings.searchBackend)
+        assertEquals("https://searx.example", decoded.settings.searxngBaseUrl)
+        assertEquals("searx-secret", decoded.settings.searxngApiKey)
         assertEquals("Answer", decoded.sessions.single().messages.last().text)
         assertEquals(30L, decoded.sessions.single().messages.last().completedAtMillis)
         assertEquals(false, decoded.skillBundles.single().isEnabled)

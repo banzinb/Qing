@@ -359,6 +359,21 @@ class AetherSelfManagementTool(
                 } else {
                     current.tavilyBaseUrl
                 },
+                searchBackend = if (patch.hasAny("search_backend", "searchBackend")) {
+                    SearchBackend.fromStorage(patch.optStringAny("search_backend", "searchBackend"))
+                } else {
+                    current.searchBackend
+                },
+                searxngBaseUrl = if (patch.hasAny("searxng_base_url", "searxngBaseUrl")) {
+                    normalizeSearXngBaseUrl(patch.optStringAny("searxng_base_url", "searxngBaseUrl"))
+                } else {
+                    current.searxngBaseUrl
+                },
+                searxngApiKey = if (patch.hasAny("searxng_api_key", "searxngApiKey")) {
+                    patch.optStringAny("searxng_api_key", "searxngApiKey").trim()
+                } else {
+                    current.searxngApiKey
+                },
             )
 
             "reliability" -> current.copy(
@@ -892,9 +907,13 @@ class AetherSelfManagementTool(
 
     private fun webToolsSettingsJson(settings: AppSettings): JSONObject =
         JSONObject()
+            .put("search_backend", settings.searchBackend.storageValue)
+            .put("search_ready", settings.searchBackend.isReady(settings))
             .put("tavily_configured", settings.tavilyApiKey.isNotBlank())
             .put("tavily_api_key", redactSecret(settings.tavilyApiKey))
             .put("tavily_base_url", settings.tavilyBaseUrl)
+            .put("searxng_base_url", settings.searxngBaseUrl)
+            .put("searxng_api_key", redactSecret(settings.searxngApiKey))
 
     private fun reliabilitySettingsJson(settings: AppSettings): JSONObject =
         JSONObject()

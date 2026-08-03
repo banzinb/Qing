@@ -132,4 +132,118 @@ class WebToolsClientTest {
             server.shutdown()
         }
     }
+
+    @Test
+    fun bingSearchParsesRssResults() = runBlocking {
+        val server = MockWebServer()
+        server.enqueue(
+            MockResponse()
+                .addHeader("Content-Type", "application/rss+xml")
+                .setBody(
+                    """
+                    <?xml version="1.0" encoding="utf-8"?>
+                    <rss version="2.0"><channel>
+                      <item>
+                        <title>Kotlin &amp; Compose</title>
+                        <link>https://kotlinlang.org/</link>
+                        <description>Multiplatform <b>guide</b></description>
+                      </item>
+                      <item>
+                        <title>Second</title>
+                        <link>https://example.com/2</link>
+                        <description>Another result</description>
+                      </item>
+                    </channel></rss>
+                    """.trimIndent(),
+                ),
+        )
+        server.start()
+        try {
+            val client = WebToolsClient()
+            val response = client.searchBing(
+                query = "kotlin",
+                maxResults = 5,
+                baseUrl = server.url("/").toString(),
+            ).getOrThrow()
+            val results = response.getJSONArray("results")
+            assertEquals(2, results.length())
+            val first = results.getJSONObject(0)
+            assertEquals("Kotlin & Compose", first.getString("title"))
+            assertEquals("https://kotlinlang.org/", first.getString("url"))
+            assertEquals("Multiplatform guide", first.getString("content"))
+            val request = server.takeRequest()
+            assertTrue(request.path!!.contains("format=rss"))
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun duckDuckGoSearchParsesHtmlResults() = runBlocking {
+        val server = MockWebServer()
+        server.enqueue(
+            MockResponse()
+                .addHeader("Content-Type", "text/html; charset=utf-8")
+                .setBody(
+                    """
+                    <html><body>
+                      <div class="result">
+                        <h2><a rel="nofollow" class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fguide">Example Guide</a></h2>
+                        <a class="result__snippet" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fguide">Short snippet text</a>
+                      </div>
+                    </body></html>
+                    """.trimIndent(),
+                ),
+        )
+        server.start()
+        try {
+            val client = WebToolsClient()
+            val response = client.searchDuckDuckGo(
+                query = "aether",
+                maxResults = 5,
+                baseUrl = server.url("/").toString(),
+            ).getOrThrow()
+            val first = response.getJSONArray("results").getJSONObject(0)
+            assertEquals("Example Guide", first.getString("title"))
+            assertEquals("https://example.com/guide", first.getString("url"))
+            assertEquals("Short snippet text", first.getString("content"))
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun searxngSearchUsesBearerAndParsesResults() = runBlocking {
+        val server = MockWebServer()
+        server.enqueue(
+            MockResponse()
+                .addHeader("Content-Type", "application/json")
+                .setBody(
+                    """
+                    {"results":[
+                      {"title":"Aether","url":"https://aether.example","content":"Mobile agent"}
+                    ]}
+                    """.trimIndent(),
+                ),
+        )
+        server.start()
+        try {
+            val client = WebToolsClient()
+            val response = client.searchSearxng(
+                baseUrl = server.url("/searxng").toString(),
+                apiKey = "searx-secret",
+                query = "aether",
+                maxResults = 5,
+            ).getOrThrow()
+            val first = response.getJSONArray("results").getJSONObject(0)
+            assertEquals("Aether", first.getString("title"))
+            assertEquals("https://aether.example", first.getString("url"))
+            val request = server.takeRequest()
+            assertEquals("/searxng/search", request.requestUrl?.encodedPath)
+            assertEquals("Bearer searx-secret", request.getHeader("Authorization"))
+            assertTrue(request.requestUrl?.queryParameter("format") == "json")
+        } finally {
+            server.shutdown()
+        }
+    }
 }

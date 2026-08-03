@@ -300,8 +300,8 @@
     <string name="settings_install_shizuku">安装 Shizuku</string>
     <string name="settings_open_shizuku">打开 Shizuku</string>
     <string name="settings_grant_access">授予权限</string>
-    <string name="settings_agent_mode_requires_termux_toast">请先完成 Termux 设置，再配置 Agent 模式。</string>
-    <string name="settings_requires_termux_setup">需要 Termux 设置</string>
+    <string name="settings_agent_mode_requires_termux_toast">请先完成 Alpine 或 Termux 设置，再配置 Agent 模式。</string>
+    <string name="settings_requires_termux_setup">需要 Alpine 或 Termux 设置</string>
     <string name="settings_root_setup_step_root_access">Root 访问</string>
     <string name="settings_root_setup_step_root_access_subtitle">检测 su 并等待授权。</string>
     <string name="settings_root_setup_step_termux_access">Termux 命令访问</string>
@@ -352,7 +352,7 @@
     <string name="settings_treat_termux_as_ready">将 Termux 视为已就绪</string>
     <string name="settings_termux_ready_toggle_subtitle">开启 = 已就绪。关闭 = 未就绪。</string>
     <string name="settings_replay_follow_up_tour">重播后续引导</string>
-    <string name="settings_replay_follow_up_tour_description">从路线选择开始，然后依次经过本地配置和 Tavily。</string>
+    <string name="settings_replay_follow_up_tour_description">从路线选择开始，然后依次经过本地配置和网页搜索。</string>
     <string name="settings_replay_second_part">重播第二部分</string>
     <string name="settings_update_downloading_percent">正在下载 %1$d%%</string>
     <string name="settings_update_downloading">正在下载更新</string>
@@ -376,7 +376,7 @@
     <string name="settings_root_setup_progress_body_failed">配置命令返回错误。请查看上方详情后重试。</string>
     <string name="settings_root_setup_configuring">正在执行 Root 自动配置</string>
     <string name="settings_custom_instructions_variables_hint">支持 {{current_datetime}}、{{current_date}}、{{current_time}}、{{timezone}} 和 {{unix_timestamp}}。</string>
-    <string name="settings_agent_mode_unavailable_body">请先配置 Termux。Agent 模式使用 Termux 桥接工作区和截图流程，因此在 Termux 就绪前无法启用授权。</string>
+    <string name="settings_agent_mode_unavailable_body">请先配置 Alpine 或 Termux。Agent 模式使用本地运行时桥接工作区和截图流程，因此在运行时就绪前无法启用授权。</string>
     <string name="settings_agent_mode_root_already_configured_body">Root 模式授权已经正常，不需要再次执行 Root 自动配置。</string>
     <string name="settings_agent_mode_already_configured_body">Agent 模式授权已经正常，不需要执行 Root 自动配置；继续后会将 Agent 模式重新配置为 Root。</string>
     <string name="settings_agent_mode_root_setup_body">使用 su 自动选择 Root 模式，并准备本地设备控制。</string>
@@ -421,7 +421,25 @@
     <string name="settings_search_models">搜索模型</string>
     <string name="settings_no_models_match_search">没有匹配此搜索的模型。</string>
     <string name="settings_tavily_api_key">Tavily API 密钥</string>
-    <string name="settings_web_tools_description">fetch_web_url 无需额外配置即可使用。tavily_search 使用此 API Key 和 Base URL；将 URL 留空即可使用官方 Tavily API 地址。</string>
+    <string name="settings_web_tools_description">fetch_web_url 无需额外配置即可使用。web_search 默认通过内置免 key 搜索后端开箱即用；填写 Tavily 后自动优先使用 Tavily。</string>
+    <string name="settings_search_backend">搜索后端</string>
+    <string name="settings_search_backend_description">自动模式开箱即用。需要更精细控制时再手动指定后端。</string>
+    <string name="settings_search_backend_auto">自动（推荐）</string>
+    <string name="settings_search_backend_auto_subtitle">有 Tavily 用 Tavily，否则免 key 直接搜</string>
+    <string name="settings_search_backend_tavily">Tavily</string>
+    <string name="settings_search_backend_tavily_subtitle">专业搜索 API，需要 API Key</string>
+    <string name="settings_search_backend_bing">Bing</string>
+    <string name="settings_search_backend_bing_subtitle">免 key，开箱即用</string>
+    <string name="settings_search_backend_duckduckgo">DuckDuckGo</string>
+    <string name="settings_search_backend_duckduckgo_subtitle">免 key，适合能直连的地区</string>
+    <string name="settings_search_backend_searxng">SearXNG</string>
+    <string name="settings_search_backend_searxng_subtitle">自托管，需要填写服务地址</string>
+    <string name="settings_search_ready">搜索已就绪，开箱即用</string>
+    <string name="settings_search_auto_with_tavily">自动：Tavily + 免 key 回退</string>
+    <string name="settings_search_configured">已配置 %1$s</string>
+    <string name="settings_search_requires_config">需要配置 %1$s</string>
+    <string name="settings_searxng_base_url">SearXNG 基础 URL</string>
+    <string name="settings_searxng_api_key">SearXNG API Key（可选）</string>
     <string name="settings_multitasking">后台运行</string>
     <string name="settings_keep_tasks_running_background">保持任务在后台运行</string>
     <string name="settings_keep_tasks_running_background_subtitle">使用 Android 前台服务，让活跃聊天在离开 Aether 后继续工作。</string>
@@ -680,8 +698,8 @@
     <string name="onboarding_agent_mode_shizuku_subtitle">安装应用后使用提权的 Shizuku 服务。</string>
     <string name="onboarding_agent_mode_root_subtitle">在已 root 的设备上使用 root shell 进行特权输入。</string>
     <string name="onboarding_agent_mode_skip_subtitle">先关闭 Agent 模式，之后再到设置中启用。</string>
-    <string name="onboarding_tavily_message">如果你之后想获得更新鲜的网页答案，可以在这里补上搜索能力。</string>
-    <string name="onboarding_tavily_optional_body">这是可选项。即使不填，URL 抓取也已经可以使用。</string>
+    <string name="onboarding_tavily_message">网页搜索已经开箱即用。如果你想获得更专业的搜索结果，可以在这里补上 Tavily API Key。</string>
+    <string name="onboarding_tavily_optional_body">这是可选项。不填也能直接搜索。</string>
     <string name="onboarding_paste_it_here">粘贴到这里</string>
 
     <!-- Conversation -->
@@ -737,7 +755,8 @@
     <string name="tool_title_launched">已打开</string>
     <string name="tool_title_pressing">正在按下</string>
     <string name="tool_title_pressed">已按下</string>
-    <string name="tool_title_tavily_search_fallback">Tavily 搜索</string>
+    <string name="tool_title_tavily_search_fallback">网页搜索</string>
+    <string name="tool_title_web_search_fallback">网页搜索</string>
     <string name="tool_title_web_page_fallback">网页</string>
     <string name="tool_title_aether_settings_fallback">Aether 设置</string>
     <string name="tool_title_agent_skill_fallback">Agent 技能</string>
@@ -966,4 +985,31 @@
     <string name="settings_native_mod_restart_required">请重启 Aether 以应用 Native Mod 设置。</string>
     <string name="settings_native_mod_enable_next_start">下次启动启用 Native Mod</string>
     <string name="settings_native_mod_disable_next_start">下次以 Native Mod 安全模式启动</string>
+    <string name="pc_codex_title">PC Codex</string>
+    <string name="pc_codex_drawer_subtitle">连接桌面 Codex</string>
+    <string name="pc_codex_connected">已连接</string>
+    <string name="pc_codex_disconnected">未连接</string>
+    <string name="pc_codex_connecting">检测中…</string>
+    <string name="pc_codex_settings">连接设置</string>
+    <string name="pc_codex_base_url_label">PC 桥接地址</string>
+    <string name="pc_codex_token_label">Token（可选）</string>
+    <string name="pc_codex_save">保存</string>
+    <string name="pc_codex_test_connection">测试</string>
+    <string name="pc_codex_new_task_hint">向电脑 Codex 下发新任务</string>
+    <string name="pc_codex_resume_hint">继续这条会话</string>
+    <string name="pc_codex_refresh">刷新</string>
+    <string name="pc_codex_no_sessions">电脑上还没有 Codex 会话</string>
+    <string name="pc_codex_configure_first">请先在设置里填写 PC 桥接地址</string>
+    <string name="pc_codex_send">发送</string>
+    <string name="pc_codex_stop">停止</string>
+    <string name="pc_codex_loading_sessions">正在加载会话…</string>
+    <string name="pc_codex_loading_history">正在加载历史…</string>
+    <string name="pc_codex_running">电脑正在执行…</string>
+    <string name="pc_codex_completed">已完成</string>
+    <string name="pc_codex_failed">执行失败</string>
+    <string name="pc_codex_stopped">已停止</string>
+    <string name="pc_codex_settings_saved">连接设置已保存</string>
+    <string name="pc_codex_connection_test_ok">桥接服务可达</string>
+    <string name="pc_codex_connection_test_failed">桥接服务不可达</string>
+    <string name="pc_codex_message_count">%1$d 条消息</string>
 </resources>

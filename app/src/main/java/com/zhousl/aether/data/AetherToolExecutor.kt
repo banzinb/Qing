@@ -131,7 +131,7 @@ class AetherToolExecutor(
                 activeSkills = activeSkills,
             )
             "fetch_web_url" -> executeFetchWebUrl(argumentsJson)
-            "tavily_search" -> executeTavilySearch(
+            "web_search", "tavily_search" -> executeWebSearch(
                 settings = settings,
                 argumentsJson = argumentsJson,
             )
@@ -406,21 +406,11 @@ class AetherToolExecutor(
         }.toString()
     }
 
-    private suspend fun executeTavilySearch(
+    private suspend fun executeWebSearch(
         settings: AppSettings,
         argumentsJson: String,
     ): String {
-        val client = webToolsClient ?: return toolUnavailableOutput("tavily_search")
-        if (settings.tavilyApiKey.isBlank()) {
-            return JSONObject().apply {
-                put("ok", false)
-                put(
-                    "errmsg",
-                    "Tavily API key is not configured. Add it in Settings > Web Tools before using tavily_search.",
-                )
-            }.toString()
-        }
-
+        val client = webToolsClient ?: return toolUnavailableOutput("web_search")
         val arguments = runCatching { JSONObject(argumentsJson) }.getOrNull()
             ?: return JSONObject().apply {
                 put("ok", false)
@@ -434,34 +424,100 @@ class AetherToolExecutor(
                 put("errmsg", "Missing required 'query' argument.")
             }.toString()
         }
+        val maxResults = arguments.optInt("max_results", arguments.optInt("maxResults", 5))
+            .coerceIn(1, 20)
 
-        val response = client.searchTavily(
-            apiKey = settings.tavilyApiKey,
-            baseUrl = settings.tavilyBaseUrl,
-            request = TavilySearchRequest(
+        val selectedBackend = settings.searchBackend
+        val response = when (selectedBackend) {
+            SearchBackend.Tavily -> client.searchTavily(
+                apiKey = settings.tavilyApiKey,
+                baseUrl = settings.tavilyBaseUrl,
+                request = buildTavilySearchRequest(arguments, query),
+            ).getOrElse { throwable ->
+                return toolFailureOutput(throwable, "Tavily search failed.") {
+                    put("query", query)
+                }
+            }
+
+            SearchBackend.Bing -> client.searchBing(
                 query = query,
-                topic = arguments.stringValue("topic").ifBlank { "general" },
-                searchDepth = arguments.stringValue("search_depth", "searchDepth").ifBlank { "basic" },
-                maxResults = arguments.intValue("max_results", "maxResults") ?: 5,
-                timeRange = arguments.stringValue("time_range", "timeRange").ifBlank { null },
-                includeAnswer = arguments.booleanValue("include_answer", "includeAnswer") ?: true,
-                includeRawContent = arguments.booleanValue("include_raw_content", "includeRawContent") ?: false,
-                includeDomains = arguments.stringArrayValue("include_domains", "includeDomains"),
-                excludeDomains = arguments.stringArrayValue("exclude_domains", "excludeDomains"),
-                country = arguments.stringValue("country").ifBlank { null },
-                startDate = arguments.stringValue("start_date", "startDate").ifBlank { null },
-                endDate = arguments.stringValue("end_date", "endDate").ifBlank { null },
-            ),
-        ).getOrElse { throwable ->
-            return toolFailureOutput(throwable, "Tavily search failed.") {
-                put("query", query)
+                maxResults = maxResults,
+            ).getOrElse { throwable ->
+                return toolFailureOutput(throwable, "Bing search failed.") {
+                    put("query", query)
+                }
+            }
+
+            SearchBackend.DuckDuckGo -> client.searchDuckDuckGo(
+                query = query,
+                maxResults = maxResults,
+            ).getOrElse { throwable ->
+                return toolFailureOutput(throwable, "DuckDuckGo search failed.") {
+                    put("query", query)
+                }
+            }
+
+            SearchBackend.SearXNG -> client.searchSearxng(
+                baseUrl = settings.searxngBaseUrl,
+                apiKey = settings.searxngApiKey,
+                query = query,
+                maxResults = maxResults,
+            ).getOrElse { throwable ->
+                return toolFailureOutput(throwable, "SearXNG search failed.") {
+                    put("query", query)
+                }
+            }
+
+            SearchBackend.Auto -> if (settings.tavilyApiKey.isNotBlank()) {
+                client.searchTavily(
+                    apiKey = settings.tavilyApiKey,
+                    baseUrl = settings.tavilyBaseUrl,
+                    request = buildTavilySearchRequest(arguments, query),
+                ).getOrElse { throwable ->
+                    return toolFailureOutput(throwable, "Tavily search failed.") {
+                        put("query", query)
+                    }
+                }
+            } else {
+                client.searchBing(
+                    query = query,
+                    maxResults = maxResults,
+                ).getOrElse { throwable ->
+                    return toolFailureOutput(throwable, "Bing search failed.") {
+                        put("query", query)
+                    }
+                }
             }
         }
 
+        val effectiveBackend = if (selectedBackend == SearchBackend.Auto) {
+            if (settings.tavilyApiKey.isNotBlank()) SearchBackend.Tavily else SearchBackend.Bing
+        } else {
+            selectedBackend
+        }
         response.put("ok", true)
-        response.put("stdout", buildTavilySearchSummary(response))
+        response.put("backend", effectiveBackend.storageValue)
+        response.put("stdout", buildWebSearchSummary(response))
         return response.toString()
     }
+
+    private fun buildTavilySearchRequest(
+        arguments: JSONObject,
+        query: String,
+    ): TavilySearchRequest = TavilySearchRequest(
+        query = query,
+        topic = arguments.stringValue("topic").ifBlank { "general" },
+        searchDepth = arguments.stringValue("search_depth", "searchDepth").ifBlank { "basic" },
+        maxResults = arguments.intValue("max_results", "maxResults") ?: 5,
+        timeRange = arguments.stringValue("time_range", "timeRange").ifBlank { null },
+        includeAnswer = arguments.booleanValue("include_answer", "includeAnswer") ?: true,
+        includeRawContent = arguments.booleanValue("include_raw_content", "includeRawContent") ?: false,
+        includeDomains = arguments.stringArrayValue("include_domains", "includeDomains"),
+        excludeDomains = arguments.stringArrayValue("exclude_domains", "excludeDomains"),
+        country = arguments.stringValue("country").ifBlank { null },
+        startDate = arguments.stringValue("start_date", "startDate").ifBlank { null },
+        endDate = arguments.stringValue("end_date", "endDate").ifBlank { null },
+    )
 
     private suspend fun executeAnalyzeImage(
         settings: AppSettings,
@@ -700,6 +756,7 @@ class AetherToolExecutor(
             "activate_skill",
             "read_skill_resource",
             "fetch_web_url",
+            "web_search",
             "tavily_search",
             "analyze_image",
             "agent_display",
@@ -927,8 +984,8 @@ class AetherToolExecutor(
                 executionMode = "parallel",
             ).also(::put)
             toolDefinition(
-                name = "tavily_search",
-                description = "Search the public web with Tavily. Requires a Tavily API key in Settings > Web Tools. Use this for web discovery or current online information.",
+                name = "web_search",
+                description = "Search the public web and return ranked results. Works out of the box with the built-in free search backend; Tavily or a self-hosted SearXNG instance can be selected in Settings > Web Tools.",
                 properties = JSONObject().apply {
                     put("query", stringProperty("The search query to execute."))
                     put("topic", stringProperty("Optional search topic: general, news, or finance."))
@@ -1376,7 +1433,7 @@ private fun isLikelyTextResource(fileName: String, bytes: ByteArray): Boolean {
     } >= sample.size * 9 / 10
 }
 
-private fun buildTavilySearchSummary(response: JSONObject): String = buildString {
+private fun buildWebSearchSummary(response: JSONObject): String = buildString {
     val answer = response.optString("answer").trim()
     if (answer.isNotBlank()) {
         append(answer)

@@ -103,6 +103,8 @@ class SettingsRepository(
             onboardingCompletedVersion = preferences[ONBOARDING_COMPLETED_VERSION] ?: 0,
             privacyPolicyAccepted = preferences[PRIVACY_POLICY_ACCEPTED] ?: false,
             lastUpdateCheckAtMillis = preferences[LAST_UPDATE_CHECK_AT_MILLIS] ?: 0L,
+            pcBridgeUrl = preferences[PC_BRIDGE_URL].orEmpty(),
+            pcBridgeToken = preferences[PC_BRIDGE_TOKEN].orEmpty(),
         )
     }
 
@@ -460,6 +462,8 @@ class SettingsRepository(
             it.remove(UNSUPPORTED_PARALLEL_TOOL_CALL_PROVIDER_KEYS)
             it[PRIVACY_POLICY_ACCEPTED] = settings.privacyPolicyAccepted
             it[LAST_UPDATE_CHECK_AT_MILLIS] = settings.lastUpdateCheckAtMillis
+            it[PC_BRIDGE_URL] = normalizePcBridgeUrl(settings.pcBridgeUrl)
+            it[PC_BRIDGE_TOKEN] = settings.pcBridgeToken
         }
     }
 
@@ -564,6 +568,8 @@ class SettingsRepository(
         val ONBOARDING_COMPLETED_VERSION = intPreferencesKey("onboarding_completed_version")
         val PRIVACY_POLICY_ACCEPTED = booleanPreferencesKey("privacy_policy_accepted")
         val LAST_UPDATE_CHECK_AT_MILLIS = longPreferencesKey("last_update_check_at_millis")
+        val PC_BRIDGE_URL = stringPreferencesKey("pc_bridge_url")
+        val PC_BRIDGE_TOKEN = stringPreferencesKey("pc_bridge_token")
     }
 }
 

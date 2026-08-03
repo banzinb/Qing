@@ -301,9 +301,7 @@ val copyPiProviderIcons = tasks.register<SyncGeneratedSourceDirectory>("copyPiPr
         }
     }
     inputs.file(piBridgeProjectDir.file("package-lock.json"))
-    piProviderIconFiles.values.distinct().forEach { sourceName ->
-        inputs.file(iconSourceDir.file(sourceName))
-    }
+    inputs.dir(iconSourceDir)
 }
 
 val copyPiBridgeAsset = tasks.register<SyncGeneratedSourceDirectory>("copyPiBridgeAsset") {

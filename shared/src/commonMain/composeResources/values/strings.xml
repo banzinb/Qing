@@ -321,8 +321,8 @@
     <string name="settings_install_shizuku">Install Shizuku</string>
     <string name="settings_open_shizuku">Open Shizuku</string>
     <string name="settings_grant_access">Grant access</string>
-    <string name="settings_agent_mode_requires_termux_toast">Complete Termux setup before configuring Agent Mode.</string>
-    <string name="settings_requires_termux_setup">Requires Termux setup</string>
+    <string name="settings_agent_mode_requires_termux_toast">Complete Alpine or Termux setup before configuring Agent Mode.</string>
+    <string name="settings_requires_termux_setup">Requires Alpine or Termux setup</string>
     <string name="settings_root_setup_step_root_access">Root access</string>
     <string name="settings_root_setup_step_root_access_subtitle">Detect su and wait for authorization.</string>
     <string name="settings_root_setup_step_termux_access">Termux command access</string>
@@ -374,7 +374,7 @@
     <string name="settings_treat_termux_as_ready">Treat Termux as ready</string>
     <string name="settings_termux_ready_toggle_subtitle">On = ready. Off = not ready.</string>
     <string name="settings_replay_follow_up_tour">Replay Follow-up Tour</string>
-    <string name="settings_replay_follow_up_tour_description">Starts from route choice, then goes through local setup and Tavily.</string>
+    <string name="settings_replay_follow_up_tour_description">Starts from route choice, then goes through local setup and web search.</string>
     <string name="settings_replay_second_part">Replay second part</string>
     <string name="settings_update_downloading_percent">Downloading %1$d%%</string>
     <string name="settings_update_downloading">Downloading update</string>
@@ -398,7 +398,7 @@
     <string name="settings_root_setup_progress_body_failed">The setup command finished with an error. Review the detail above and retry when ready.</string>
     <string name="settings_root_setup_configuring">Configuring Root setup</string>
     <string name="settings_custom_instructions_variables_hint">Supports {{current_datetime}}, {{current_date}}, {{current_time}}, {{timezone}}, and {{unix_timestamp}}.</string>
-    <string name="settings_agent_mode_unavailable_body">Configure Termux first. Agent Mode uses the Termux bridge for its workspace and screenshot flow, so authorization cannot be enabled until Termux is ready.</string>
+    <string name="settings_agent_mode_unavailable_body">Configure Alpine or Termux first. Agent Mode uses a local runtime bridge for its workspace and screenshot flow, so authorization cannot be enabled until a runtime is ready.</string>
     <string name="settings_agent_mode_root_already_configured_body">Root Agent Mode authorization is already ready. You do not need to run Root automatic setup again.</string>
     <string name="settings_agent_mode_already_configured_body">Agent Mode authorization is already ready. Root automatic setup is not required; continuing will reconfigure Agent Mode to Root.</string>
     <string name="settings_agent_mode_root_setup_body">Use su to select Root mode and prepare local device control automatically.</string>
@@ -444,7 +444,25 @@
     <string name="settings_no_models_match_search">No models match this search.</string>
     <string name="settings_tavily_api_key">Tavily API Key</string>
     <string name="settings_tavily_base_url">Tavily Base URL</string>
-    <string name="settings_web_tools_description">fetch_web_url works without extra setup. tavily_search uses this API key and Base URL; leave the URL blank to use the official Tavily endpoint.</string>
+    <string name="settings_web_tools_description">fetch_web_url works without extra setup. web_search works out of the box with the free built-in backend; adding a Tavily key makes Auto prefer Tavily.</string>
+    <string name="settings_search_backend">Search backend</string>
+    <string name="settings_search_backend_description">Auto works out of the box. Pick a specific backend when you want more control.</string>
+    <string name="settings_search_backend_auto">Auto (recommended)</string>
+    <string name="settings_search_backend_auto_subtitle">Uses Tavily when configured, otherwise searches free and out of the box</string>
+    <string name="settings_search_backend_tavily">Tavily</string>
+    <string name="settings_search_backend_tavily_subtitle">Professional search API, requires an API key</string>
+    <string name="settings_search_backend_bing">Bing</string>
+    <string name="settings_search_backend_bing_subtitle">Free and ready out of the box</string>
+    <string name="settings_search_backend_duckduckgo">DuckDuckGo</string>
+    <string name="settings_search_backend_duckduckgo_subtitle">Free, best where DuckDuckGo is reachable</string>
+    <string name="settings_search_backend_searxng">SearXNG</string>
+    <string name="settings_search_backend_searxng_subtitle">Self-hosted, requires a server URL</string>
+    <string name="settings_search_ready">Web search ready out of the box</string>
+    <string name="settings_search_auto_with_tavily">Auto: Tavily with free fallback</string>
+    <string name="settings_search_configured">%1$s configured</string>
+    <string name="settings_search_requires_config">%1$s requires configuration</string>
+    <string name="settings_searxng_base_url">SearXNG Base URL</string>
+    <string name="settings_searxng_api_key">SearXNG API Key (optional)</string>
     <string name="settings_multitasking">Multitasking</string>
     <string name="settings_keep_tasks_running_background">Keep tasks running in background</string>
     <string name="settings_keep_tasks_running_background_subtitle">Uses an Android foreground service so active chats can keep working after you leave Aether.</string>
@@ -717,8 +735,8 @@
     <string name="onboarding_agent_mode_shizuku_subtitle">Use the elevated Shizuku service when the app is installed.</string>
     <string name="onboarding_agent_mode_root_subtitle">Use a root shell for privileged input on rooted devices.</string>
     <string name="onboarding_agent_mode_skip_subtitle">Leave Agent Mode off and enable it later from Settings.</string>
-    <string name="onboarding_tavily_message">If you want fresher web answers later, you can add search here.</string>
-    <string name="onboarding_tavily_optional_body">This is optional. URL fetch already works without it.</string>
+    <string name="onboarding_tavily_message">Web search already works out of the box. Add a Tavily API key here if you want higher-quality professional search.</string>
+    <string name="onboarding_tavily_optional_body">This is optional. Search already works without it.</string>
     <string name="onboarding_paste_it_here">Paste it here</string>
 
     <!-- Conversation -->
@@ -775,7 +793,8 @@
     <string name="tool_title_launched">Launched</string>
     <string name="tool_title_pressing">Pressing</string>
     <string name="tool_title_pressed">Pressed</string>
-    <string name="tool_title_tavily_search_fallback">Tavily search</string>
+    <string name="tool_title_tavily_search_fallback">web search</string>
+    <string name="tool_title_web_search_fallback">web search</string>
     <string name="tool_title_web_page_fallback">web page</string>
     <string name="tool_title_aether_settings_fallback">Aether settings</string>
     <string name="tool_title_agent_skill_fallback">Agent Skill</string>

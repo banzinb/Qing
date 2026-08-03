@@ -3364,12 +3364,12 @@ private fun formatPendingToolTitle(
     "find" -> toolStatusLabel(isRunning, R.string.tool_title_find_running, R.string.tool_title_find_done)
     "ls" -> toolStatusLabel(isRunning, R.string.tool_title_ls_running, R.string.tool_title_ls_done)
     "analyze_image" -> toolStatusLabel(isRunning, R.string.tool_title_analyze_image_running, R.string.tool_title_analyze_image_done)
-    "tavily_search" -> formatArgumentDrivenToolTitle(
+    "web_search", "tavily_search" -> formatArgumentDrivenToolTitle(
         isRunning = isRunning,
         runningVerbRes = R.string.tool_title_searching,
         doneVerbRes = R.string.tool_title_searched,
         subject = arguments?.optString("query").orEmpty(),
-        fallbackRes = R.string.tool_title_tavily_search_fallback,
+        fallbackRes = R.string.tool_title_web_search_fallback,
     )
     "fetch_web_url" -> formatArgumentDrivenToolTitle(
         isRunning = isRunning,

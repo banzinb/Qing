@@ -27,6 +27,7 @@ enum class AppScreen {
     Onboarding,
     Chat,
     Settings,
+    PcCodex,
 }
 
 enum class OnboardingStep {

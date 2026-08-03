@@ -75,6 +75,24 @@ enum class AppThemeMode(
 }
 
 @Serializable
+enum class SearchBackend(
+    val storageValue: String,
+) {
+    Auto("auto"),
+    Tavily("tavily"),
+    Bing("bing"),
+    DuckDuckGo("duckduckgo"),
+    SearXNG("searxng");
+
+    companion object {
+        fun fromStorage(
+            value: String?,
+            defaultValue: SearchBackend = Auto,
+        ): SearchBackend = entries.firstOrNull { it.storageValue == value } ?: defaultValue
+    }
+}
+
+@Serializable
 enum class AgentWorkspaceMode(
     val storageValue: String,
     val displayName: String,
@@ -144,6 +162,9 @@ data class AppSettings(
     val systemPrompt: String = platformDefaultSystemPrompt(),
     val tavilyApiKey: String = "",
     val tavilyBaseUrl: String = DefaultTavilyBaseUrl,
+    val searchBackend: SearchBackend = SearchBackend.Auto,
+    val searxngBaseUrl: String = "",
+    val searxngApiKey: String = "",
     val llmInactivityReconnectTimeoutSeconds: Int = DefaultLlmInactivityReconnectTimeoutSeconds,
     val keepTasksRunningInBackground: Boolean = true,
     val notifyOnTaskCompletion: Boolean = true,
@@ -172,6 +193,8 @@ data class AppSettings(
     val onboardingCompletedVersion: Int = 0,
     val privacyPolicyAccepted: Boolean = false,
     val lastUpdateCheckAtMillis: Long = 0L,
+    val pcBridgeUrl: String = "",
+    val pcBridgeToken: String = "",
 )
 
 @Serializable
@@ -213,6 +236,8 @@ const val OnboardingStarterPrompt = "Hi"
 const val AetherWebsiteUrl = "https://github.com/Zhou-Shilin"
 const val AetherPrivacyPolicyUrl = "https://github.com/Zhou-Shilin/Aether/wiki/Privacy-Policy"
 const val DefaultTavilyBaseUrl = "https://api.tavily.com/"
+const val DefaultBingSearchUrl = "https://www.bing.com/search"
+const val DefaultDuckDuckGoSearchUrl = "https://html.duckduckgo.com/html/"
 
 private val AppSettingsJson = Json {
     ignoreUnknownKeys = true
@@ -257,6 +282,22 @@ fun normalizeLlmInactivityReconnectTimeoutSeconds(
 
 fun normalizeTavilyBaseUrl(value: String): String =
     value.trim().ifBlank { DefaultTavilyBaseUrl }
+
+fun normalizePcBridgeUrl(value: String): String =
+    value.trim().trimEnd('/')
+
+fun AppSettings.isPcBridgeConfigured(): Boolean = normalizePcBridgeUrl(pcBridgeUrl).isNotBlank()
+
+fun normalizeSearchBackend(value: String?): SearchBackend = SearchBackend.fromStorage(value)
+
+fun normalizeSearXngBaseUrl(value: String): String =
+    value.trim().trimEnd('/')
+
+fun SearchBackend.isReady(settings: AppSettings): Boolean = when (this) {
+    SearchBackend.Auto, SearchBackend.Bing, SearchBackend.DuckDuckGo -> true
+    SearchBackend.Tavily -> settings.tavilyApiKey.isNotBlank()
+    SearchBackend.SearXNG -> normalizeSearXngBaseUrl(settings.searxngBaseUrl).isNotBlank()
+}
 
 fun AppSettings.shouldLaunchOnboarding(
     onboardingVersion: Int = CurrentOnboardingVersion,

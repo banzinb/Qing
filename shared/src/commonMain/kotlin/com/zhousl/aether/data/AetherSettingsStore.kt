@@ -47,6 +47,9 @@ class AetherSettingsStore(
             tavilyBaseUrl = normalizeTavilyBaseUrl(
                 preferences[TavilyBaseUrl] ?: defaults.tavilyBaseUrl,
             ),
+            searchBackend = SearchBackend.fromStorage(preferences[SearchBackendKey]),
+            searxngBaseUrl = preferences[SearXngBaseUrlKey].orEmpty(),
+            searxngApiKey = preferences[SearXngApiKeyKey].orEmpty(),
             onboardingCompletedVersion = preferences[OnboardingCompletedVersion] ?: 0,
         )
         val fullSettings = parseAppSettings(preferences[AppSettingsJson].orEmpty(), legacySettings)
@@ -115,6 +118,9 @@ class AetherSettingsStore(
             preferences[ReasoningEffort] = normalizeReasoningEffort(settings.reasoningEffort)
             preferences[TavilyApiKey] = settings.tavilyApiKey
             preferences[TavilyBaseUrl] = normalizeTavilyBaseUrl(settings.tavilyBaseUrl)
+            preferences[SearchBackendKey] = settings.searchBackend.storageValue
+            preferences[SearXngBaseUrlKey] = normalizeSearXngBaseUrl(settings.searxngBaseUrl)
+            preferences[SearXngApiKeyKey] = settings.searxngApiKey
         }
     }
 
@@ -166,6 +172,11 @@ class AetherSettingsStore(
             preferences[ReasoningEffort] = normalizeReasoningEffort(persisted.appSettings.reasoningEffort)
             preferences[TavilyApiKey] = persisted.appSettings.tavilyApiKey
             preferences[TavilyBaseUrl] = normalizeTavilyBaseUrl(persisted.appSettings.tavilyBaseUrl)
+            preferences[SearchBackendKey] = persisted.appSettings.searchBackend.storageValue
+            preferences[SearXngBaseUrlKey] = normalizeSearXngBaseUrl(
+                persisted.appSettings.searxngBaseUrl,
+            )
+            preferences[SearXngApiKeyKey] = persisted.appSettings.searxngApiKey
         }
     }
 
@@ -179,6 +190,9 @@ class AetherSettingsStore(
         val ReasoningEffort = stringPreferencesKey("reasoning_effort")
         val TavilyApiKey = stringPreferencesKey("tavily_api_key")
         val TavilyBaseUrl = stringPreferencesKey("tavily_base_url")
+        val SearchBackendKey = stringPreferencesKey("search_backend")
+        val SearXngBaseUrlKey = stringPreferencesKey("searxng_base_url")
+        val SearXngApiKeyKey = stringPreferencesKey("searxng_api_key")
         val AppSettingsJson = stringPreferencesKey("app_settings_json")
         val ThinkingCatalogCacheJson = stringPreferencesKey("thinking_catalog_cache_json")
     }

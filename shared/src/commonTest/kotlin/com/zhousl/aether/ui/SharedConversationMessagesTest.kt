@@ -84,7 +84,7 @@ class SharedConversationMessagesTest {
     fun toolPresentationMatchesAndroidToolNames() {
         assertEquals(SharedToolPresentation.Generic, sharedToolPresentation("web_fetch"))
         assertEquals(SharedToolPresentation.WebFetch, sharedToolPresentation("fetch_web_url"))
-        assertEquals(SharedToolPresentation.Generic, sharedToolPresentation("web_search"))
+        assertEquals(SharedToolPresentation.WebSearch, sharedToolPresentation("web_search"))
         assertEquals(SharedToolPresentation.WebSearch, sharedToolPresentation("tavily_search"))
         assertEquals(SharedToolPresentation.Generic, sharedToolPresentation(" TAVILY_SEARCH "))
     }
@@ -191,7 +191,7 @@ class SharedConversationMessagesTest {
         )
 
         val tavilyResult = sharedWebSourceMetadata(
-            toolName = "tavily_search",
+            toolName = "web_search",
             argumentsJson = """{"query":"latest news","include_domains":["docs.example.com"]}""",
             outputJson = """{"results":[]}""",
         )

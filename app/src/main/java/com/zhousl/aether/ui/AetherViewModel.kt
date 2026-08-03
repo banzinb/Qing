@@ -19,6 +19,7 @@ import com.zhousl.aether.data.AgentModeAuthorizationMethod
 import com.zhousl.aether.data.AgentWorkspaceMode
 import com.zhousl.aether.data.AppLanguage
 import com.zhousl.aether.data.AppSettings
+import com.zhousl.aether.data.SearchBackend
 import com.zhousl.aether.data.normalizeReasoningEffort
 import com.zhousl.aether.data.AppThemeMode
 import com.zhousl.aether.data.CurrentOnboardingVersion
@@ -44,6 +45,7 @@ import com.zhousl.aether.data.normalizeLlmInactivityReconnectTimeoutSeconds
 import com.zhousl.aether.data.normalizeLlmUserAgent
 import com.zhousl.aether.data.normalizeOldCommandHistoryRetentionHours
 import com.zhousl.aether.data.normalizeTavilyBaseUrl
+import com.zhousl.aether.data.normalizeSearXngBaseUrl
 import com.zhousl.aether.data.OnboardingStarterPrompt
 import com.zhousl.aether.data.PackageProfileState
 import com.zhousl.aether.data.RootSetupIssue
@@ -1518,6 +1520,14 @@ class AetherViewModel(
         _uiState.update { it.copy(currentScreen = AppScreen.Settings) }
     }
 
+    fun openPcCodex() {
+        _uiState.update { it.copy(currentScreen = AppScreen.PcCodex) }
+    }
+
+    fun closePcCodex() {
+        _uiState.update { it.copy(currentScreen = AppScreen.Chat) }
+    }
+
     fun refreshUsageStatisticsSnapshots() {
         viewModelScope.launch {
             val snapshots = withContext(Dispatchers.IO) {
@@ -2191,6 +2201,9 @@ class AetherViewModel(
         systemPrompt: String,
         tavilyApiKey: String,
         tavilyBaseUrl: String,
+        searchBackend: SearchBackend,
+        searxngBaseUrl: String,
+        searxngApiKey: String,
         llmInactivityReconnectTimeoutSeconds: Int,
         keepTasksRunningInBackground: Boolean,
         notifyOnTaskCompletion: Boolean,
@@ -2238,6 +2251,9 @@ class AetherViewModel(
                     systemPrompt = systemPrompt,
                     tavilyApiKey = tavilyApiKey.trim(),
                     tavilyBaseUrl = normalizeTavilyBaseUrl(tavilyBaseUrl),
+                    searchBackend = searchBackend,
+                    searxngBaseUrl = normalizeSearXngBaseUrl(searxngBaseUrl),
+                    searxngApiKey = searxngApiKey.trim(),
                     llmInactivityReconnectTimeoutSeconds =
                         normalizeLlmInactivityReconnectTimeoutSeconds(
                             llmInactivityReconnectTimeoutSeconds
@@ -3740,6 +3756,21 @@ class AetherViewModel(
             if (args.has("tavily_base_url")) {
                 updated = updated.copy(
                     tavilyBaseUrl = normalizeTavilyBaseUrl(args.optString("tavily_base_url"))
+                )
+            }
+            if (args.has("search_backend")) {
+                updated = updated.copy(
+                    searchBackend = SearchBackend.fromStorage(args.optString("search_backend"))
+                )
+            }
+            if (args.has("searxng_base_url")) {
+                updated = updated.copy(
+                    searxngBaseUrl = normalizeSearXngBaseUrl(args.optString("searxng_base_url"))
+                )
+            }
+            if (args.has("searxng_api_key")) {
+                updated = updated.copy(
+                    searxngApiKey = args.optString("searxng_api_key").trim()
                 )
             }
             settingsRepository.updateSettings(updated)
@@ -6089,6 +6120,9 @@ class AetherViewModel(
         put("systemPrompt", systemPrompt)
         put("tavilyApiKey", tavilyApiKey)
         put("tavilyBaseUrl", tavilyBaseUrl)
+        put("searchBackend", searchBackend.storageValue)
+        put("searxngBaseUrl", searxngBaseUrl)
+        put("searxngApiKey", searxngApiKey)
         put("llmInactivityReconnectTimeoutSeconds", llmInactivityReconnectTimeoutSeconds)
         put("keepTasksRunningInBackground", keepTasksRunningInBackground)
         put("notifyOnTaskCompletion", notifyOnTaskCompletion)
@@ -6181,6 +6215,11 @@ class AetherViewModel(
             tavilyBaseUrl = normalizeTavilyBaseUrl(
                 json.optString("tavilyBaseUrl", defaults.tavilyBaseUrl)
             ),
+            searchBackend = SearchBackend.fromStorage(json.optString("searchBackend")),
+            searxngBaseUrl = normalizeSearXngBaseUrl(
+                json.optString("searxngBaseUrl", defaults.searxngBaseUrl)
+            ),
+            searxngApiKey = json.optString("searxngApiKey", defaults.searxngApiKey),
             llmInactivityReconnectTimeoutSeconds = normalizeLlmInactivityReconnectTimeoutSeconds(
                 json.optInt(
                     "llmInactivityReconnectTimeoutSeconds",
@@ -6384,10 +6423,11 @@ class AetherViewModel(
     )
 }
 
-private fun AetherUiState.isTermuxReadyForAgentMode(): Boolean =
+private fun AetherUiState.isAgentModeRuntimeReady(): Boolean =
     developerTermuxReadyOverride ?: (
         termuxSetupState.isReady ||
             rootSetupState.isReady ||
+            alpineSetupState.isReady ||
             (
                 settings.agentModeAuthorizationEnabled &&
                     settings.agentModeAuthorizationMethod == AgentModeAuthorizationMethod.Root &&
@@ -6398,7 +6438,7 @@ private fun AetherUiState.isTermuxReadyForAgentMode(): Boolean =
 private fun AetherUiState.isAgentModeReady(): Boolean =
     settings.agentModeAuthorizationEnabled &&
         agentModeAuthorizationState.isReady &&
-        isTermuxReadyForAgentMode()
+        isAgentModeRuntimeReady()
 
 private fun AppSettings.withRuntimeEnabled(
     runtimeId: LocalRuntimeId,

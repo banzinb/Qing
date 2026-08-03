@@ -165,6 +165,7 @@ private fun AppScreen.depth(): Int = when (this) {
     AppScreen.Onboarding -> 0
     AppScreen.Chat -> 1
     AppScreen.Settings -> 2
+    AppScreen.PcCodex -> 2
 }
 
 private fun AetherUiState.toAetherExtensionContext(): JSONObject {
@@ -653,6 +654,12 @@ private fun AetherAppContent(
                         viewModel.openSettings()
                     }
                 },
+                onPcCodexSelected = {
+                    scope.launch {
+                        drawerState.close()
+                        viewModel.openPcCodex()
+                    }
+                },
             )
         },
     ) {
@@ -892,6 +899,9 @@ private fun AetherAppContent(
                     systemPrompt = uiState.settings.systemPrompt,
                     tavilyApiKey = uiState.settings.tavilyApiKey,
                     tavilyBaseUrl = uiState.settings.tavilyBaseUrl,
+                    searchBackend = uiState.settings.searchBackend,
+                    searxngBaseUrl = uiState.settings.searxngBaseUrl,
+                    searxngApiKey = uiState.settings.searxngApiKey,
                     llmInactivityReconnectTimeoutSeconds = uiState.settings.llmInactivityReconnectTimeoutSeconds,
                     keepTasksRunningInBackground = uiState.settings.keepTasksRunningInBackground,
                     notifyOnTaskCompletion = uiState.settings.notifyOnTaskCompletion,
@@ -1047,6 +1057,10 @@ private fun AetherAppContent(
                             onBack = viewModel::closeSettings,
                         )
                     }
+
+                    AppScreen.PcCodex -> PcCodexScreen(
+                        onBack = viewModel::closePcCodex,
+                    )
         }
             }
         }
