@@ -1,0 +1,19 @@
+{
+  "name": "claw-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Aether to AutoClaw/OpenClaw gateway bridge (WeChat stays inside Claw)",
+  "type": "module",
+  "bin": {
+    "claw-bridge": "server.mjs"
+  },
+  "scripts": {
+    "start": "node server.mjs",
+    "spike": "node tools/ws-spike.mjs",
+    "gateway:up": "node tools/gateway-up.mjs",
+    "smoke": "node test/claw-smoke.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

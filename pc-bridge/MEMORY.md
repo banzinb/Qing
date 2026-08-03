@@ -102,3 +102,34 @@
 - `pc-bridge/server.mjs`：REST/MCP 入口 + 开关（已改）
 - `pc-bridge/test/bridge-smoke.mjs`：冒烟测试（已改）
 - 项目根：`D:\document\work\Aether\pc-bridge`
+## AutoClaw/OpenClaw 微信入口探索结论（2026-08-03，只摸不改）
+### 目标修正（用户原话）
+- 不做 Aether 到微信的直连：Claw 自己已有微信桥接（AutoClaw 内置 openclaw-weixin）。
+- 要做的是 Aether 接 AutoClaw（本机）/ OpenClaw（班主任），最大程度保留龙虾操控能力。
+### AutoClaw 本机事实
+- 安装：`C:\Program Files\AutoClaw\AutoClaw.exe`（Electron，188MB），当前未运行。
+- 内置 OpenClaw gateway：`C:\Program Files\AutoClaw\resources\gateway\openclaw\`，版本 2026.4.23；CLI 入口 `openclaw.mjs`。
+- 状态目录：`C:\Users\0000\.openclaw-autoclaw\`（不是 ~/.openclaw）；配置 `openclaw.json`（10KB，含 channels/bindings/models）。
+- 微信通道：openclaw-weixin 2.4.3（`resources\gateway\openclaw\extensions\openclaw-weixin\`），配置 enabled=true，账号 `d1ec9a99620b-im-bot` 已绑定 main agent；另有 `9815e2482f46-im-bot` 未绑定；QQ 通道 qqbot 也 enabled。
+- 微信账号落盘：`~/.openclaw-autoclaw\openclaw-weixin\accounts.json` + `accounts\<id>.json`（token/baseUrl/userId）+ `<id>.sync.json`（get_updates_buf 长轮询游标）+ `<id>.context-tokens.json`。
+- 微信后端协议：iLink（ilinkai.weixin.qq.com），头 AuthorizationType=ilink_bot_token / Authorization=Bearer <token> / X-WECHAT-UIN=随机uint32的base64；接口 getupdates/sendmessage/getuploadurl/getconfig/sendtyping；完整协议在插件 README.zh_CN.md。
+- gateway：端口 18789（%APPDATA%\AutoClaw\settings.json：ws://127.0.0.1:18789），mode=local，reload=hot；当前无监听（AutoClaw 未开）。
+- 启动器：`~/.openclaw-autoclaw\gateway-launcher.cjs` 加载 `resources\gateway\openclaw\gateway-bundle.mjs`；env 关键项：OPENCLAW_STATE_DIR（默认 ~/.openclaw-autoclaw）、OPENCLAW_CONFIG_PATH、OPENCLAW_PLUGIN_STAGE_DIR、OPENCLAW_SHELL。
+- 雷：裸跑 `node openclaw.mjs` 只设 OPENCLAW_STATE_DIR 时 openclaw-weixin 报 unknown channel id（插件未注入）；必须用 gateway-bundle.mjs / AutoClaw 完整启动环境。health/status 可能挂住或尝试拉起 gateway，探测必须加超时。
+- CLI 可用入口（供 Aether 适配器参考）：`message send --target <id> --message ...`、`agent --message ... --thinking ... --json`、`sessions --json`、`directory peers/groups/self`、`channels list/status`、`gateway`。
+### GitHub 参考（已确认在线仓库）
+- 官方：Tencent/openclaw-weixin（728 星；npm latest 2.4.6 需 OpenClaw>=2026.5.12，本机 bundled 2.4.3 配 2026.4.23）。
+- formulahendry/wechat-acp（794 星）：微信 iLink 到 ACP agent 的桥，内置 openclaw/codex preset，可参考。
+- photon-hq/wechat-ilink-client（76 星）：纯 TS iLink 客户端，可复用登录凭证，但会和 AutoClaw 抢长轮询，默认不用。
+- 其他：freestylefly/openclaw-wechat、fastclaw-ai/weclaw、corespeed-io/wechatbot、Wscats/wechat-claw。
+### 推荐接法（下一轮实现）
+1. pc-bridge 新增 autoclaw 适配器：先探测 18789 gateway 与 AutoClaw.exe；gateway 已跑就直用，未跑才考虑用 gateway-launcher.cjs 拉起（默认不抢，避免与 AutoClaw App 冲突或双写）。
+2. Aether 消息走 `openclaw agent --message ... --json`（或 gateway RPC），回复通过 sessions/JSONL 轮询；微信收发全部留在 AutoClaw 内，Aether 不碰 iLink 凭证。
+3. OpenClaw 版（班主任）做成同一适配器的配置变体：state dir ~/.openclaw，插件从 npm 安装。
+
+## claw-bridge 模块进度（2026-08-03）
+- 已完成：`D:\document\work\Aether\claw-bridge` 模块（profiles / ws-client / gateway / turn / sessions / server / tools / smoke）。
+- 实测：设备签名 connect 全 scopes；agent RPC accepted -> final；sessions.list 返回数组；HTTP server 8900 health/turn/sessions 200。
+- 已知：独立 gateway 无 AutoClaw 注入 API key，agent 文本 401；协议链路已验证，桌面 AutoClaw 跑起来应正常。
+- CLI 已验证：`node openclaw.mjs --help` 正常（AutoClaw bundled node + openclaw.mjs）；CLI 可作备用入口，但裸跑不加载微信插件，桥接默认走桌面 gateway。
+- 待办：AutoClaw 桌面运行时用真实 token 实测一轮；OpenClaw profile 本机验证；提交 git（codex-src/ 未跟踪不要动）。
