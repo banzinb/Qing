@@ -61,11 +61,12 @@ function jsonError(res, status, message) {
 }
 
 export async function startBridge(options = {}) {
-  const port = options.port || DEFAULT_PORT;
+  const port = options.port ?? DEFAULT_PORT;
   const host = options.host || '0.0.0.0';
   const token = options.token ?? '';
   const runner = new CodexRunner();
   const startedAt = Date.now();
+  const desktopSync = options.desktopSync ?? (process.env.PC_BRIDGE_DESKTOP_SYNC === '1' || process.env.PC_BRIDGE_DESKTOP_SYNC === 'true');
 
   const handlers = {
     codex_list_sessions: async (args) => {
@@ -87,12 +88,19 @@ export async function startBridge(options = {}) {
       return { ok: true, task };
     },
     codex_resume: async (args) => {
-      const task = await runner.startResume({
-        sessionId: args.session_id,
-        prompt: args.prompt,
-        cwd: args.cwd,
-        model: args.model,
-      });
+      const task = desktopSync
+        ? await runner.startDesktopSync({
+            sessionId: args.session_id,
+            prompt: args.prompt,
+            cwd: args.cwd,
+            model: args.model,
+          })
+        : await runner.startResume({
+            sessionId: args.session_id,
+            prompt: args.prompt,
+            cwd: args.cwd,
+            model: args.model,
+          });
       return { ok: true, task };
     },
     codex_poll: async (args) => {
@@ -160,6 +168,7 @@ export async function startBridge(options = {}) {
         requiresToken: Boolean(token),
         tokenOptional: true,
         resumeGuard: true,
+        desktopSync,
         codexPath: codex,
         sessionsDir: join(codexHome(), 'sessions'),
         node: process.version,
@@ -208,12 +217,19 @@ export async function startBridge(options = {}) {
     if (req.method === 'POST' && pathname === '/api/resume') {
       const body = await readJsonBody(req);
       try {
-        const task = await runner.startResume({
-          sessionId: body.session_id,
-          prompt: body.prompt,
-          cwd: body.cwd,
-          model: body.model,
-        });
+        const task = desktopSync
+          ? await runner.startDesktopSync({
+              sessionId: body.session_id,
+              prompt: body.prompt,
+              cwd: body.cwd,
+              model: body.model,
+            })
+          : await runner.startResume({
+              sessionId: body.session_id,
+              prompt: body.prompt,
+              cwd: body.cwd,
+              model: body.model,
+            });
         sendJson(res, 200, { ok: true, task });
       } catch (error) {
         jsonError(res, 400, error.message);
@@ -398,11 +414,17 @@ async function main() {
   const token = args.token || process.env.PC_BRIDGE_TOKEN || process.env.AUTH_TOKEN || '';
   const port = Number(args.port) || DEFAULT_PORT;
   const host = args.host || '0.0.0.0';
-  const bridge = await startBridge({ port, host, token });
+  const desktopSyncArg = args['desktop-sync'] ?? args.desktopSync;
+  const desktopSyncFlag = desktopSyncArg === undefined
+    ? undefined
+    : desktopSyncArg === true || String(desktopSyncArg).toLowerCase() !== 'false';
+  const desktopSync = desktopSyncFlag ?? (process.env.PC_BRIDGE_DESKTOP_SYNC === '1' || process.env.PC_BRIDGE_DESKTOP_SYNC === 'true');
+  const bridge = await startBridge({ port, host, token, desktopSync });
   console.log('');
   console.log('  Aether PC Bridge v' + BRIDGE_VERSION);
   console.log('  Listening: http://' + host + ':' + bridge.port);
   console.log('  MCP endpoint: http://' + host + ':' + bridge.port + '/mcp');
+  console.log('  Desktop sync: ' + (desktopSync ? 'on' : 'off'));
   console.log(token
     ? '  Token: ' + token + ' (send as Authorization: Bearer <token>)'
     : '  Token: disabled (use on private LAN or Tailscale)');

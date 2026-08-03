@@ -5,7 +5,8 @@ import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { safeJsonParse, truncate } from './bridge-core.mjs';
-import { normalizeCwd, readSessionSafety } from './codex-sessions.mjs';
+import { isDesktopSyncUnavailableError, sendFollowerStartTurn } from './codex-ipc.mjs';
+import { normalizeCwd, readSession, readSessionSafety } from './codex-sessions.mjs';
 
 const MAX_EVENTS_PER_TASK = 500;
 const MAX_ITEM_CHARS = 20000;
@@ -87,6 +88,41 @@ export class CodexRunner {
     return this.#publicTask(task);
   }
 
+  async startDesktopSync({ sessionId, prompt, cwd, model } = {}) {
+    const text = String(prompt ?? '').trim();
+    if (!text) throw new Error('prompt is required.');
+    if (!sessionId) throw new Error('sessionId is required.');
+    const safeCwd = await this.#assertSafeResume(sessionId, cwd);
+    let baselineMs = Date.now();
+    try {
+      const baseline = await readSession(sessionId);
+      baselineMs = baseline.updatedAtMs || baselineMs;
+    } catch {
+      // Session file may be mid-write; fall back to the current time.
+    }
+    try {
+      await sendFollowerStartTurn(sessionId, text, { timeoutMs: 15000 });
+    } catch (error) {
+      if (isDesktopSyncUnavailableError(error)) {
+        return this.startResume({ sessionId, prompt: text, cwd, model });
+      }
+      throw new Error(`Desktop sync failed for session '${sessionId}': ${error.message}`);
+    }
+    const task = this.#createTask('desktop-sync', {
+      sessionId,
+      prompt: text,
+      cwd: safeCwd,
+      model,
+      baselineMs,
+    });
+    task.status = 'running';
+    task.startedAt = Date.now();
+    task.sessionId = sessionId;
+    task.threadId = sessionId;
+    this.#pollDesktopSync(task);
+    return this.#publicTask(task);
+  }
+
   async #assertSafeResume(sessionId, requestedCwd) {
     let safety;
     try {
@@ -133,6 +169,11 @@ export class CodexRunner {
     if (task.status !== 'running' || !task.child) {
       if (task.status !== 'completed' && task.status !== 'failed') {
         task.status = 'stopped';
+        task.stopping = true;
+        if (task.pollTimer) {
+          clearTimeout(task.pollTimer);
+          task.pollTimer = null;
+        }
       }
       return this.#publicTask(task);
     }
@@ -180,6 +221,8 @@ export class CodexRunner {
       error: '',
       stopping: false,
       child: null,
+      pollTimer: null,
+      baselineMs: null,
     };
     this.tasks.set(task.id, task);
     this.#cleanup();
@@ -245,6 +288,47 @@ export class CodexRunner {
       task.completedAt = Date.now();
       task.child = null;
     });
+  }
+
+  #pollDesktopSync(task) {
+    const pollIntervalMs = 1200;
+    const maxWaitMs = 10 * 60 * 1000;
+    const tick = async () => {
+      if (task.stopping || task.status === 'stopped') {
+        task.status = 'stopped';
+        task.completedAt = Date.now();
+        task.pollTimer = null;
+        return;
+      }
+      if (Date.now() - (task.startedAt || task.createdAt) > maxWaitMs) {
+        task.status = 'failed';
+        task.error = 'Desktop sync timed out waiting for an assistant reply.';
+        task.completedAt = Date.now();
+        task.lastMessage = task.error;
+        task.pollTimer = null;
+        return;
+      }
+      try {
+        const session = await readSession(task.sessionId, { afterMs: task.baselineMs });
+        const assistant = (session.messages || []).filter((message) => message.kind === 'assistant');
+        if (assistant.length > 0) {
+          task.lastMessage = truncate(assistant[assistant.length - 1].text, MAX_PLAIN_OUTPUT);
+          this.#pushEvent(task, {
+            type: 'item.completed',
+            item: { type: 'agent_message', text: task.lastMessage },
+          });
+          task.status = 'completed';
+          task.exitCode = 0;
+          task.completedAt = Date.now();
+          task.pollTimer = null;
+          return;
+        }
+      } catch {
+        // Session file may be mid-write; retry until the deadline.
+      }
+      task.pollTimer = setTimeout(tick, pollIntervalMs);
+    };
+    task.pollTimer = setTimeout(tick, pollIntervalMs);
   }
 
   #handleLine(task, rawLine, plainLines) {

@@ -191,6 +191,7 @@ export function scanSessionSafety(text) {
         permissionProfile = typeof payload.permission_profile === 'object'
           ? String(payload.permission_profile.type || '')
           : String(payload.permission_profile);
+        fileSystemAccess = '';
         if (typeof payload.permission_profile === 'object' && payload.permission_profile.file_system) {
           fileSystemAccess = String(payload.permission_profile.file_system.type || '');
         }
@@ -202,10 +203,14 @@ export function scanSessionSafety(text) {
       if (settings && typeof settings === 'object') {
         if (settings.cwd) cwd = String(settings.cwd);
         const active = settings.active_permission_profile;
-        if (active?.id) permissionProfile = String(active.id).replace(/^:/, '');
+        if (active?.id) {
+          permissionProfile = String(active.id).replace(/^:/, '');
+          fileSystemAccess = '';
+        }
         if (settings.permission_profile) {
           const profile = settings.permission_profile;
           permissionProfile = typeof profile === 'object' ? String(profile.type || '') : String(profile);
+          fileSystemAccess = '';
           if (typeof profile === 'object' && profile.file_system) {
             fileSystemAccess = String(profile.file_system.type || '');
           }
@@ -259,7 +264,12 @@ export async function listSessions({ limit = 50, search = '' } = {}) {
     const indexed = index.get(file.id);
     statted.push({ ...file, mtimeMs, indexed });
   }
-  const sortKey = (item) => (item.indexed?.updatedAtMs || item.mtimeMs || 0);
+  const effectiveUpdatedMs = (item, scanMs = 0) => Math.max(
+    item.indexed?.updatedAtMs || 0,
+    item.mtimeMs || 0,
+    scanMs || 0,
+  );
+  const sortKey = (item) => effectiveUpdatedMs(item);
   statted.sort((a, b) => sortKey(b) - sortKey(a));
   const query = String(search ?? '').trim().toLowerCase();
   let filtered = statted;
@@ -274,9 +284,8 @@ export async function listSessions({ limit = 50, search = '' } = {}) {
   for (const item of top) {
     const scan = await scanSessionFile(item.path, item.id);
     const preview = scan.lastAssistantText || scan.lastUserText || scan.firstUserText || '';
-    const updatedAt = item.indexed?.updatedAt || (
-      scan.lastMessageAtMs ? new Date(scan.lastMessageAtMs).toISOString() : new Date(item.mtimeMs).toISOString()
-    );
+    const updatedAtMs = effectiveUpdatedMs(item, scan.lastMessageAtMs);
+    const updatedAt = new Date(updatedAtMs).toISOString();
     sessions.push({
       id: item.id,
       title: item.indexed?.title || scan.firstUserText || basename(item.path).replace(/^rollout-/, '').replace(/\.jsonl$/, ''),

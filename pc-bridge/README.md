@@ -19,6 +19,8 @@ node server.mjs --port 8899
 | `--host <host>` | 监听地址，默认 `0.0.0.0` |
 | `--token <token>` | 可选 Token；不填则不做鉴权（建议只在家庭内网或 Tailscale 网络使用） |
 | `PC_BRIDGE_TOKEN` | 环境变量方式设置 Token（与 `--token` 等价） |
+| `--desktop-sync` | 开启桌面实时同步：`/api/resume` 优先走桌面 IPC，失败自动回退 CLI（默认关闭） |
+| `PC_BRIDGE_DESKTOP_SYNC=1` | 环境变量方式开启桌面实时同步（与 `--desktop-sync` 等价） |
 
 ## 手机端连接
 
@@ -70,5 +72,8 @@ npm test
 - `/api/resume` 会先检查目标会话的沙箱状态：如果会话是 `read-only` 或受限权限，桥接会**拒绝续跑**并返回明确错误，避免继承受限沙箱后空转写文件。
 - `/api/exec` 默认使用 `danger-full-access` 沙箱（与桌面端一致），可用 `PC_BRIDGE_DEFAULT_SANDBOX` 环境变量覆盖。
 - 续跑的 `cwd` 必须与会话记录的 `cwd` 一致，否则返回错误；建议用 `/api/exec` 在新目录开新任务。
-- 手机端通过 CLI 续跑后，会话文件由 Codex CLI 更新，桌面端会照常显示新消息；桥接不再向桌面 App 的 IPC 注入 turn。
-- 桌面 App 的命名管道 `\\.\pipe\codex-ipc` 正确方法是 `turn/start`，参数必须包含 `threadId` 和 `input: [{ "type": "text", "text": "..." }]`。不要使用 `thread-follower-start-turn`，该方法是错误参数，会导致桌面会话 UI 报错。
+- 手机端通过 CLI 续跑后，会话文件由 Codex CLI 更新，但桌面 App 打开会话时不会实时重读外部写入的文件，所以普通续聊不一定立刻显示在已打开的桌面窗口里。
+- 桌面实时同步开关：`node server.mjs --port 8899 --desktop-sync`（或环境变量 `PC_BRIDGE_DESKTOP_SYNC=1`），health 会返回 `desktopSync: true`。
+- 开启后，`/api/resume` 先尝试把消息交给桌面 App：桌面主进程在 `\\.\pipe\codex-ipc` 上注册的方法是 `thread-follower-start-turn`（version 1），载荷为 `{ conversationId, turnStartParams: { input: [{ type: "text", text }], clientUserMessageId } }`；目标会话正打开在桌面窗口时会实时显示并自己回复。
+- 如果会话没有在桌面端打开（返回 `no-client-found`）或管道连不上，桥接自动回退到原来的 CLI `codex exec resume`，手机端不受影响。其他 IPC 错误会直接失败，避免双写。
+- 不要用 `turn/start`、`thread/read` 等外部 IPC 方法；也不要改 `client-discovery-request` 的 `canHandle` 为 `true`，否则会把桌面请求劫持到桥接并导致 UI 报错。

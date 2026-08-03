@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { readSessionSafety, scanSessionSafety } from '../lib/codex-sessions.mjs';
+import { listSessions, readSessionSafety, scanSessionSafety } from '../lib/codex-sessions.mjs';
+import { buildFollowerStartTurnRequest, isDesktopSyncUnavailableError } from '../lib/codex-ipc.mjs';
 import { startBridge } from '../server.mjs';
 
 let failures = 0;
@@ -39,6 +40,37 @@ await check('health', async () => {
   assert.equal(result.status, 200);
   assert.equal(result.body.ok, true);
   assert.equal(result.body.name, 'aether-pc-bridge');
+  assert.equal(result.body.desktopSync, false);
+});
+
+await check('health reports desktop sync flag', async () => {
+  const syncBridge = await startBridge({ port: 0, token: '', host: '127.0.0.1', desktopSync: true });
+  try {
+    const res = await fetch(`${syncBridge.url}/api/health`);
+    const body = await res.json();
+    assert.equal(body.desktopSync, true);
+  } finally {
+    await syncBridge.close();
+  }
+});
+
+await check('desktop sync request payload', async () => {
+  const id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
+  const req = buildFollowerStartTurnRequest(id, 'hello desktop');
+  assert.equal(req.type, 'request');
+  assert.equal(req.method, 'thread-follower-start-turn');
+  assert.equal(req.version, 1);
+  assert.equal(req.params.conversationId, id);
+  assert.equal(req.params.turnStartParams.input[0].type, 'text');
+  assert.equal(req.params.turnStartParams.input[0].text, 'hello desktop');
+  assert.ok(/^[0-9a-f-]{36}$/i.test(req.params.turnStartParams.clientUserMessageId));
+});
+
+await check('desktop sync unavailable error classifier', async () => {
+  assert.equal(isDesktopSyncUnavailableError(new Error('no-client-found')), true);
+  assert.equal(isDesktopSyncUnavailableError(new Error('ECONNREFUSED')), true);
+  assert.equal(isDesktopSyncUnavailableError(new Error('connect timed out')), true);
+  assert.equal(isDesktopSyncUnavailableError(new Error('invalid params')), false);
 });
 
 let sessionList = [];
@@ -79,6 +111,34 @@ await check('resume guard allows danger-full-access sessions', async () => {
   assert.equal(safety.blocked, false);
 });
 
+await check('resume guard uses latest sandbox after an earlier restricted context', async () => {
+  const restricted = JSON.stringify({
+    timestamp: '2026-08-03T01:21:46.000Z',
+    type: 'turn_context',
+    payload: {
+      cwd: 'D:\\document\\project',
+      sandbox_policy: { type: 'workspace-write', network_access: false },
+      permission_profile: {
+        type: 'managed',
+        file_system: { type: 'restricted' },
+      },
+    },
+  });
+  const safe = JSON.stringify({
+    timestamp: '2026-08-03T01:23:13.000Z',
+    type: 'turn_context',
+    payload: {
+      cwd: 'D:\\document\\project',
+      sandbox_policy: { type: 'danger-full-access' },
+      permission_profile: { type: 'disabled' },
+    },
+  });
+  const safety = scanSessionSafety(restricted + '\n' + safe + '\n');
+  assert.equal(safety.blocked, false);
+  assert.equal(safety.sandboxPolicy, 'danger-full-access');
+  assert.equal(safety.fileSystemAccess, '');
+});
+
 await check('readSessionSafety resolves against CODEX_HOME', async () => {
   const fakeHome = await mkdtemp(join(tmpdir(), 'pc-bridge-home-'));
   const sessionsDir = join(fakeHome, 'sessions', '2026', '08');
@@ -97,6 +157,53 @@ await check('readSessionSafety resolves against CODEX_HOME', async () => {
     const safety = await readSessionSafety(id);
     assert.equal(safety.blocked, true);
     assert.equal(safety.cwd, 'C:\\work');
+  } finally {
+    if (oldHome === undefined) {
+      delete process.env.CODEX_HOME;
+    } else {
+      process.env.CODEX_HOME = oldHome;
+    }
+  }
+  await rm(fakeHome, { recursive: true, force: true });
+});
+
+await check('list sessions prefers real file mtime over stale index', async () => {
+  const fakeHome = await mkdtemp(join(tmpdir(), 'pc-bridge-home-'));
+  const sessionsDir = join(fakeHome, 'sessions', '2026', '08');
+  await mkdir(sessionsDir, { recursive: true });
+  const staleId = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';
+  const freshId = 'cccccccc-cccc-cccc-cccc-cccccccccccc';
+  const staleFile = join(sessionsDir, `rollout-2026-08-02T00-00-00-${staleId}.jsonl`);
+  const freshFile = join(sessionsDir, `rollout-2026-08-02T00-00-01-${freshId}.jsonl`);
+  const sessionLine = (ts, text) => JSON.stringify({
+    timestamp: ts,
+    type: 'event_msg',
+    payload: { type: 'user_message', message: text },
+  }) + '\n';
+  await writeFile(staleFile, sessionLine('2026-08-02T00:00:00.000Z', 'stale file'), 'utf8');
+  await writeFile(freshFile, sessionLine('2026-08-02T00:00:01.000Z', 'fresh file'), 'utf8');
+  await utimes(staleFile, new Date('2026-08-02T00:00:00Z'), new Date('2026-08-02T00:00:00Z'));
+  await utimes(freshFile, new Date('2026-08-03T02:00:00Z'), new Date('2026-08-03T02:00:00Z'));
+  const indexFile = join(fakeHome, 'session_index.jsonl');
+  await writeFile(indexFile, [
+    JSON.stringify({ id: staleId, thread_name: 'stale index', updated_at: '2026-08-03T01:00:00.000Z' }),
+    JSON.stringify({ id: freshId, thread_name: 'fresh index', updated_at: '2026-08-02T01:00:00.000Z' }),
+    '',
+  ].join('\n'), 'utf8');
+  const oldHome = process.env.CODEX_HOME;
+  process.env.CODEX_HOME = fakeHome;
+  try {
+    const result = await listSessions({ limit: 10 });
+    const byId = new Map(result.sessions.map((item) => [item.id, item]));
+    const fresh = byId.get(freshId);
+    const stale = byId.get(staleId);
+    assert.ok(fresh, 'fresh file session should be listed');
+    assert.ok(stale, 'stale file session should be listed');
+    const freshAt = Date.parse(fresh.updatedAt);
+    const staleAt = Date.parse(stale.updatedAt);
+    assert.ok(freshAt > staleAt, `file mtime should win over index (fresh ${freshAt}, stale ${staleAt})`);
+    const indexOf = result.sessions.map((item) => item.id);
+    assert.ok(indexOf.indexOf(freshId) < indexOf.indexOf(staleId), 'fresh file session should sort first');
   } finally {
     if (oldHome === undefined) {
       delete process.env.CODEX_HOME;

@@ -5,6 +5,53 @@ const PIPE_NAME = '\\\\.\\pipe\\codex-ipc';
 const MAX_FRAME_BYTES = 256 * 1024 * 1024;
 const DEFAULT_TIMEOUT_MS = 5000;
 
+export const FOLLOWER_START_TURN_METHOD = 'thread-follower-start-turn';
+export const FOLLOWER_START_TURN_VERSION = 1;
+
+export function buildFollowerStartTurnRequest(threadId, text, { clientUserMessageId } = {}) {
+  if (!/^[0-9a-f-]+$/i.test(String(threadId))) {
+    throw new Error('Invalid thread id.');
+  }
+  const message = String(text ?? '').trim();
+  if (!message) throw new Error('message is required.');
+  return {
+    type: 'request',
+    method: FOLLOWER_START_TURN_METHOD,
+    version: FOLLOWER_START_TURN_VERSION,
+    params: {
+      conversationId: threadId,
+      turnStartParams: {
+        input: [{ type: 'text', text: message }],
+        clientUserMessageId: clientUserMessageId || randomUUID(),
+      },
+    },
+  };
+}
+
+export function isDesktopSyncUnavailableError(error) {
+  const message = String(error?.message ?? error ?? '');
+  return /no-client-found|client-not-found|ECONNREFUSED|connect timed out|not-connected|connection closed/.test(message);
+}
+
+export async function sendFollowerStartTurn(threadId, text, { timeoutMs = 20000 } = {}) {
+  const client = new CodexIpcClient();
+  await client.connect({ timeoutMs });
+  try {
+    const payload = buildFollowerStartTurnRequest(threadId, text);
+    const response = await client.sendRequest(payload.method, payload.params, {
+      version: payload.version,
+      timeoutMs,
+    });
+    if (response.resultType === 'error') {
+      throw new Error(response.error || 'desktop sync request failed');
+    }
+    return response.result;
+  } finally {
+    client.close();
+  }
+}
+
+
 export class CodexIpcClient {
   constructor({ clientType = 'aether-pc-bridge', pipeName = PIPE_NAME } = {}) {
     this.clientType = clientType;
