@@ -9,8 +9,8 @@
 
 ## 一句话现状
 - 桌面实时同步已完整打通：手机端发的消息实时显示在当前打开的桌面会话，功能可用。
-- pc-bridge 已用 `--desktop-sync` 重启（PID 52768，端口 8899）；冒烟测试与回退实测均通过。
-- 代码改动已准备提交 git，后续保持开关默认关闭即可。
+- Claw 链路已接通：pc-bridge `/api/claw/*` + MCP `claw_*` 转发到 claw-bridge（127.0.0.1:8900），再走 AutoClaw/OpenClaw gateway。
+- 冒烟测试（pc-bridge stub + claw-bridge smoke）通过；服务已用 `--desktop-sync --claw` 重启。
 
 ## 已确认的关键事实（别再重复排查）
 1. 桌面 App Server 打开会话后不会实时重新加载外部写入的会话文件。手机消息由 `codex exec resume` 写入 JSONL 后，桌面 UI 不会自动刷新（即使消息已落盘）。
@@ -71,7 +71,8 @@
 - 不要手动编辑会话 JSONL 去补 client_id
 
 ## 进程/环境现状（可能变化，使用前确认）
-- pc-bridge 当前进程：`node server.mjs --port 8899 --desktop-sync`，PID 52768；日志：pc-bridge.out.log / pc-bridge.err.log
+- pc-bridge 当前进程：`node server.mjs --port 8899 --desktop-sync --claw`，PID 22564；日志：pc-bridge.out.log / pc-bridge.err.log
+- claw-bridge 当前进程：`node server.mjs --profile autoclaw --port 8900`，PID 30912，只监听 127.0.0.1；日志：claw-bridge.out.log / claw-bridge.err.log
 - 桌面 App Server：`codex.exe app-server`，PID 49996；管道 `\\.\pipe\codex-ipc` 存在（刚确认）
 - Codex 会话目录：`join(codexHome(), 'sessions')`，codexHome 通常是 `~/.codex`
 - git 状态：pc-bridge 工作区未提交改动 = MEMORY.md、lib/codex-ipc.mjs、lib/codex-runner.mjs、lib/codex-sessions.mjs、server.mjs、test/bridge-smoke.mjs；另有未跟踪 `../codex-src/`（部分克隆，GitHub fetch 失败，不要动）
@@ -133,3 +134,41 @@
 - 已知：独立 gateway 无 AutoClaw 注入 API key，agent 文本 401；协议链路已验证，桌面 AutoClaw 跑起来应正常。
 - CLI 已验证：`node openclaw.mjs --help` 正常（AutoClaw bundled node + openclaw.mjs）；CLI 可作备用入口，但裸跑不加载微信插件，桥接默认走桌面 gateway。
 - 待办：AutoClaw 桌面运行时用真实 token 实测一轮；OpenClaw profile 本机验证；提交 git（codex-src/ 未跟踪不要动）。
+## 下一阶段：pc-bridge 接 claw-bridge（2026-08-03 已接通）
+
+### 目标
+Aether 手机端 -> pc-bridge -> claw-bridge -> AutoClaw/OpenClaw gateway，保留龙虾操控；微信远网通道留在 Claw（DeepSeek 已由 AutoClaw 桌面注入，无需再配）。
+
+### Aether 接法总结（已读源码确认）
+- Aether 手机端连 pc-bridge：REST http://<IP>:8899 或 MCP /mcp；正确地址 http://192.168.1.41:8899（80 端口没有服务）。
+- 现有 MCP 工具：codex_list_sessions / codex_read_session / codex_exec / codex_resume / codex_poll / codex_stop / pc_shell / pc_file_read / pc_file_write / pc_file_list / pc_git_status。
+- 任务模型：CodexRunner 建 task -> 手机端轮询 /api/tasks/:id；desktopSync 开关走 thread-follower-start-turn，失败回退 CLI。
+- claw-bridge 独立服务 8900：/api/health /api/turn /api/sessions /api/agents；turn 同步等 agent 返回；设备签名自动拿 operator.write。
+
+### 确认的接法（开工顺序）
+1. 新建 pc-bridge/lib/claw-adapter.mjs：HTTP 客户端，默认 http://127.0.0.1:8900，env CLAW_BRIDGE_URL 覆盖；只连本机。
+2. CodexRunner 加 startClawTurn（kind='claw'）：后台调 claw-bridge /api/turn，完成后更新 task；手机端复用 codex_poll / codex_stop。
+3. REST：/api/claw/health、/api/claw/turn、/api/claw/sessions、/api/claw/agents。
+4. MCP：claw_turn / claw_sessions / claw_agents / claw_health，注册到 mcp.mjs + server.mjs handlers。
+5. 开关：--claw / PC_BRIDGE_CLAW=1（默认开；claw-bridge 未起时明确报错，不影响 Codex）。
+6. 测试：bridge-smoke 加 claw adapter 构造/错误用例；README + MEMORY 更新；重启 pc-bridge 实测 health/turn。
+7. 安全：建议 claw-bridge 改绑 127.0.0.1（当前 0.0.0.0），不暴露局域网。
+
+### 进程现状（使用前确认）
+- pc-bridge PID 22564，8899，--desktop-sync --claw；health 正常，claw=true。
+- claw-bridge PID 30912，8900（只监听 127.0.0.1）；health 正常；gateway 未运行（AutoClaw 桌面未开）。
+- standalone gateway 未运行；需要真实 turn 时先起 AutoClaw 桌面或 gateway-up，文本 401 是缺 key 不是 bug。
+- 本机 IP：WLAN 192.168.1.41；Radmin VPN 26.97.215.167。
+- 手机 Aether 填 80 端口会失败，应填 8899。
+
+### 雷区
+- 不碰 codex-src/（未跟踪，勿 add）。
+- 不抢微信长轮询；不并发两个 gateway 共用 18789；CLI 与 gateway 不共享 plugin stage dir。
+- 不要改 client-discovery-request canHandle。
+- 独立 gateway 401 是缺 key，不是桥接 bug；桌面 AutoClaw 跑起来应正常。
+
+### 本阶段完成记录（2026-08-03）
+1. 已完成：claw-adapter.mjs（HTTP 客户端，默认 http://127.0.0.1:8900，CLAW_BRIDGE_URL 可覆盖）、CodexRunner.startClawTurn（kind='claw'，复用 codex_poll/codex_stop，stopTask 可 abort）、server.mjs claw 开关（默认开）+ 4 个 REST 路由 + 4 个 MCP handler、mcp.mjs 4 个工具、bridge-smoke 用本地 stub 覆盖 adapter/REST/MCP/stop、claw-bridge 改绑 127.0.0.1。
+2. 测试：pc-bridge npm test 全过（含 claw stub 用例）；claw-bridge node test\claw-smoke.mjs 因独立 gateway 未启动显示 SKIP（协议链路之前已验证过，不是本次回归）。
+3. 服务重启：pc-bridge `--port 8899 --desktop-sync --claw`，claw-bridge `--profile autoclaw --port 8900`；health 验证通过。
+4. 提交：`feat(pc-bridge): route Aether turns to claw-bridge`（只 add pc-bridge/ + claw-bridge/，未碰 codex-src/）。

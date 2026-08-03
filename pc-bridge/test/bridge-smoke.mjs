@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
+import { createServer } from 'node:http';
 import { mkdir, mkdtemp, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { listSessions, readSessionSafety, scanSessionSafety } from '../lib/codex-sessions.mjs';
 import { buildFollowerStartTurnRequest, isDesktopSyncUnavailableError } from '../lib/codex-ipc.mjs';
+import { clawAgents, clawHealth, clawSessions, clawTurn } from '../lib/claw-adapter.mjs';
 import { startBridge } from '../server.mjs';
 
 let failures = 0;
@@ -20,6 +22,48 @@ async function check(name, fn) {
 const bridge = await startBridge({ port: 0, token: '', host: '127.0.0.1' });
 const base = bridge.url;
 const tempDir = await mkdtemp(join(tmpdir(), 'pc-bridge-smoke-'));
+
+const stub = createServer(async (req, res) => {
+  const url = new URL(req.url || '/', 'http://stub.local');
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  const json = (status, body) => {
+    res.writeHead(status);
+    res.end(JSON.stringify(body));
+  };
+  if (url.pathname === '/api/health') {
+    json(200, { ok: true, profile: 'autoclaw', gateway: { running: true, health: 'ok' }, time: Date.now() });
+    return;
+  }
+  if (url.pathname === '/api/turn') {
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    const body = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}');
+    if (String(body.message).includes('SLOW')) {
+      await new Promise((resolvePromise) => setTimeout(resolvePromise, 5000));
+    }
+    json(200, {
+      ok: true,
+      runId: 'stub-run',
+      status: 'ok',
+      text: `reply: ${body.message}`,
+      sessionId: 'stub-session',
+      provider: 'stub',
+      model: 'stub-model',
+    });
+    return;
+  }
+  if (url.pathname === '/api/sessions') {
+    json(200, { ok: true, count: 1, sessions: [{ key: 'stub', title: 'stub session' }] });
+    return;
+  }
+  if (url.pathname === '/api/agents') {
+    json(200, { ok: true, agents: [{ id: 'main', name: 'main agent' }] });
+    return;
+  }
+  json(404, { ok: false, error: 'not found' });
+});
+await new Promise((resolvePromise) => stub.listen(0, '127.0.0.1', resolvePromise));
+const stubUrl = `http://127.0.0.1:${stub.address().port}`;
 
 async function post(path, body) {
   const res = await fetch(`${base}${path}`, {
@@ -41,6 +85,7 @@ await check('health', async () => {
   assert.equal(result.body.ok, true);
   assert.equal(result.body.name, 'aether-pc-bridge');
   assert.equal(result.body.desktopSync, false);
+  assert.equal(result.body.claw, true);
 });
 
 await check('health reports desktop sync flag', async () => {
@@ -51,6 +96,19 @@ await check('health reports desktop sync flag', async () => {
     assert.equal(body.desktopSync, true);
   } finally {
     await syncBridge.close();
+  }
+});
+
+await check('health reports claw flag', async () => {
+  const noClawBridge = await startBridge({ port: 0, token: '', host: '127.0.0.1', claw: false });
+  try {
+    const res = await fetch(`${noClawBridge.url}/api/health`);
+    const body = await res.json();
+    assert.equal(body.claw, false);
+    const clawRes = await fetch(`${noClawBridge.url}/api/claw/health`);
+    assert.equal(clawRes.status, 503);
+  } finally {
+    await noClawBridge.close();
   }
 });
 
@@ -227,7 +285,7 @@ await check('mcp tools/list', async () => {
   assert.equal(result.status, 200);
   assert.ok(Array.isArray(result.body.result.tools));
   const names = result.body.result.tools.map((tool) => tool.name);
-  for (const expected of ['codex_list_sessions', 'codex_read_session', 'codex_exec', 'codex_resume', 'pc_shell', 'pc_file_read', 'pc_git_status']) {
+  for (const expected of ['codex_list_sessions', 'codex_read_session', 'codex_exec', 'codex_resume', 'codex_poll', 'codex_stop', 'claw_turn', 'claw_sessions', 'claw_agents', 'claw_health', 'pc_shell', 'pc_file_read', 'pc_git_status']) {
     assert.ok(names.includes(expected), `missing tool ${expected}`);
   }
 });
@@ -242,6 +300,101 @@ await check('mcp codex_list_sessions call', async () => {
   assert.equal(result.status, 200);
   const text = result.body.result.content[0].text;
   assert.ok(text.includes('"ok": true'));
+});
+
+await check('claw adapter health', async () => {
+  const result = await clawHealth({ baseUrl: stubUrl });
+  assert.equal(result.ok, true);
+  assert.equal(result.profile, 'autoclaw');
+});
+
+await check('claw adapter turn', async () => {
+  const result = await clawTurn({ message: 'hello claw', baseUrl: stubUrl, timeoutSec: 30 });
+  assert.equal(result.ok, true);
+  assert.equal(result.text, 'reply: hello claw');
+});
+
+await check('claw adapter sessions', async () => {
+  const result = await clawSessions({ baseUrl: stubUrl, limit: 5 });
+  assert.ok(Array.isArray(result.sessions));
+  assert.equal(result.count, 1);
+});
+
+await check('claw adapter agents', async () => {
+  const result = await clawAgents({ baseUrl: stubUrl });
+  assert.ok(Array.isArray(result.agents));
+  assert.equal(result.agents[0].id, 'main');
+});
+
+await check('claw adapter connection error is clear', async () => {
+  await assert.rejects(() => clawHealth({ baseUrl: 'http://127.0.0.1:1', timeoutMs: 1500 }), /claw-bridge/);
+});
+
+const oldClawUrl = process.env.CLAW_BRIDGE_URL;
+process.env.CLAW_BRIDGE_URL = stubUrl;
+try {
+  await check('rest claw health', async () => {
+    const result = await get('/api/claw/health');
+    assert.equal(result.status, 200);
+    assert.equal(result.body.ok, true);
+    assert.equal(result.body.profile, 'autoclaw');
+  });
+  await check('rest claw turn', async () => {
+    const result = await post('/api/claw/turn', { message: 'from rest', timeout_sec: 30 });
+    assert.equal(result.status, 200);
+    assert.equal(result.body.task.kind, 'claw');
+    const deadline = Date.now() + 10000;
+    let lastBody;
+    while (Date.now() < deadline) {
+      const poll = await get(`/api/tasks/${result.body.task.id}`);
+      lastBody = poll.body;
+      if (lastBody.task.status === 'completed' || lastBody.task.status === 'failed') break;
+      await new Promise((resolvePromise) => setTimeout(resolvePromise, 200));
+    }
+    assert.equal(lastBody.task.status, 'completed', lastBody.task.error || 'claw turn did not complete');
+    assert.ok(lastBody.task.lastMessage.includes('from rest'));
+  });
+  await check('rest claw sessions', async () => {
+    const result = await get('/api/claw/sessions?limit=5');
+    assert.equal(result.status, 200);
+    assert.ok(Array.isArray(result.body.sessions));
+  });
+  await check('rest claw agents', async () => {
+    const result = await get('/api/claw/agents');
+    assert.equal(result.status, 200);
+    assert.ok(Array.isArray(result.body.agents));
+  });
+  await check('claw turn can be stopped', async () => {
+    const result = await post('/api/claw/turn', { message: 'SLOW STOP_CLAW', timeout_sec: 60 });
+    assert.equal(result.status, 200);
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 300));
+    const stop = await post(`/api/tasks/${result.body.task.id}/stop`, {});
+    assert.equal(stop.status, 200);
+    const poll = await get(`/api/tasks/${result.body.task.id}`);
+    assert.equal(poll.body.task.status, 'stopped');
+  });
+} finally {
+  if (oldClawUrl === undefined) delete process.env.CLAW_BRIDGE_URL;
+  else process.env.CLAW_BRIDGE_URL = oldClawUrl;
+}
+
+await check('mcp claw_health call', async () => {
+  const old = process.env.CLAW_BRIDGE_URL;
+  process.env.CLAW_BRIDGE_URL = stubUrl;
+  try {
+    const result = await post('/mcp', {
+      jsonrpc: '2.0',
+      id: 'c1',
+      method: 'tools/call',
+      params: { name: 'claw_health', arguments: {} },
+    });
+    assert.equal(result.status, 200);
+    const text = result.body.result.content[0].text;
+    assert.ok(text.includes('"ok": true'));
+  } finally {
+    if (old === undefined) delete process.env.CLAW_BRIDGE_URL;
+    else process.env.CLAW_BRIDGE_URL = old;
+  }
 });
 
 await check('file write/read', async () => {
@@ -345,6 +498,7 @@ await check('stop task', async () => {
   assert.ok(['stopped', 'completed', 'failed', 'running'].includes(poll.body.task.status));
 });
 
+await new Promise((resolvePromise) => stub.close(resolvePromise));
 await bridge.close();
 try {
   await rm(tempDir, { recursive: true, force: true });

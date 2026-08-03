@@ -104,7 +104,7 @@ export async function startBridge(options = {}) {
       json(res, 500, { ok: false, error: err?.message ?? String(err) })
     }
   })
-  await new Promise((resolve) => server.listen(port, '0.0.0.0', resolve))
+  await new Promise((resolve) => server.listen(port, '127.0.0.1', resolve))
   const address = server.address()
   return { server, port: typeof address === 'object' && address ? address.port : port, profile, gatewayState }
 }

@@ -56,7 +56,7 @@ export const MCP_TOOL_DEFINITIONS = [
   },
   {
     name: 'codex_poll',
-    description: 'Poll a running Codex task for live progress events.',
+    description: 'Poll a running Codex task for live progress events (works for codex_exec, codex_resume, and claw_turn tasks).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -75,6 +75,42 @@ export const MCP_TOOL_DEFINITIONS = [
       },
       required: ['task_id'],
     },
+  },
+  {
+    name: 'claw_turn',
+    description: 'Send a message to the AutoClaw/OpenClaw gateway through the local claw-bridge and start a pollable task. Poll with codex_poll, stop with codex_stop.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        message: stringSchema('Message for the Claw agent.'),
+        agent_id: stringSchema('Optional agent id (default main).'),
+        session_key: stringSchema('Optional Claw session key to continue.'),
+        thinking: stringSchema('Optional thinking guidance, or "off" to disable.'),
+        timeout_sec: { type: 'integer', description: 'Turn timeout in seconds (default 600).' },
+        claw_url: stringSchema('Optional claw-bridge base URL override (default http://127.0.0.1:8900).'),
+      },
+      required: ['message'],
+    },
+  },
+  {
+    name: 'claw_sessions',
+    description: 'List sessions known to the AutoClaw/OpenClaw gateway through claw-bridge.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        limit: { type: 'integer', description: 'Max sessions to return (default 50).' },
+      },
+    },
+  },
+  {
+    name: 'claw_agents',
+    description: 'List agents registered on the AutoClaw/OpenClaw gateway through claw-bridge.',
+    inputSchema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'claw_health',
+    description: 'Check claw-bridge and the AutoClaw/OpenClaw gateway health.',
+    inputSchema: { type: 'object', properties: {} },
   },
   {
     name: 'pc_shell',

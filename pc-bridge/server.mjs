@@ -17,6 +17,7 @@ import {
 } from './lib/bridge-core.mjs';
 import { listSessions, readSession } from './lib/codex-sessions.mjs';
 import { CodexRunner, resolveCodexPath } from './lib/codex-runner.mjs';
+import { clawAgents, clawHealth, clawSessions, clawTurn } from './lib/claw-adapter.mjs';
 import { gitStatusTool, listDirTool, readFileTool, runShell, writeFileTool } from './lib/pc-tools.mjs';
 import { handleMcpRequest } from './lib/mcp.mjs';
 
@@ -67,6 +68,8 @@ export async function startBridge(options = {}) {
   const runner = new CodexRunner();
   const startedAt = Date.now();
   const desktopSync = options.desktopSync ?? (process.env.PC_BRIDGE_DESKTOP_SYNC === '1' || process.env.PC_BRIDGE_DESKTOP_SYNC === 'true');
+  const clawEnv = process.env.PC_BRIDGE_CLAW;
+  const claw = options.claw ?? (clawEnv === undefined ? true : !['false', '0', 'off', 'no'].includes(String(clawEnv).toLowerCase().trim()));
 
   const handlers = {
     codex_list_sessions: async (args) => {
@@ -112,6 +115,33 @@ export async function startBridge(options = {}) {
       const task = runner.stopTask(args.task_id);
       if (!task) throw new Error('Task not found.');
       return { ok: true, task };
+    },
+    claw_health: async () => {
+      if (!claw) throw new Error('Claw bridge is disabled on this server.');
+      const result = await clawHealth();
+      return { ok: true, ...result };
+    },
+    claw_turn: async (args) => {
+      if (!claw) throw new Error('Claw bridge is disabled on this server.');
+      const task = await runner.startClawTurn({
+        message: args.message,
+        agentId: args.agent_id,
+        sessionKey: args.session_key,
+        thinking: args.thinking,
+        timeoutSec: args.timeout_sec,
+        clawUrl: args.claw_url,
+      });
+      return { ok: true, task };
+    },
+    claw_sessions: async (args) => {
+      if (!claw) throw new Error('Claw bridge is disabled on this server.');
+      const result = await clawSessions({ limit: args.limit });
+      return { ok: true, ...result };
+    },
+    claw_agents: async () => {
+      if (!claw) throw new Error('Claw bridge is disabled on this server.');
+      const result = await clawAgents();
+      return { ok: true, ...result };
     },
     pc_shell: async (args) => {
       const result = await runShell({
@@ -169,6 +199,7 @@ export async function startBridge(options = {}) {
         tokenOptional: true,
         resumeGuard: true,
         desktopSync,
+        claw,
         codexPath: codex,
         sessionsDir: join(codexHome(), 'sessions'),
         node: process.version,
@@ -233,6 +264,66 @@ export async function startBridge(options = {}) {
         sendJson(res, 200, { ok: true, task });
       } catch (error) {
         jsonError(res, 400, error.message);
+      }
+      return true;
+    }
+    if (pathname === '/api/claw/health') {
+      if (!claw) {
+        jsonError(res, 503, 'Claw bridge is disabled.');
+        return true;
+      }
+      try {
+        const result = await clawHealth();
+        sendJson(res, 200, { ok: true, ...result });
+      } catch (error) {
+        jsonError(res, 502, error.message);
+      }
+      return true;
+    }
+    if (req.method === 'POST' && pathname === '/api/claw/turn') {
+      if (!claw) {
+        jsonError(res, 503, 'Claw bridge is disabled.');
+        return true;
+      }
+      const body = await readJsonBody(req);
+      try {
+        const task = await runner.startClawTurn({
+          message: body.message,
+          agentId: body.agent_id ?? body.agentId,
+          sessionKey: body.session_key ?? body.sessionKey,
+          thinking: body.thinking,
+          timeoutSec: body.timeout_sec ?? body.timeoutSec,
+          clawUrl: body.claw_url,
+        });
+        sendJson(res, 200, { ok: true, task });
+      } catch (error) {
+        jsonError(res, 400, error.message);
+      }
+      return true;
+    }
+    if (req.method === 'GET' && pathname === '/api/claw/sessions') {
+      if (!claw) {
+        jsonError(res, 503, 'Claw bridge is disabled.');
+        return true;
+      }
+      try {
+        const result = await clawSessions({ limit: Number(url.searchParams.get('limit')) || undefined });
+        sendJson(res, 200, { ok: true, ...result });
+      } catch (error) {
+        jsonError(res, 502, error.message);
+      }
+      return true;
+    }
+    if (req.method === 'GET' && pathname === '/api/claw/agents') {
+      if (!claw) {
+        jsonError(res, 503, 'Claw bridge is disabled.');
+        return true;
+      }
+      try {
+        const result = await clawAgents();
+        sendJson(res, 200, { ok: true, ...result });
+      } catch (error) {
+        jsonError(res, 502, error.message);
       }
       return true;
     }
@@ -419,12 +510,19 @@ async function main() {
     ? undefined
     : desktopSyncArg === true || String(desktopSyncArg).toLowerCase() !== 'false';
   const desktopSync = desktopSyncFlag ?? (process.env.PC_BRIDGE_DESKTOP_SYNC === '1' || process.env.PC_BRIDGE_DESKTOP_SYNC === 'true');
-  const bridge = await startBridge({ port, host, token, desktopSync });
+  const clawArg = args.claw;
+  const clawFlag = clawArg === undefined
+    ? undefined
+    : clawArg === true || String(clawArg).toLowerCase() !== 'false';
+  const clawEnv = process.env.PC_BRIDGE_CLAW;
+  const claw = clawFlag ?? (clawEnv === undefined ? true : !['false', '0', 'off', 'no'].includes(String(clawEnv).toLowerCase().trim()));
+  const bridge = await startBridge({ port, host, token, desktopSync, claw });
   console.log('');
   console.log('  Aether PC Bridge v' + BRIDGE_VERSION);
   console.log('  Listening: http://' + host + ':' + bridge.port);
   console.log('  MCP endpoint: http://' + host + ':' + bridge.port + '/mcp');
   console.log('  Desktop sync: ' + (desktopSync ? 'on' : 'off'));
+  console.log('  Claw bridge: ' + (claw ? 'on' : 'off'));
   console.log(token
     ? '  Token: ' + token + ' (send as Authorization: Bearer <token>)'
     : '  Token: disabled (use on private LAN or Tailscale)');

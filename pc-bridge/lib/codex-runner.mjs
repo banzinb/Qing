@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { safeJsonParse, truncate } from './bridge-core.mjs';
 import { isDesktopSyncUnavailableError, sendFollowerStartTurn } from './codex-ipc.mjs';
 import { normalizeCwd, readSession, readSessionSafety } from './codex-sessions.mjs';
+import { clawTurn } from './claw-adapter.mjs';
 
 const MAX_EVENTS_PER_TASK = 500;
 const MAX_ITEM_CHARS = 20000;
@@ -123,6 +124,63 @@ export class CodexRunner {
     return this.#publicTask(task);
   }
 
+  async startClawTurn({ message, agentId, sessionKey, thinking, timeoutSec, clawUrl } = {}) {
+    const text = String(message ?? '').trim();
+    if (!text) throw new Error('message is required.');
+    const task = this.#createTask('claw', {
+      prompt: text,
+      agentId: agentId || 'main',
+      sessionKey: sessionKey || '',
+      thinking: thinking || '',
+      timeoutSec: Number(timeoutSec) || 600,
+      clawUrl,
+    });
+    task.status = 'running';
+    task.startedAt = Date.now();
+    this.#runClawTurn(task);
+    return this.#publicTask(task);
+  }
+
+  async #runClawTurn(task) {
+    const controller = new AbortController();
+    task.abortController = controller;
+    try {
+      const result = await clawTurn({
+        message: task.prompt,
+        agentId: task.agentId,
+        sessionKey: task.sessionKey,
+        thinking: task.thinking,
+        timeoutSec: task.timeoutSec,
+        baseUrl: task.clawUrl,
+        signal: controller.signal,
+      });
+      if (task.stopping) {
+        task.status = 'stopped';
+        task.completedAt = Date.now();
+        return;
+      }
+      task.status = 'completed';
+      task.exitCode = 0;
+      task.completedAt = Date.now();
+      task.sessionId = result.sessionId || task.sessionId;
+      task.lastMessage = truncate(String(result.text ?? ''), MAX_PLAIN_OUTPUT);
+      if (result.provider || result.model) {
+        task.usage = { provider: result.provider, model: result.model };
+      }
+      this.#pushEvent(task, {
+        type: 'item.completed',
+        item: { type: 'agent_message', text: task.lastMessage },
+      });
+    } catch (error) {
+      task.status = task.stopping ? 'stopped' : 'failed';
+      task.error = task.stopping ? '' : error.message;
+      task.lastMessage = task.stopping ? 'Claw turn stopped.' : `Claw turn failed: ${error.message}`;
+      task.completedAt = Date.now();
+    } finally {
+      task.abortController = null;
+    }
+  }
+
   async #assertSafeResume(sessionId, requestedCwd) {
     let safety;
     try {
@@ -166,32 +224,42 @@ export class CodexRunner {
   stopTask(id) {
     const task = this.tasks.get(id);
     if (!task) return null;
-    if (task.status !== 'running' || !task.child) {
-      if (task.status !== 'completed' && task.status !== 'failed') {
-        task.status = 'stopped';
-        task.stopping = true;
-        if (task.pollTimer) {
-          clearTimeout(task.pollTimer);
-          task.pollTimer = null;
-        }
-      }
+    if (task.status !== 'running' && task.status !== 'queued') {
       return this.#publicTask(task);
     }
     task.stopping = true;
-    if (process.platform === 'win32') {
+    if (task.abortController) {
       try {
-        spawn('taskkill.exe', ['/pid', String(task.child.pid), '/T', '/F'], {
-          windowsHide: true,
-          stdio: 'ignore',
-        });
+        task.abortController.abort();
       } catch {
-        try { task.child.kill(); } catch { /* already gone */ }
+        // Controller already aborted.
       }
-    } else {
-      try { task.child.kill('SIGTERM'); } catch { /* already gone */ }
-      setTimeout(() => {
-        try { task.child?.kill('SIGKILL'); } catch { /* already gone */ }
-      }, 3000).unref();
+    }
+    if (task.child) {
+      if (process.platform === 'win32') {
+        try {
+          spawn('taskkill.exe', ['/pid', String(task.child.pid), '/T', '/F'], {
+            windowsHide: true,
+            stdio: 'ignore',
+          });
+        } catch {
+          try { task.child.kill(); } catch { /* already gone */ }
+        }
+      } else {
+        try { task.child.kill('SIGTERM'); } catch { /* already gone */ }
+        setTimeout(() => {
+          try { task.child?.kill('SIGKILL'); } catch { /* already gone */ }
+        }, 3000).unref();
+      }
+      return this.#publicTask(task);
+    }
+    if (task.status !== 'completed' && task.status !== 'failed') {
+      task.status = 'stopped';
+      task.stopping = true;
+      if (task.pollTimer) {
+        clearTimeout(task.pollTimer);
+        task.pollTimer = null;
+      }
     }
     return this.#publicTask(task);
   }
@@ -222,6 +290,7 @@ export class CodexRunner {
       stopping: false,
       child: null,
       pollTimer: null,
+      abortController: null,
       baselineMs: null,
     };
     this.tasks.set(task.id, task);
@@ -387,6 +456,8 @@ export class CodexRunner {
       cwd: task.cwd || '',
       model: task.model || '',
       sandbox: task.sandbox || '',
+      agentId: task.agentId || '',
+      sessionKey: task.sessionKey || '',
       status: task.status,
       createdAt: task.createdAt,
       startedAt: task.startedAt,
