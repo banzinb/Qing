@@ -223,7 +223,7 @@ private class SharedPiExtensionCatalogClient {
     ): String {
         val response = client.get(url) {
             header(HttpHeaders.Accept, "text/html")
-            header(HttpHeaders.UserAgent, "Aether-Android")
+            header(HttpHeaders.UserAgent, "Qing-Android")
         }
         check(response.status.isSuccess()) {
             "$requestName failed with HTTP ${response.status.value}."

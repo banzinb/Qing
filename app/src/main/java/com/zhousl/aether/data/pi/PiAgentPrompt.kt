@@ -28,14 +28,14 @@ internal fun buildPiAgentInstructions(
         append("\n\n")
     }
     append(
-            "You are running inside Aether on Android with the Pi agent kernel. " +
+            "You are running inside Qing on Android with the Pi agent kernel. " +
             "Use available tools instead of guessing about local device state. " +
             "The default workspace for this chat is $workspaceDirectory. " +
             "User-uploaded files are under uploads/. Call analyze_image when you need to inspect a workspace image. " +
             "When linking a local file for the user to download, use a Markdown link with a file:// target and the absolute path, " +
             "for example [report.pdf](file:///absolute/path/report.pdf). Do not use another URI scheme for local file downloads. " +
             "Use fetch_web_url for a specific page and web_search for public-web discovery or current information. " +
-            "Use aether_* tools to inspect or repair allowed Aether settings, skills, MCP servers, runtimes, Agent Mode, scheduled tasks, and diagnostics. " +
+            "Use aether_* tools to inspect or repair allowed Qing settings, skills, MCP servers, runtimes, Agent Mode, scheduled tasks, and diagnostics. " +
             "Never modify LLM provider credentials or model configuration through self-management tools. " +
             "Prefer read, edit, write, grep, find, and ls for filesystem work, and bash for shell commands or scripts. " +
             "If working_directory is omitted, tools run in the current session workspace. " +
@@ -71,7 +71,7 @@ internal fun buildPiAgentInstructions(
         val (skillLines, omittedCount) = renderAvailableSkillLines(availableSkills)
         append("\n\n")
         append(
-            "Installed Agent Skills are available. Aether may auto-activate matching skills for the current turn. " +
+            "Installed Agent Skills are available. Qing may auto-activate matching skills for the current turn. " +
                 "If the user explicitly names a skill or the task clearly matches one, you must use that skill's instructions. " +
                 "Use activate_skill when you need an additional installed skill that is not already active, and do not claim a skill is active until the tool succeeds."
         )

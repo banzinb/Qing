@@ -10,7 +10,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
 private const val AetherBundleId = "com.baimoqilin.aether"
-const val AetherAppStoreFallbackUrl = "https://apps.apple.com/us/search?term=Aether"
+const val AetherAppStoreFallbackUrl = "https://apps.apple.com/us/search?term=Qing"
 
 data class SharedAppUpdateStatus(
     val installedVersion: String,

@@ -17,6 +17,7 @@ import com.zhousl.aether.data.AppUpdateManager
 import com.zhousl.aether.data.AutomaticModelPurpose
 import com.zhousl.aether.data.AgentModeAuthorizationMethod
 import com.zhousl.aether.data.AgentWorkspaceMode
+import com.zhousl.aether.data.AppAccent
 import com.zhousl.aether.data.AppLanguage
 import com.zhousl.aether.data.AppSettings
 import com.zhousl.aether.data.SearchBackend
@@ -133,7 +134,7 @@ private const val ContextWindowTokens = 128_000L
 private const val AutoCompactionReserveTokens = 16_384L
 private const val MaxInlineImageAttachmentBytes = 5 * 1024 * 1024
 private const val SessionCompactingSystemPrompt =
-    "You are Aether's conversation compactor. Summarize the provided conversation so a future assistant can continue seamlessly. Preserve user goals, constraints, decisions, important facts, open tasks, files/paths mentioned, tool results, errors, and next steps. Do not invent details. Return only the compacted context."
+    "You are Qing's conversation compactor. Summarize the provided conversation so a future assistant can continue seamlessly. Preserve user goals, constraints, decisions, important facts, open tasks, files/paths mentioned, tool results, errors, and next steps. Do not invent details. Return only the compacted context."
 
 internal fun shouldAutoCompactContext(
     usage: LlmTokenUsage?,
@@ -2216,6 +2217,7 @@ class AetherViewModel(
         agentModeAuthorizationMethod: AgentModeAuthorizationMethod,
         language: AppLanguage,
         themeMode: AppThemeMode,
+        accent: AppAccent,
         defaultChatModelKey: String,
         defaultTitleModelKey: String,
         defaultNamingModelKey: String,
@@ -2271,6 +2273,7 @@ class AetherViewModel(
                     agentModeAuthorizationMethod = agentModeAuthorizationMethod,
                     language = language,
                     themeMode = themeMode,
+                    accent = accent,
                     defaultChatModelKey = normalizeSelectableModelKey(defaultChatModelKey, modelOptions),
                     defaultTitleModelKey = normalizeSelectableModelKey(defaultTitleModelKey, modelOptions),
                     defaultNamingModelKey = normalizeSelectableModelKey(defaultNamingModelKey, modelOptions),
@@ -2291,6 +2294,12 @@ class AetherViewModel(
     fun updateAppThemeMode(themeMode: AppThemeMode) {
         viewModelScope.launch {
             settingsRepository.updateThemeMode(themeMode)
+        }
+    }
+
+    fun updateAppAccent(accent: AppAccent) {
+        viewModelScope.launch {
+            settingsRepository.updateAccent(accent)
         }
     }
 
@@ -3379,7 +3388,7 @@ class AetherViewModel(
         modKernel.services.register(
             id = "state",
             owner = "aether-core",
-            description = "Read the public Aether state tree and apply supported state transactions.",
+            description = "Read the public Qing state tree and apply supported state transactions.",
             priority = -10_000,
             methods = listOf(
                 AetherModServiceMethod("get", "Read a value from the public state tree."),
@@ -3416,7 +3425,7 @@ class AetherViewModel(
         ).getOrNull() ?: return AetherModOperationDecision(
             payload = nativeDecision.payload,
             cancelled = true,
-            reason = "Aether script operation interceptor failed.",
+            reason = "Qing script operation interceptor failed.",
         )
         return AetherModOperationDecision(
             payload = scriptDecision.payload,
@@ -3578,7 +3587,7 @@ class AetherViewModel(
                 }
             }
 
-            else -> error("Unsupported public Aether state path: ${operation.optString("path")}")
+            else -> error("Unsupported public Qing state path: ${operation.optString("path")}")
         }
     }
 
@@ -3655,7 +3664,7 @@ class AetherViewModel(
                 when (screen) {
                     "settings" -> openSettings()
                     "chat" -> closeSettings()
-                    else -> error("Unknown Aether screen: $screen")
+                    else -> error("Unknown Qing screen: $screen")
                 }
             }
             JSONObject().put("opened", screen)
@@ -3796,7 +3805,7 @@ class AetherViewModel(
                 .put("output", output)
         }
 
-        else -> error("Unsupported Aether extension host method: $method")
+        else -> error("Unsupported Qing extension host method: $method")
     }
 
     private fun currentSelectedSkillIds(
@@ -5795,7 +5804,7 @@ class AetherViewModel(
         val logcat = readLogcatDump()
         val diagnosticEvents = diagnosticLogger.readEventsText()
         val lastCrash = diagnosticLogger.readLastCrashText()
-        appendLine("Aether diagnostic log")
+        appendLine("Qing diagnostic log")
         appendLine("generatedAtMillis=${System.currentTimeMillis()}")
         appendLine("versionName=${BuildConfig.VERSION_NAME}")
         appendLine("versionCode=${BuildConfig.VERSION_CODE}")

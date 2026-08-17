@@ -99,7 +99,7 @@ class TermuxBashTool(
         if (!hasRunCommandPermission()) {
             return@withContext TermuxSetupState(
                 issue = TermuxSetupIssue.PermissionMissing,
-                detail = "Grant 'Run commands in Termux environment' to Aether.",
+                detail = "Grant 'Run commands in Termux environment' to Qing.",
             )
         }
 
@@ -125,7 +125,7 @@ class TermuxBashTool(
                 json.optString("errmsg").contains("rejected", ignoreCase = true) -> {
                 TermuxSetupState(
                     issue = TermuxSetupIssue.ExternalAppsDisabled,
-                    detail = "In Termux, paste the setup command to enable allow-external-apps, then return to Aether.",
+                    detail = "In Termux, paste the setup command to enable allow-external-apps, then return to Qing.",
                 )
             }
 
@@ -489,8 +489,8 @@ class TermuxBashTool(
             return buildSetupErrorResult(
                 command = command,
                 workingDirectory = workingDirectory,
-                message = "Aether does not have Termux RUN_COMMAND permission.",
-                hint = "Grant 'Run commands in Termux environment' to Aether in Android Settings.",
+                message = "Qing does not have Termux RUN_COMMAND permission.",
+                hint = "Grant 'Run commands in Termux environment' to Qing in Android Settings.",
             )
         }
 
@@ -537,10 +537,10 @@ class TermuxBashTool(
             putExtra(TermuxContract.RunCommandWorkdirExtra, workingDirectory)
             putExtra(TermuxContract.RunCommandBackgroundExtra, true)
             putExtra(TermuxContract.RunCommandPendingIntentExtra, pendingIntent)
-            putExtra(TermuxContract.RunCommandLabelExtra, "Aether bash")
+            putExtra(TermuxContract.RunCommandLabelExtra, "Qing bash")
             putExtra(
                 TermuxContract.RunCommandDescriptionExtra,
-                "Runs a bash command requested by the Aether Android agent.",
+                "Runs a bash command requested by the Qing Android agent.",
             )
         }
 
@@ -556,7 +556,7 @@ class TermuxBashTool(
                     command = command,
                     workingDirectory = workingDirectory,
                     message = "Termux rejected the RUN_COMMAND request.",
-                    hint = "Paste the Aether Termux setup command inside Termux to enable allow-external-apps.",
+                    hint = "Paste the Qing Termux setup command inside Termux to enable allow-external-apps.",
                 )
             } else {
                 val result = if (awaitTimeoutMillis == null) {
@@ -573,7 +573,7 @@ class TermuxBashTool(
                                 command = command,
                                 workingDirectory = workingDirectory,
                                 message = "Timed out waiting for Termux to reply.",
-                                hint = "Open Termux once, paste the Aether Termux setup command, then refresh.",
+                                hint = "Open Termux once, paste the Qing Termux setup command, then refresh.",
                             )
                         }
                 }

@@ -51,7 +51,7 @@ internal object ChatMessageEntityMapper {
             id = entity.id,
             author = MessageAuthor.entries.firstOrNull { it.name == entity.author } ?: MessageAuthor.Agent,
             text = entity.text.ifBlank {
-                "Aether could not render a stored message (${throwable.javaClass.simpleName}). " +
+                "Qing could not render a stored message (${throwable.javaClass.simpleName}). " +
                     "The raw stored JSON is attached to the message payload for recovery."
             },
             createdAtMillis = entity.createdAtMillis ?: timestampFromMessageId(entity.id),

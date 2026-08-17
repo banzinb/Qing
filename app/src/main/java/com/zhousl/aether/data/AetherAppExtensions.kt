@@ -187,7 +187,7 @@ class AetherAppExtensionManager(
                     error = reloadError,
                 )
                 if (!response.optBoolean("reloaded", true)) {
-                    error(reloadError.ifBlank { "Aether extensions rejected the reload." })
+                    error(reloadError.ifBlank { "Qing extensions rejected the reload." })
                 }
                 snapshot
             }
@@ -298,7 +298,7 @@ class AetherAppExtensionManager(
                 val args = payload.optJSONObject("args") ?: JSONObject()
                 val result = runCatching {
                     val handler = hostHandler
-                        ?: error("The Aether UI host is not attached.")
+                        ?: error("The Qing UI host is not attached.")
                     handler(method, args)
                 }
                 bridge.sendAetherHostResult(
@@ -337,7 +337,7 @@ class AetherAppExtensionManager(
 
 internal fun JSONObject.extensionReloadError(): String {
     if (optBoolean("reloaded", true)) return ""
-    val errors = optJSONArray("errors") ?: return "Aether extensions rejected the reload."
+    val errors = optJSONArray("errors") ?: return "Qing extensions rejected the reload."
     return buildList {
         for (index in 0 until errors.length()) {
             errors.optJSONObject(index)
@@ -346,7 +346,7 @@ internal fun JSONObject.extensionReloadError(): String {
                 ?.let(::add)
         }
     }.distinct().take(3).joinToString("; ")
-        .ifBlank { "Aether extensions rejected the reload." }
+        .ifBlank { "Qing extensions rejected the reload." }
 }
 
 internal fun parseAetherAppExtensionSnapshot(json: JSONObject?): AetherAppExtensionSnapshot {

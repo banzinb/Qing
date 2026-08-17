@@ -37,7 +37,7 @@ private fun corruptedAndroidChatStateSession(
         messages = listOf(
             PersistedChatMessage(
                 id = "agent-corrupt-chat-state-$rawHash",
-                text = "Aether could not read the stored chat history " +
+                text = "Qing could not read the stored chat history " +
                     "(${failure::class.simpleName.orEmpty().ifBlank { "Throwable" }}). " +
                     "The app is showing this recovery placeholder instead of hiding the conversation list.",
                 fromUser = false,

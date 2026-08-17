@@ -263,6 +263,16 @@ class AetherAppRuntime(
             }
         }
         appScope.launch {
+            val seedResult = skillManager.installBundledSkills()
+            seedResult.exceptionOrNull()?.let { throwable ->
+                diagnosticLogger.exception(
+                    category = "skills",
+                    event = "bundled_skill_seed_failed",
+                    throwable = throwable,
+                )
+            }
+        }
+        appScope.launch {
             scheduledTaskManager.rescheduleAll()
         }
     }

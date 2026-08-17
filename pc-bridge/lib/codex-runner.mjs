@@ -76,11 +76,13 @@ export class CodexRunner {
     const text = String(prompt ?? '').trim();
     if (!text) throw new Error('prompt is required.');
     if (!sessionId) throw new Error('sessionId is required.');
-    const safeCwd = await this.#assertSafeResume(sessionId, cwd);
+    const safe = await this.#assertSafeResume(sessionId, cwd);
+    const safeCwd = safe.cwd;
     const codex = await resolveCodexPath();
     const task = this.#createTask('resume', { sessionId, prompt: text, cwd: safeCwd, model });
     const args = ['exec', 'resume', sessionId, '-', '--json', '--skip-git-repo-check'];
     if (model) args.push('-m', model);
+    args.push('-s', safe.sandboxPolicy || process.env.PC_BRIDGE_DEFAULT_SANDBOX || 'danger-full-access');
     this.#spawn(task, codex, args, safeCwd);
     if (task.child?.stdin) {
       task.child.stdin.write(text + '\n');
@@ -93,7 +95,8 @@ export class CodexRunner {
     const text = String(prompt ?? '').trim();
     if (!text) throw new Error('prompt is required.');
     if (!sessionId) throw new Error('sessionId is required.');
-    const safeCwd = await this.#assertSafeResume(sessionId, cwd);
+    const safe = await this.#assertSafeResume(sessionId, cwd);
+    const safeCwd = safe.cwd;
     let baselineMs = Date.now();
     try {
       const baseline = await readSession(sessionId);
@@ -207,7 +210,7 @@ export class CodexRunner {
         );
       }
     }
-    return sessionCwd || requested || process.cwd();
+    return { cwd: sessionCwd || requested || process.cwd(), sandboxPolicy: safety.sandboxPolicy || '' };
   }
 
   getTask(id) {

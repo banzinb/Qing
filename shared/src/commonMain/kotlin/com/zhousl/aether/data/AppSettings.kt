@@ -75,6 +75,21 @@ enum class AppThemeMode(
 }
 
 @Serializable
+enum class AppAccent(
+    val storageValue: String,
+) {
+    Azure("azure"),
+    Teal("teal"),
+    Indigo("indigo"),
+    Green("green");
+
+    companion object {
+        fun fromStorage(value: String?): AppAccent =
+            entries.firstOrNull { it.storageValue == value } ?: Teal
+    }
+}
+
+@Serializable
 enum class SearchBackend(
     val storageValue: String,
 ) {
@@ -184,6 +199,7 @@ data class AppSettings(
     val agentModeAuthorizationMethod: AgentModeAuthorizationMethod = AgentModeAuthorizationMethod.Shizuku,
     val language: AppLanguage = defaultAppLanguage(),
     val themeMode: AppThemeMode = AppThemeMode.System,
+    val accent: AppAccent = AppAccent.Teal,
     val defaultChatModelKey: String = "",
     val defaultTitleModelKey: String = "",
     val defaultNamingModelKey: String = "",

@@ -110,7 +110,7 @@ class AetherAgentModeShizukuService @Keep constructor(
 
     override fun attachPreviewSurface(displayId: Int, surface: Surface) {
         val display = displays[displayId]
-            ?: error("Display $displayId is not managed by Aether Agent Mode.")
+            ?: error("Display $displayId is not managed by Qing Agent Mode.")
         synchronized(displayLock(displayId)) {
             previewSurfaces[displayId] = surface
             display.setSurface(surface)
@@ -119,7 +119,7 @@ class AetherAgentModeShizukuService @Keep constructor(
 
     override fun detachPreviewSurface(displayId: Int) {
         val display = displays[displayId]
-            ?: error("Display $displayId is not managed by Aether Agent Mode.")
+            ?: error("Display $displayId is not managed by Qing Agent Mode.")
         synchronized(displayLock(displayId)) {
             previewSurfaces.remove(displayId)
             display.setSurface(imageReaders[displayId]?.surface)
@@ -289,7 +289,7 @@ class AetherAgentModeShizukuService @Keep constructor(
         quality: Int,
     ) {
         val display = displays[displayId]
-            ?: error("Display $displayId is not managed by Aether Agent Mode.")
+            ?: error("Display $displayId is not managed by Qing Agent Mode.")
         val reader = imageReaders[displayId]
             ?: error("Display $displayId does not have an internal capture surface.")
         val boundedMaxEdge = maxEdge.coerceIn(320, 4096)
@@ -504,7 +504,7 @@ class AetherAgentModeShizukuService @Keep constructor(
 
     private fun ensureManagedDisplay(displayId: Int) {
         if (!displays.containsKey(displayId)) {
-            error("Display $displayId is not managed by Aether Agent Mode.")
+            error("Display $displayId is not managed by Qing Agent Mode.")
         }
     }
 

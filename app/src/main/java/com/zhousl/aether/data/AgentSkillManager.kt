@@ -1,6 +1,7 @@
 package com.zhousl.aether.data
 
 import android.content.Context
+import android.content.res.AssetManager
 import android.net.Uri
 import android.util.Base64
 import com.zhousl.aether.ui.ChatMessage
@@ -35,6 +36,7 @@ private const val MaxSkillEntryBytes = 16L * 1024L * 1024L
 private const val MaxSkillZipEntries = 4096
 private const val DefaultImplicitSkillMatchLimit = 2
 private const val ImplicitSkillMatchMinScore = 5
+private const val BundledSkillsAssetRoot = "skills"
 
 data class PiPackageSkillSource(
     val packageSource: String,
@@ -249,6 +251,62 @@ class AgentSkillManager(
             .take(limit)
             .map { it.first }
             .toList()
+    }
+
+    suspend fun installBundledSkills(): Result<Int> = withContext(Dispatchers.IO) {
+        runCatching {
+            val bundleNames = context.assets.list(BundledSkillsAssetRoot).orEmpty()
+            bundleNames.sorted().sumOf { bundleName ->
+                runCatching { installBundledSkill(bundleName) }.getOrDefault(0)
+            }
+        }
+    }
+
+    private suspend fun installBundledSkill(bundleName: String): Int {
+        val assets = context.assets
+        val assetRoot = "$BundledSkillsAssetRoot/$bundleName"
+        val entries = runCatching { assets.list(assetRoot) }.getOrNull().orEmpty()
+        if (entries.none { it.equals(SkillFileName, ignoreCase = true) }) return 0
+        val workingDirectory = createTempDirectory()
+        return try {
+            val copiedRoot = workingDirectory.resolve(bundleName).apply { mkdirs() }
+            copyAssetDirectory(assets, assetRoot, copiedRoot)
+            val skillRoot = locateSkillRoot(copiedRoot)
+            val parsed = parseSkillDocument(File(skillRoot, SkillFileName))
+            val skillId = buildSkillId(parsed.name)
+            val currentSkills = extensionsRepository.extensionState.firstValue().installedSkills
+            val existing = currentSkills.firstOrNull { it.id == skillId }
+            if (existing == null && skillId in extensionsRepository.seededBundledSkillIds.first()) return 0
+            if (existing != null && existing.source.kind != SkillInstallKind.Bundled) {
+                extensionsRepository.markBundledSkillSeeded(skillId)
+                return 0
+            }
+            val checksum = sha256OfDirectory(skillRoot)
+            if (
+                existing != null &&
+                existing.checksumSha256 == checksum &&
+                validatedInstalledSkillRoot(existing) != null
+            ) {
+                extensionsRepository.markBundledSkillSeeded(skillId)
+                return 0
+            }
+            installParsedSkill(
+                sourceRoot = skillRoot,
+                source = SkillInstallSource(
+                    kind = SkillInstallKind.Bundled,
+                    label = "Qing preinstalled skill",
+                    uri = "bundled://skills/$bundleName",
+                    subpath = "",
+                ),
+                skillIdOverride = existing?.id ?: skillId,
+                installedAtMillis = existing?.installedAtMillis,
+                isEnabled = existing?.isEnabled ?: true,
+            )
+            extensionsRepository.markBundledSkillSeeded(skillId)
+            1
+        } finally {
+            workingDirectory.deleteRecursively()
+        }
     }
 
     fun installedSkillsDirectory(): File = File(context.filesDir, SkillStorageDirectoryName).apply {
@@ -505,6 +563,35 @@ class AgentSkillManager(
             .sortedBy { it.relativePath }
             .toList()
 
+
+    private fun copyAssetDirectory(
+        assets: AssetManager,
+        assetPath: String,
+        destination: File,
+    ) {
+        destination.mkdirs()
+        val entries = assets.list(assetPath).orEmpty()
+        entries.forEach { entry ->
+            val childAssetPath = "$assetPath/$entry"
+            val childDestination = File(destination, entry)
+            val childEntries = assets.list(childAssetPath)
+            if (childEntries.isNullOrEmpty()) {
+                val isFile = runCatching {
+                    assets.open(childAssetPath).use { }
+                }.isSuccess
+                if (isFile) {
+                    childDestination.parentFile?.mkdirs()
+                    assets.open(childAssetPath).use { input ->
+                        FileOutputStream(childDestination).use { output ->
+                            input.copyTo(output)
+                        }
+                    }
+                }
+            } else {
+                copyAssetDirectory(assets, childAssetPath, childDestination)
+            }
+        }
+    }
     private fun createTempDirectory(): File =
         File(context.cacheDir, SkillTempDirectoryName)
             .apply { mkdirs() }
@@ -585,7 +672,7 @@ class AgentSkillManager(
         val request = Request.Builder()
             .url(url)
             .addHeader("Accept", "application/zip, application/octet-stream")
-            .addHeader("User-Agent", "Aether Android Agent")
+            .addHeader("User-Agent", "Qing Android Agent")
             .build()
         httpClient.newCall(request).execute().use { response ->
             if (!response.isSuccessful) {

@@ -611,7 +611,7 @@ private class McpServerSession(
                     put(
                         "clientInfo",
                         JSONObject().apply {
-                            put("name", "Aether Android")
+                            put("name", "Qing Android")
                             put("version", "0.1.0")
                         },
                     )

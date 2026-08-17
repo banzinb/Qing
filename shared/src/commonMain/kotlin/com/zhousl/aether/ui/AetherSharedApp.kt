@@ -176,6 +176,7 @@ import com.zhousl.aether.platform.LocalReduceMotion
 import com.zhousl.aether.data.LlmProviderConfig
 import com.zhousl.aether.data.ProviderModelOption
 import com.zhousl.aether.data.AetherSettingsStore
+import com.zhousl.aether.data.AppAccent
 import com.zhousl.aether.data.AppSettings
 import com.zhousl.aether.data.AutomaticModelPurpose
 import com.zhousl.aether.data.CurrentOnboardingVersion
@@ -794,14 +795,14 @@ private const val SharedContextWindowTokens = 128_000L
 private const val SharedAutoCompactionReserveTokens = 16_384L
 
 private const val SharedInitialStreamingStatusText = "Thinking"
-private const val SharedInitialStreamingStatusDetail = "Aether is working on this turn."
+private const val SharedInitialStreamingStatusDetail = "Qing is working on this turn."
 private const val SharedProviderValidationErrorText =
     "The selected provider is not fully configured."
 private const val SharedInlineImageAttachmentMaxBytes = 5L * 1024L * 1024L
 private const val SharedSessionTitleSystemPrompt =
     "Generate a concise chat title for this conversation. Return only the title, in the user's language when possible, with no quotes, no emoji, and at most 6 words."
 private const val SharedSessionCompactingSystemPrompt =
-    "You are Aether's conversation compactor. Summarize the provided conversation so a future assistant can continue seamlessly. Preserve user goals, constraints, decisions, important facts, open tasks, files/paths mentioned, tool results, errors, and next steps. Do not invent details. Return only the compacted context."
+    "You are Qing's conversation compactor. Summarize the provided conversation so a future assistant can continue seamlessly. Preserve user goals, constraints, decisions, important facts, open tasks, files/paths mentioned, tool results, errors, and next steps. Do not invent details. Return only the compacted context."
 
 @Composable
 fun AetherSharedApp(
@@ -813,7 +814,7 @@ fun AetherSharedApp(
 ) {
     var sharedAppSettings by remember { mutableStateOf(AppSettings()) }
     applyPlatformAppLanguage(sharedAppSettings.language)
-    SharedAetherTheme(themeMode = sharedAppSettings.themeMode) {
+    SharedAetherTheme(themeMode = sharedAppSettings.themeMode, accent = sharedAppSettings.accent) {
         val reduceMotion = LocalReduceMotion.current
         val finishEditingBeforeCompactingMessage = stringResource(Res.string.message_finish_editing_before_compacting)
         val noConversationToCompactMessage = stringResource(Res.string.message_no_conversation_to_compact)
@@ -1196,7 +1197,7 @@ fun AetherSharedApp(
         fun ensureBackgroundExecution(target: SharedSessionUiState) {
             if (backgroundLeases[target.id]?.isActive == true) return
             backgroundLeases.remove(target.id)?.end()
-            backgroundLeases[target.id] = backgroundExecutionManager.begin("Aether Agent") {
+            backgroundLeases[target.id] = backgroundExecutionManager.begin("Qing Agent") {
                 target.job?.cancel()
                 target.job = null
                 appScope.launch {
@@ -2317,6 +2318,7 @@ fun AetherSharedApp(
                         put("system_prompt", sharedAppSettings.systemPrompt)
                         put("reasoning_effort", sharedAppSettings.reasoningEffort)
                         put("theme", sharedAppSettings.themeMode.storageValue)
+                        put("accent", sharedAppSettings.accent.storageValue)
                         put("language", sharedAppSettings.language.storageValue)
                         put("tavily_api_key", sharedAppSettings.tavilyApiKey)
                         put("tavily_base_url", sharedAppSettings.tavilyBaseUrl)
@@ -2331,6 +2333,9 @@ fun AetherSharedApp(
                         }
                         args["tavily_api_key"]?.jsonPrimitive?.contentOrNull?.let {
                             sharedAppSettings = sharedAppSettings.copy(tavilyApiKey = it)
+                        }
+                        args["accent"]?.jsonPrimitive?.contentOrNull?.let {
+                            sharedAppSettings = sharedAppSettings.copy(accent = AppAccent.fromStorage(it))
                         }
                         settingsStore?.saveGeneralSettings(sharedAppSettings)
                         buildJsonObject { put("updated", true) }
@@ -2371,7 +2376,7 @@ fun AetherSharedApp(
                         }
                         handleSharedExtensionHostCall(mapped, nested)
                     }
-                    else -> error("Unsupported Aether extension host method on this platform: " + method)
+                    else -> error("Unsupported Qing extension host method on this platform: " + method)
                 }
 
         val extensionManager = remember(bridgeClient) {
@@ -3232,7 +3237,7 @@ private suspend fun buildSharedDiagnosticLogText(
     val diagnosticEvents = SharedDiagnosticLogger.readEventsText()
     val lastCrash = SharedDiagnosticLogger.readLastCrashText()
     return buildString {
-        appendLine("Aether diagnostic log")
+        appendLine("Qing diagnostic log")
         appendLine("generatedAtMillis=${platformCurrentTimeMillis()}")
         appendLine("versionName=$appVersion")
         appendLine("screen=${route.name}")
@@ -7264,6 +7269,7 @@ private fun SharedSettingsScreen(
                         appSettings.copy(
                             language = updated.language,
                             themeMode = updated.themeMode,
+                            accent = updated.accent,
                         ),
                     )
                 },

@@ -27,7 +27,7 @@ class AetherSelfManagementTool(
     fun toolDefinitions(): List<JSONObject> = listOf(
         buildAetherToolDefinition(
             name = "aether_config_get",
-            description = "Read Aether app configuration for non-LLM-provider areas: general app preferences, web tools, reliability, skills, MCP servers, Termux, Agent Mode, and developer diagnostics. Provider, model, base URL, and LLM API key settings are intentionally omitted.",
+            description = "Read Qing app configuration for non-LLM-provider areas: general app preferences, web tools, reliability, skills, MCP servers, Termux, Agent Mode, and developer diagnostics. Provider, model, base URL, and LLM API key settings are intentionally omitted.",
             properties = JSONObject().apply {
                 put(
                     "categories",
@@ -62,7 +62,7 @@ class AetherSelfManagementTool(
         ),
         buildAetherToolDefinition(
             name = "aether_config_set",
-            description = "Modify allowed Aether settings. This tool cannot modify LLM provider, model, base URL, provider API keys, or default model selections.",
+            description = "Modify allowed Qing settings. This tool cannot modify LLM provider, model, base URL, provider API keys, or default model selections.",
             properties = JSONObject().apply {
                 put(
                     "category",
@@ -85,7 +85,7 @@ class AetherSelfManagementTool(
         ),
         buildAetherToolDefinition(
             name = "aether_skill_manage",
-            description = "List, install, enable, disable, or remove Aether Agent Skills. Remote installs accept GitHub repository URLs or zip URLs supported by Aether.",
+            description = "List, install, enable, disable, or remove Qing Agent Skills. Remote installs accept GitHub repository URLs or zip URLs supported by Qing.",
             properties = JSONObject().apply {
                 put(
                     "action",
@@ -102,7 +102,7 @@ class AetherSelfManagementTool(
         ),
         buildAetherToolDefinition(
             name = "aether_mcp_manage",
-            description = "List, add, update, enable, disable, or remove Aether MCP server configurations. Supports streamable HTTP and stdio MCP servers.",
+            description = "List, add, update, enable, disable, or remove Qing MCP server configurations. Supports streamable HTTP and stdio MCP servers.",
             properties = JSONObject().apply {
                 put(
                     "action",
@@ -155,7 +155,7 @@ class AetherSelfManagementTool(
         ),
         buildAetherToolDefinition(
             name = "aether_termux_manage",
-            description = "Inspect or repair Aether's Termux integration without using the bash tool. Root setup may trigger a system su request.",
+            description = "Inspect or repair Qing's Termux integration without using the bash tool. Root setup may trigger a system su request.",
             properties = JSONObject().apply {
                 put(
                     "action",
@@ -203,7 +203,7 @@ class AetherSelfManagementTool(
         ),
         buildAetherToolDefinition(
             name = "aether_scheduled_task_manage",
-            description = "List, create, update, enable, disable, or remove Aether scheduled tasks. Scheduled tasks wake Aether at the next matching time and run the prompt as an automated Agent turn.",
+            description = "List, create, update, enable, disable, or remove Qing scheduled tasks. Scheduled tasks wake Qing at the next matching time and run the prompt as an automated Agent turn.",
             properties = JSONObject().apply {
                 put(
                     "action",
@@ -233,7 +233,7 @@ class AetherSelfManagementTool(
         ),
         buildAetherToolDefinition(
             name = "aether_extension_manage",
-            description = "List or reload source-compatible Pi extensions for the current Aether session, or invoke a registered Pi extension command. Extensions are discovered from ~/.pi/agent/extensions, the workspace .pi/extensions directory, and ~/.aether/extensions. Custom Pi TUI components are not supported.",
+            description = "List or reload source-compatible Pi extensions for the current Qing session, or invoke a registered Pi extension command. Extensions are discovered from ~/.pi/agent/extensions, the workspace .pi/extensions directory, and ~/.aether/extensions. Custom Pi TUI components are not supported.",
             properties = JSONObject().apply {
                 put(
                     "action",
@@ -261,7 +261,7 @@ class AetherSelfManagementTool(
         ),
         buildAetherToolDefinition(
             name = "aether_developer_manage",
-            description = "Read Aether developer diagnostics such as recent diagnostic events or last crash details. Sensitive values are redacted.",
+            description = "Read Qing developer diagnostics such as recent diagnostic events or last crash details. Sensitive values are redacted.",
             properties = JSONObject().apply {
                 put(
                     "action",
@@ -296,7 +296,7 @@ class AetherSelfManagementTool(
         "aether_scheduled_task_manage" -> executeScheduledTaskManage(argumentsJson)
         "aether_extension_manage" -> executeExtensionManage(argumentsJson)
         "aether_developer_manage" -> executeDeveloperManage(argumentsJson)
-        else -> failure("Unknown Aether self-management tool '$toolName'.")
+        else -> failure("Unknown Qing self-management tool '$toolName'.")
     }
 
     private suspend fun executeConfigGet(argumentsJson: String): String {
@@ -325,7 +325,7 @@ class AetherSelfManagementTool(
             }
         }
         return success(payload) {
-            put("stdout", "Read ${categories.size} Aether configuration categories.")
+            put("stdout", "Read ${categories.size} Qing configuration categories.")
         }
     }
 
@@ -462,7 +462,7 @@ class AetherSelfManagementTool(
             agentModeController.refreshAuthorization(updated)
         }
         return success(JSONObject().put(category, configCategoryJson(category, updated))) {
-            put("stdout", "Updated Aether $category settings.")
+            put("stdout", "Updated Qing $category settings.")
         }
     }
 
@@ -821,7 +821,7 @@ class AetherSelfManagementTool(
                     output.put("last_crash", diagnosticLogger.readLastCrashText().takeLast(maxChars))
                 }
                 success(output) {
-                    put("stdout", "Read Aether diagnostics.")
+                    put("stdout", "Read Qing diagnostics.")
                 }
             }
 

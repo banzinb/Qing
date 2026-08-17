@@ -33,7 +33,7 @@ class AetherNotificationController(
             "Background tasks",
             NotificationManager.IMPORTANCE_LOW,
         ).apply {
-            description = "Shows active Aether sessions running in the background."
+            description = "Shows active Qing sessions running in the background."
             setShowBadge(false)
         }
         val completionChannel = NotificationChannel(
@@ -41,7 +41,7 @@ class AetherNotificationController(
             "Task completion",
             NotificationManager.IMPORTANCE_DEFAULT,
         ).apply {
-            description = "Alerts you when a background Aether session finishes."
+            description = "Alerts you when a background Qing session finishes."
         }
         manager.createNotificationChannel(foregroundChannel)
         manager.createNotificationChannel(completionChannel)
@@ -53,9 +53,9 @@ class AetherNotificationController(
     ): Notification {
         val activeSessions = sessions.filter { executionStates[it.id]?.isRunning == true }
         val title = if (activeSessions.size == 1) {
-            "Aether is running 1 task"
+            "Qing is running 1 task"
         } else {
-            "Aether is running ${activeSessions.size} tasks"
+            "Qing is running ${activeSessions.size} tasks"
         }
         val body = activeSessions
             .take(3)
@@ -108,9 +108,9 @@ class AetherNotificationController(
         )
 
         val title = if (failed) {
-            "Aether task finished with an issue"
+            "Qing task finished with an issue"
         } else {
-            "Aether task finished"
+            "Qing task finished"
         }
 
         val notification = NotificationCompat.Builder(context, CompletionChannelId)

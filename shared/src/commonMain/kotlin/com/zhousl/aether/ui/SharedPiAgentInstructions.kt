@@ -18,7 +18,7 @@ internal fun buildSharedPiAgentInstructions(
         append("\n\n")
     }
     append(
-        "You are running inside Aether on iOS with the Pi agent kernel. " +
+        "You are running inside Qing on iOS with the Pi agent kernel. " +
             "Use available tools instead of guessing about local state. " +
             "The default workspace for this chat is $workspaceDirectory. " +
             "User-uploaded files are under attachments/. Use read or analyze_image when inspection is needed. " +
@@ -33,7 +33,7 @@ internal fun buildSharedPiAgentInstructions(
         val (skillLines, omittedCount) = renderSharedAvailableSkillLines(availableSkills)
         append("\n\n")
         append(
-            "Installed Agent Skills are available. Aether may auto-activate matching skills for the current turn. " +
+            "Installed Agent Skills are available. Qing may auto-activate matching skills for the current turn. " +
                 "If the user explicitly names a skill or the task clearly matches one, you must use that skill's instructions. " +
                 "Use activate_skill when you need an additional installed skill that is not already active, and do not claim a skill is active until the tool succeeds."
         )

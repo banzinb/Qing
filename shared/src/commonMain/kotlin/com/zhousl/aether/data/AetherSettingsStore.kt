@@ -41,6 +41,7 @@ class AetherSettingsStore(
         val legacySettings = defaults.copy(
             language = AppLanguage.fromStorage(preferences[Language]),
             themeMode = AppThemeMode.fromStorage(preferences[ThemeMode]),
+            accent = AppAccent.fromStorage(preferences[Accent]),
             systemPrompt = preferences[SystemPrompt] ?: defaults.systemPrompt,
             reasoningEffort = normalizeReasoningEffort(preferences[ReasoningEffort]),
             tavilyApiKey = preferences[TavilyApiKey].orEmpty(),
@@ -114,6 +115,7 @@ class AetherSettingsStore(
             preferences[AppSettingsJson] = serializeAppSettings(settings)
             preferences[Language] = settings.language.storageValue
             preferences[ThemeMode] = settings.themeMode.storageValue
+            preferences[Accent] = settings.accent.storageValue
             preferences[SystemPrompt] = settings.systemPrompt
             preferences[ReasoningEffort] = normalizeReasoningEffort(settings.reasoningEffort)
             preferences[TavilyApiKey] = settings.tavilyApiKey
@@ -168,6 +170,7 @@ class AetherSettingsStore(
             preferences[AppSettingsJson] = serializeAppSettings(persisted.appSettings)
             preferences[Language] = persisted.appSettings.language.storageValue
             preferences[ThemeMode] = persisted.appSettings.themeMode.storageValue
+            preferences[Accent] = persisted.appSettings.accent.storageValue
             preferences[SystemPrompt] = persisted.appSettings.systemPrompt
             preferences[ReasoningEffort] = normalizeReasoningEffort(persisted.appSettings.reasoningEffort)
             preferences[TavilyApiKey] = persisted.appSettings.tavilyApiKey
@@ -186,6 +189,7 @@ class AetherSettingsStore(
         val OnboardingCompletedVersion = intPreferencesKey("onboarding_completed_version")
         val Language = stringPreferencesKey("language")
         val ThemeMode = stringPreferencesKey("theme_mode")
+        val Accent = stringPreferencesKey("accent")
         val SystemPrompt = stringPreferencesKey("system_prompt")
         val ReasoningEffort = stringPreferencesKey("reasoning_effort")
         val TavilyApiKey = stringPreferencesKey("tavily_api_key")

@@ -1284,7 +1284,7 @@ private fun genericMcpToolDefinitions(): List<JSONObject> = listOf(
 
 private fun agentModeToolDefinition(): JSONObject = toolDefinition(
     name = "agent_display",
-    description = "Operate Aether Agent Mode on an isolated Android virtual display. Use this only when Agent Mode is selected in the chat composer.",
+    description = "Operate Qing Agent Mode on an isolated Android virtual display. Use this only when Agent Mode is selected in the chat composer.",
     properties = JSONObject().apply {
         put("action", stringProperty("One of: list_apps, start, status, launch, tap, swipe, key, text, screenshot, stop."))
         put("query", stringProperty("For list_apps: optional app label, package, or activity filter."))
@@ -1310,7 +1310,7 @@ private fun agentModeToolDefinition(): JSONObject = toolDefinition(
 
 private fun chromeToolDefinition(): JSONObject = toolDefinition(
     name = "chrome",
-    description = "Operate the optional Chromium browser installed inside Aether's Alpine environment through Chrome DevTools Protocol. Use this only when Chrome is selected in the chat composer.",
+    description = "Operate the optional Chromium browser installed inside Qing's Alpine environment through Chrome DevTools Protocol. Use this only when Chrome is selected in the chat composer.",
     properties = JSONObject().apply {
         put("action", stringProperty("One of: start, status, navigate, tap, swipe, text, key, back, forward, reload, evaluate, screenshot, stop."))
         put("url", stringProperty("For navigate: the URL to open."))

@@ -152,7 +152,7 @@ class AgentModeController(
                     )
                     AgentModeAuthorizationState(
                         issue = AgentModeAuthorizationIssue.ShizukuPermissionDenied,
-                        detail = "Shizuku permission was denied. Grant Aether permission in Shizuku before using Agent Mode.",
+                        detail = "Shizuku permission was denied. Grant Qing permission in Shizuku before using Agent Mode.",
                     )
                 }
             }
@@ -1039,9 +1039,9 @@ class AgentModeController(
         if (!process.init(context)) {
             _authorizationState.value = AgentModeAuthorizationState(
                 issue = AgentModeAuthorizationIssue.RootPermissionDenied,
-                detail = "Root Agent Mode service failed to start. Check that su can be granted to Aether.",
+                detail = "Root Agent Mode service failed to start. Check that su can be granted to Qing.",
             )
-            error("Root Agent Mode service failed to start. Check that su can be granted to Aether.")
+            error("Root Agent Mode service failed to start. Check that su can be granted to Qing.")
         }
         val binder = process.serviceBinder(
             ComponentName(context, AetherAgentModeShizukuService::class.java),
@@ -1070,7 +1070,7 @@ class AgentModeController(
             error("Shizuku is not running.")
         }
         if (Shizuku.checkSelfPermission() != PackageManager.PERMISSION_GRANTED) {
-            error("Aether does not have Shizuku permission. Grant it in Shizuku first.")
+            error("Qing does not have Shizuku permission. Grant it in Shizuku first.")
         }
         val deferred = CompletableDeferred<IAetherAgentModeService>()
         val args = Shizuku.UserServiceArgs(
@@ -1209,13 +1209,13 @@ class AgentModeController(
 
             probe.timedOut -> AgentModeAuthorizationState(
                 issue = AgentModeAuthorizationIssue.RootPermissionMissing,
-                detail = "Root authorization timed out. Grant su to Aether, then refresh Agent Mode status.",
+                detail = "Root authorization timed out. Grant su to Qing, then refresh Agent Mode status.",
             )
 
             else -> AgentModeAuthorizationState(
                 issue = AgentModeAuthorizationIssue.RootPermissionDenied,
                 detail = probe.combinedOutput().ifBlank {
-                    "Root authorization was not granted. Grant su to Aether, then refresh Agent Mode status."
+                    "Root authorization was not granted. Grant su to Qing, then refresh Agent Mode status."
                 }.take(280),
             )
         }
@@ -1244,7 +1244,7 @@ class AgentModeController(
             } else {
                 AgentModeAuthorizationState(
                     issue = AgentModeAuthorizationIssue.ShizukuPermissionMissing,
-                    detail = "Grant Aether permission in Shizuku before using Agent Mode.",
+                    detail = "Grant Qing permission in Shizuku before using Agent Mode.",
                 )
             }
         }.getOrElse { throwable ->

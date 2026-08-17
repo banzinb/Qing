@@ -3,6 +3,7 @@ package com.zhousl.aether.data
 import android.content.Context
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
@@ -13,6 +14,10 @@ private val Context.agentExtensionsDataStore by preferencesDataStore(name = "aet
 class AgentExtensionsRepository(
     private val context: Context,
 ) {
+    val seededBundledSkillIds: Flow<Set<String>> = context.agentExtensionsDataStore.data.map { preferences ->
+        preferences[SEEDED_BUNDLED_SKILL_IDS].orEmpty()
+    }
+
     val extensionState: Flow<AgentExtensionsState> = context.agentExtensionsDataStore.data.map { preferences ->
         AgentExtensionsState(
             installedSkills = parseInstalledSkills(preferences[INSTALLED_SKILLS_JSON].orEmpty()),
@@ -38,6 +43,12 @@ class AgentExtensionsRepository(
             .installedSkills
             .filterNot { it.id == skillId }
         updateInstalledSkills(updatedSkills)
+    }
+
+    suspend fun markBundledSkillSeeded(skillId: String) {
+        context.agentExtensionsDataStore.edit { preferences ->
+            preferences[SEEDED_BUNDLED_SKILL_IDS] = preferences[SEEDED_BUNDLED_SKILL_IDS].orEmpty() + skillId
+        }
     }
 
     suspend fun setSkillEnabled(
@@ -107,6 +118,7 @@ class AgentExtensionsRepository(
     private suspend fun <T> Flow<T>.firstValue(): T = first()
 
     private companion object {
+        val SEEDED_BUNDLED_SKILL_IDS = stringSetPreferencesKey("seeded_bundled_skill_ids")
         val INSTALLED_SKILLS_JSON = stringPreferencesKey("installed_skills_json")
         val MCP_SERVERS_JSON = stringPreferencesKey("mcp_servers_json")
     }

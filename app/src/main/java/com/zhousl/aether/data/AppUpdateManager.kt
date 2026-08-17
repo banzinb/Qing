@@ -37,7 +37,7 @@ class AppUpdateManager(
             .url(GithubLatestReleaseUrl)
             .header("Accept", "application/vnd.github+json")
             .header("X-GitHub-Api-Version", "2022-11-28")
-            .header("User-Agent", "Aether-Android")
+            .header("User-Agent", "Qing-Android")
             .build()
 
         client.newCall(request).execute().use { response ->
@@ -74,7 +74,7 @@ class AppUpdateManager(
                 tagName = tagName.ifBlank { versionName },
                 releaseUrl = releaseJson.optString("html_url").trim(),
                 apkFileName = apkAsset.optString("name").trim().ifBlank {
-                    "Aether-$versionName.apk"
+                    "Qing-$versionName.apk"
                 },
                 apkDownloadUrl = apkAsset.optString("browser_download_url").trim().ifBlank {
                     error("APK asset did not include a download URL.")
@@ -88,7 +88,7 @@ class AppUpdateManager(
             .url(GithubLatestNightlyRunUrl)
             .header("Accept", "application/vnd.github+json")
             .header("X-GitHub-Api-Version", "2022-11-28")
-            .header("User-Agent", "Aether-Android")
+            .header("User-Agent", "Qing-Android")
             .build()
 
         client.newCall(request).execute().use { response ->
@@ -109,7 +109,7 @@ class AppUpdateManager(
                 versionName = "Nightly $shortSha",
                 tagName = shortSha,
                 releaseUrl = run.optString("html_url").trim(),
-                apkFileName = "Aether-nightly-$shortSha.apk",
+                apkFileName = "Qing-nightly-$shortSha.apk",
                 apkDownloadUrl = NightlyArtifactDownloadUrl,
                 isZipArchive = true,
             )
@@ -123,7 +123,7 @@ class AppUpdateManager(
         val request = Request.Builder()
             .url(release.apkDownloadUrl)
             .header("Accept", if (release.isZipArchive) ZipMimeType else ApkMimeType)
-            .header("User-Agent", "Aether-Android")
+            .header("User-Agent", "Qing-Android")
             .build()
 
         val updatesDirectory = File(context.cacheDir, "updates").apply { mkdirs() }
@@ -234,7 +234,7 @@ private fun String.numericVersionParts(): List<Int> =
 
 private fun String.sanitizeFileName(): String =
     replace(Regex("[^A-Za-z0-9._-]+"), "_")
-        .ifBlank { "Aether-update.apk" }
+        .ifBlank { "Qing-update.apk" }
         .let { value ->
             if (value.lowercase(Locale.US).endsWith(".apk")) value else "$value.apk"
         }

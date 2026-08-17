@@ -15,6 +15,7 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -144,6 +145,7 @@ import com.zhousl.aether.data.AgentWorkspaceMode
 import com.zhousl.aether.data.AutomaticModelPurpose
 import com.zhousl.aether.data.ChatUsageStatisticsSnapshot
 import com.zhousl.aether.data.AppLanguage
+import com.zhousl.aether.data.AppAccent
 import com.zhousl.aether.data.AppThemeMode
 import com.zhousl.aether.data.SearchBackend
 import com.zhousl.aether.data.LlmProviderConfig
@@ -193,6 +195,10 @@ import com.zhousl.aether.ui.theme.AetherPrimary
 import com.zhousl.aether.ui.theme.AetherScrim
 import com.zhousl.aether.ui.theme.AetherSurface
 import com.zhousl.aether.ui.theme.AetherSurfaceHigh
+import com.zhousl.aether.ui.theme.QingAzureLight
+import com.zhousl.aether.ui.theme.QingTealLight
+import com.zhousl.aether.ui.theme.QingIndigoLight
+import com.zhousl.aether.ui.theme.QingGreenLight
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -365,6 +371,14 @@ private fun settingsThemeSubtitle(themeMode: AppThemeMode): String = when (theme
 }
 
 @Composable
+private fun settingsAccentPreviewColor(accent: AppAccent): Color = when (accent) {
+    AppAccent.Azure -> QingAzureLight.primary
+    AppAccent.Teal -> QingTealLight.primary
+    AppAccent.Indigo -> QingIndigoLight.primary
+    AppAccent.Green -> QingGreenLight.primary
+}
+
+@Composable
 private fun settingsGeneralSummary(language: AppLanguage, themeMode: AppThemeMode): String =
     stringResource(
         R.string.settings_general_summary,
@@ -425,6 +439,7 @@ fun SettingsScreen(
     rootSetupProgressReturnPage: RootSetupProgressReturnPage?,
     language: AppLanguage,
     themeMode: AppThemeMode,
+    accent: AppAccent,
     defaultChatModelKey: String,
     defaultTitleModelKey: String,
     defaultNamingModelKey: String,
@@ -474,6 +489,7 @@ fun SettingsScreen(
         AgentModeAuthorizationMethod,
         AppLanguage,
         AppThemeMode,
+        AppAccent,
         String,
         String,
         String,
@@ -481,6 +497,7 @@ fun SettingsScreen(
     ) -> Unit,
     onUpdateLanguage: (AppLanguage) -> Unit,
     onUpdateThemeMode: (AppThemeMode) -> Unit,
+    onUpdateAccent: (AppAccent) -> Unit,
     onUpsertProviderConfig: (LlmProviderConfig) -> Unit,
     onRemoveProviderConfig: (String) -> Unit,
     onSetProviderEnabled: (String, Boolean) -> Unit,
@@ -605,6 +622,9 @@ fun SettingsScreen(
     var themeModeValue by rememberSaveable {
         mutableStateOf(themeMode)
     }
+    var accentValue by rememberSaveable {
+        mutableStateOf(accent)
+    }
     LaunchedEffect(searchBackend) {
         searchBackendValue = searchBackend
     }
@@ -623,6 +643,9 @@ fun SettingsScreen(
     }
     LaunchedEffect(language) {
         languageValue = language
+    }
+    LaunchedEffect(accent) {
+        accentValue = accent
     }
     var defaultChatModelKeyValue by rememberSaveable { mutableStateOf(defaultChatModelKey) }
     var defaultTitleModelKeyValue by rememberSaveable { mutableStateOf(defaultTitleModelKey) }
@@ -672,6 +695,7 @@ fun SettingsScreen(
             agentModeAuthorizationMethodValue,
             languageValue,
             themeModeValue,
+            accentValue,
             defaultChatModelKeyValue,
             defaultTitleModelKeyValue,
             defaultNamingModelKeyValue,
@@ -704,6 +728,7 @@ fun SettingsScreen(
             agentModeAuthorizationMethodValue,
             languageValue,
             themeModeValue,
+            accentValue,
             defaultChatModelKeyValue,
             defaultTitleModelKeyValue,
             defaultNamingModelKeyValue,
@@ -736,6 +761,7 @@ fun SettingsScreen(
             agentModeAuthorizationMethodValue,
             languageValue,
             themeModeValue,
+            accentValue,
             defaultChatModelKeyValue,
             defaultTitleModelKeyValue,
             defaultNamingModelKeyValue,
@@ -890,6 +916,11 @@ fun SettingsScreen(
                 onThemeModeSelected = {
                     themeModeValue = it
                     onUpdateThemeMode(it)
+                },
+                selectedAccent = accentValue,
+                onAccentSelected = {
+                    accentValue = it
+                    onUpdateAccent(it)
                 },
                 onBack = { currentPage = SettingsPage.Hub.name },
             )
@@ -2209,6 +2240,8 @@ private fun GeneralSettingsPage(
     onLanguageSelected: (AppLanguage) -> Unit,
     selectedThemeMode: AppThemeMode,
     onThemeModeSelected: (AppThemeMode) -> Unit,
+    selectedAccent: AppAccent,
+    onAccentSelected: (AppAccent) -> Unit,
     onBack: () -> Unit,
 ) {
     SubPageScaffold(title = stringResource(R.string.settings_general), onBack = onBack) {
@@ -2280,6 +2313,8 @@ private fun GeneralSettingsPageV2(
     onLanguageSelected: (AppLanguage) -> Unit,
     selectedThemeMode: AppThemeMode,
     onThemeModeSelected: (AppThemeMode) -> Unit,
+    selectedAccent: AppAccent,
+    onAccentSelected: (AppAccent) -> Unit,
     onBack: () -> Unit,
 ) {
     SubPageScaffold(title = stringResource(R.string.settings_general), onBack = onBack) {
@@ -2317,6 +2352,57 @@ private fun GeneralSettingsPageV2(
                     )
                 },
             )
+        }
+
+        Spacer(Modifier.height(16.dp))
+
+        SettingsCardGroup {
+            Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp)) {
+                Text(
+                    text = stringResource(R.string.settings_accent),
+                    style = MaterialTheme.typography.titleMedium,
+                    color = AetherOnSurface,
+                )
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    text = stringResource(R.string.settings_accent_description),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = AetherOnSurfaceVariant,
+                )
+                Spacer(Modifier.height(14.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(18.dp)) {
+                    AppAccent.entries.forEach { option ->
+                        val selected = option == selectedAccent
+                        Box(
+                            modifier = Modifier
+                                .size(44.dp)
+                                .clip(CircleShape)
+                                .background(settingsAccentPreviewColor(option))
+                                .then(
+                                    if (selected) {
+                                        Modifier.border(3.dp, AetherOnSurface, CircleShape)
+                                    } else {
+                                        Modifier
+                                    }
+                                )
+                                .clickable {
+                                    if (!selected) {
+                                        onAccentSelected(option)
+                                    }
+                                },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            if (selected) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Check,
+                                    contentDescription = null,
+                                    tint = Color.White,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -3244,12 +3330,29 @@ private fun SkillCard(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = skill.name,
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = AetherOnSurface,
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = skill.name,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = AetherOnSurface,
+                    )
+                    if (skill.source.kind == com.zhousl.aether.data.SkillInstallKind.Bundled) {
+                        Spacer(Modifier.width(8.dp))
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(AetherOnSurfaceVariant.copy(alpha = 0.12f))
+                                .padding(horizontal = 6.dp, vertical = 2.dp),
+                        ) {
+                            Text(
+                                text = stringResource(R.string.settings_skill_preinstalled),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = AetherOnSurfaceVariant,
+                            )
+                        }
+                    }
+                }
                 if (skill.description.isNotBlank()) {
                     Spacer(Modifier.height(4.dp))
                     Text(
@@ -5920,7 +6023,7 @@ private fun AgentModeSettingsPage(
                                         text = listOf(
                                             display.name.ifBlank { stringResource(R.string.settings_unnamed_display) },
                                             "${display.width} x ${display.height}",
-                                            if (display.isAetherDisplay) "Aether" else "",
+                                            if (display.isAetherDisplay) "Qing" else "",
                                         ).filter { it.isNotBlank() }.joinToString(" · "),
                                         style = MaterialTheme.typography.bodySmall,
                                         color = AetherOnSurfaceVariant,
@@ -6657,7 +6760,7 @@ private fun AboutPage(
             )
             Spacer(Modifier.height(14.dp))
             Text(
-                text = "Aether",
+                text = "Qing",
                 style = MaterialTheme.typography.titleLarge,
                 color = AetherOnSurface,
             )

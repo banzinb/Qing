@@ -1,6 +1,7 @@
 package com.zhousl.aether.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -10,10 +11,12 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -31,6 +34,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
+import com.zhousl.aether.data.AppAccent
 import com.zhousl.aether.data.AppLanguage
 import com.zhousl.aether.data.AppSettings
 import com.zhousl.aether.data.AppThemeMode
@@ -40,6 +44,10 @@ import com.zhousl.aether.ui.theme.AetherBackground
 import com.zhousl.aether.ui.theme.AetherOnSurface
 import com.zhousl.aether.ui.theme.AetherOnSurfaceVariant
 import com.zhousl.aether.ui.theme.AetherPrimary
+import com.zhousl.aether.ui.theme.QingAzureLight
+import com.zhousl.aether.ui.theme.QingGreenLight
+import com.zhousl.aether.ui.theme.QingIndigoLight
+import com.zhousl.aether.ui.theme.QingTealLight
 import com.zhousl.aether.ui.theme.AetherSurface
 import org.jetbrains.compose.resources.stringResource
 
@@ -104,6 +112,56 @@ internal fun SharedGeneralSettingsDetail(
                     },
                 )
             }
+            SettingsCardGroup {
+                Column(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp),
+                ) {
+                    Text(
+                        stringResource(Res.string.settings_accent),
+                        style = MaterialTheme.typography.titleMedium,
+                        color = AetherOnSurface,
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        stringResource(Res.string.settings_accent_description),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = AetherOnSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(14.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(18.dp)) {
+                        AppAccent.entries.forEach { option ->
+                            val selected = option == settings.accent
+                            Box(
+                                modifier = Modifier
+                                    .size(44.dp)
+                                    .clip(CircleShape)
+                                    .background(sharedAccentPreviewColor(option))
+                                    .then(
+                                        if (selected) {
+                                            Modifier.border(3.dp, AetherOnSurface, CircleShape)
+                                        } else {
+                                            Modifier
+                                        }
+                                    )
+                                    .clickable {
+                                        if (!selected) {
+                                            onSave(settings.copy(accent = option))
+                                        }
+                                    },
+                                contentAlignment = androidx.compose.ui.Alignment.Center,
+                            ) {
+                                if (selected) {
+                                    Icon(
+                                        Icons.Rounded.Check,
+                                        contentDescription = null,
+                                        tint = androidx.compose.ui.graphics.Color.White,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             Spacer(Modifier.height(16.dp))
         }
         SettingsTopBar(title = stringResource(Res.string.settings_general), onBack = onBack)
@@ -121,6 +179,15 @@ private fun sharedThemeDisplayName(themeMode: AppThemeMode): String = when (them
     AppThemeMode.System -> stringResource(Res.string.theme_system)
     AppThemeMode.Light -> stringResource(Res.string.theme_light)
     AppThemeMode.Dark -> stringResource(Res.string.theme_dark)
+}
+
+
+@Composable
+private fun sharedAccentPreviewColor(accent: AppAccent): androidx.compose.ui.graphics.Color = when (accent) {
+    AppAccent.Azure -> QingAzureLight.primary
+    AppAccent.Teal -> QingTealLight.primary
+    AppAccent.Indigo -> QingIndigoLight.primary
+    AppAccent.Green -> QingGreenLight.primary
 }
 
 private data class SharedSelectionOption(

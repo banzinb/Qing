@@ -149,7 +149,7 @@ android {
             initWith(getByName("debug"))
             applicationIdSuffix = ".nightly"
             matchingFallbacks += listOf("debug")
-            resValue("string", "app_name", "Aether Nightly")
+            resValue("string", "app_name", "Qing Nightly")
             buildConfigField("String", "UPDATE_CHANNEL", "\"nightly\"")
             manifestPlaceholders["appIcon"] = "@mipmap/ic_launcher_nightly"
             manifestPlaceholders["appRoundIcon"] = "@mipmap/ic_launcher_nightly_round"

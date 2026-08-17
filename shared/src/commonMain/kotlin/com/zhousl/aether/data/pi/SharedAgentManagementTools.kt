@@ -1,5 +1,6 @@
 package com.zhousl.aether.data.pi
 
+import com.zhousl.aether.data.AppAccent
 import com.zhousl.aether.data.AppLanguage
 import com.zhousl.aether.data.AppSettings
 import com.zhousl.aether.data.AppThemeMode
@@ -37,7 +38,7 @@ private const val MaximumSkillResourceCharacters = 100_000
 private const val MaximumImageBytes = 5 * 1024 * 1024
 
 /**
- * Host tools that expose Aether-owned state to the Pi agent. The callbacks keep
+ * Host tools that expose Qing-owned state to the Pi agent. The callbacks keep
  * this executor independent from Compose state while preserving the Android
  * tool names and payload shapes.
  */
@@ -121,7 +122,7 @@ class SharedAgentManagementTools(
                 "aether_mcp_manage" -> manageMcp(arguments)
                 "aether_extension_manage" -> manageExtensions(arguments)
                 "aether_developer_manage" -> manageDeveloper(arguments)
-                else -> error("Unsupported Aether host tool: $name")
+                else -> error("Unsupported Qing host tool: $name")
             }
         } catch (cancellationException: CancellationException) {
             throw cancellationException
@@ -431,12 +432,13 @@ class SharedAgentManagementTools(
             setOf("general", "web_tools", "reliability", "agent_skills", "mcp_servers", "developer")
         }
         val current = settings()
-        return agentToolSuccess("Read ${categories.size} Aether configuration categories.") {
+        return agentToolSuccess("Read ${categories.size} Qing configuration categories.") {
             categories.forEach { category ->
                 when (category) {
                     "general" -> put("general", buildJsonObject {
                         put("language", current.language.storageValue)
                         put("theme_mode", current.themeMode.storageValue)
+                        put("accent", current.accent.storageValue)
                     })
                     "web_tools" -> put("web_tools", buildJsonObject {
                         put("tavily_configured", current.tavilyApiKey.isNotBlank())
@@ -471,6 +473,8 @@ class SharedAgentManagementTools(
                     ?.let { AppLanguage.fromStorage(it, current.language) } ?: current.language,
                 themeMode = patch.stringOrNull("theme_mode")
                     ?.let(AppThemeMode::fromStorage) ?: current.themeMode,
+                accent = patch.stringOrNull("accent")
+                    ?.let(AppAccent::fromStorage) ?: current.accent,
             )
             "web_tools" -> current.copy(
                 tavilyApiKey = patch.stringOrNull("tavily_api_key") ?: current.tavilyApiKey,
@@ -490,7 +494,7 @@ class SharedAgentManagementTools(
             else -> error("Unsupported settings category '$category'.")
         }
         updateSettings(updated)
-        return agentToolSuccess("Updated Aether $category settings.") {
+        return agentToolSuccess("Updated Qing $category settings.") {
             put("category", category)
         }
     }
@@ -625,7 +629,7 @@ class SharedAgentManagementTools(
             "Unsupported developer action."
         }
         val ping = bridge.ping()
-        return agentToolSuccess("Read Aether runtime diagnostics.") {
+        return agentToolSuccess("Read Qing runtime diagnostics.") {
             put("runtime", ping)
             put("runtime_home", runtime.homeDirectory)
             put("workspace", runtime.workspaceRoot)
@@ -694,13 +698,13 @@ private fun JsonArrayBuilder.addGenericMcpDefinitions() {
 private fun JsonArrayBuilder.addSelfManagementDefinitions() {
     add(agentToolDefinition(
         "aether_config_get",
-        "Read Aether configuration for general preferences, web tools, reliability, Skills, MCP servers, and developer diagnostics. LLM provider secrets are omitted.",
+        "Read Qing configuration for general preferences, web tools, reliability, Skills, MCP servers, and developer diagnostics. LLM provider secrets are omitted.",
         "parallel",
         properties = mapOf("categories" to agentStringArraySchema("Optional categories to read.")),
     ))
     add(agentToolDefinition(
         "aether_config_set",
-        "Modify allowed Aether general, web-tools, or reliability settings. Provider and model configuration cannot be changed.",
+        "Modify allowed Qing general, web-tools, or reliability settings. Provider and model configuration cannot be changed.",
         "sequential",
         listOf("category", "settings"),
         mapOf(
@@ -710,7 +714,7 @@ private fun JsonArrayBuilder.addSelfManagementDefinitions() {
     ))
     add(agentToolDefinition(
         "aether_skill_manage",
-        "List, remotely install, enable, disable, or remove Aether Agent Skills.",
+        "List, remotely install, enable, disable, or remove Qing Agent Skills.",
         "sequential",
         listOf("action"),
         mapOf(
@@ -722,7 +726,7 @@ private fun JsonArrayBuilder.addSelfManagementDefinitions() {
     ))
     add(agentToolDefinition(
         "aether_mcp_manage",
-        "List, add, update, enable, disable, or remove Aether MCP server configurations.",
+        "List, add, update, enable, disable, or remove Qing MCP server configurations.",
         "sequential",
         listOf("action"),
         mapOf(
@@ -745,7 +749,7 @@ private fun JsonArrayBuilder.addSelfManagementDefinitions() {
     ))
     add(agentToolDefinition(
         "aether_extension_manage",
-        "List or reload source-compatible Pi extensions for the current Aether session, or invoke a registered extension command.",
+        "List or reload source-compatible Pi extensions for the current Qing session, or invoke a registered extension command.",
         "sequential",
         listOf("action"),
         mapOf(
@@ -756,7 +760,7 @@ private fun JsonArrayBuilder.addSelfManagementDefinitions() {
     ))
     add(agentToolDefinition(
         "aether_developer_manage",
-        "Read non-sensitive Aether runtime diagnostics.",
+        "Read non-sensitive Qing runtime diagnostics.",
         "parallel",
         listOf("action"),
         mapOf(
@@ -831,7 +835,7 @@ private inline fun agentToolSuccess(
 private fun agentToolFailure(error: Throwable): SharedHostToolResult = SharedHostToolResult(
     buildJsonObject {
         put("ok", false)
-        put("errmsg", error.message ?: "Aether host tool failed.")
+        put("errmsg", error.message ?: "Qing host tool failed.")
     }.toString(),
     isError = true,
 )

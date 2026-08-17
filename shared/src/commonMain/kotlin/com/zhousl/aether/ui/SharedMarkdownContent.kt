@@ -540,7 +540,7 @@ private suspend fun fetchSharedMarkdownImage(
 ): SharedMarkdownImageBinary {
     val response = sharedMarkdownHttpClient.get(url) {
         header(HttpHeaders.Accept, "image/*,*/*;q=0.8")
-        header(HttpHeaders.UserAgent, "Aether/0.1")
+        header(HttpHeaders.UserAgent, "Qing/0.1")
     }
     if (!response.status.isSuccess()) {
         error(httpErrorWithZero.replace("0", response.status.value.toString()))

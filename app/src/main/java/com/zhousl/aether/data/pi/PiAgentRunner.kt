@@ -62,7 +62,7 @@ class PiAgentRunner(
         onSkillActivated: suspend (ActiveSkillContext) -> Unit = {},
         pollInjectedUserMessages: suspend () -> List<LlmMessage> = { emptyList() },
     ): Result<AetherAgentTurnResult> {
-        onStreamingStatus(StreamingStatus("Thinking", "Aether is working on this turn."))
+        onStreamingStatus(StreamingStatus("Thinking", "Qing is working on this turn."))
         return try {
             runCatchingPreservingCancellation {
                 val resolvedSessionId = sessionId.ifBlank {

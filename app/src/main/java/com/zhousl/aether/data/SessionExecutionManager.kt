@@ -1593,7 +1593,7 @@ class SessionExecutionManager(
                 runningVerb = "Reading",
                 completedVerb = "Read",
                 subject = formatAetherReasoningCategories(arguments),
-                fallback = "Aether settings",
+                fallback = "Qing settings",
             )
 
             "aether_config_set" -> formatReasoningToolAction(
@@ -1601,7 +1601,7 @@ class SessionExecutionManager(
                 runningVerb = "Updating",
                 completedVerb = "Updated",
                 subject = arguments?.optString("category").orEmpty(),
-                fallback = "Aether settings",
+                fallback = "Qing settings",
             )
 
             "aether_skill_manage" -> formatReasoningToolAction(
@@ -1639,7 +1639,7 @@ class SessionExecutionManager(
                 else -> if (invocation.isRunning) "Checking Agent Mode authorization" else "Checked Agent Mode authorization"
             }
 
-            "aether_developer_manage" -> if (invocation.isRunning) "Reading Aether diagnostics" else "Read Aether diagnostics"
+            "aether_developer_manage" -> if (invocation.isRunning) "Reading Qing diagnostics" else "Read Qing diagnostics"
             else -> if (invocation.isRunning) {
                 "Using ${invocation.toolName}"
             } else {

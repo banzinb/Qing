@@ -1044,7 +1044,7 @@ private fun AetherExtensionWebView(
                     AetherExtensionJavascriptBridge { action, args ->
                         controller.onAction(extensionId, action, args)
                     },
-                    "Aether",
+                    "Qing",
                 )
                 loadAetherExtensionWebContent(url, html)
             }

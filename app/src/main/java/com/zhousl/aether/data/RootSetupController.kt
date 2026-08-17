@@ -64,7 +64,7 @@ class RootSetupController(
         } else {
             RootSetupState(
                 issue = RootSetupIssue.Available,
-                detail = "Root appears to be available. Aether can request su to finish local setup automatically.",
+                detail = "Root appears to be available. Qing can request su to finish local setup automatically.",
                 rootAvailable = true,
                 suPath = suPath,
                 lastUpdatedMillis = System.currentTimeMillis(),
@@ -133,7 +133,7 @@ class RootSetupController(
             bashTool.setRootBackgroundLaunchEnabled(false)
             val detail = commandResult.combinedOutput().ifBlank {
                 if (commandResult.timedOut) {
-                    "Root request timed out. Grant su to Aether, then try again."
+                    "Root request timed out. Grant su to Qing, then try again."
                 } else {
                     commandResult.launchError.ifBlank { "Root setup command failed." }
                 }
@@ -227,7 +227,7 @@ class RootSetupController(
         )
         RootSetupState(
             issue = RootSetupIssue.Ready,
-            detail = "Root setup completed. Aether will keep Termux available in the background when needed.",
+            detail = "Root setup completed. Qing will keep Termux available in the background when needed.",
             rootAvailable = true,
             suPath = suPath,
             didLaunchTermuxForBackground = false,

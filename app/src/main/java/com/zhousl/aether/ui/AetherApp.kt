@@ -305,7 +305,7 @@ fun AetherApp(
         LocalContext provides localizedContext,
         LocalAetherExtensionUiController provides extensionController,
     ) {
-        AetherTheme(themeMode = uiState.settings.themeMode) {
+        AetherTheme(themeMode = uiState.settings.themeMode, accent = uiState.settings.accent) {
             Surface(
                 modifier = Modifier.fillMaxSize(),
                 color = MaterialTheme.colorScheme.background,
@@ -919,6 +919,7 @@ private fun AetherAppContent(
                     rootSetupProgressReturnPage = uiState.rootSetupProgressReturnPage,
                     language = uiState.settings.language,
                     themeMode = uiState.settings.themeMode,
+                    accent = uiState.settings.accent,
                     defaultChatModelKey = uiState.settings.defaultChatModelKey,
                     defaultTitleModelKey = uiState.settings.defaultTitleModelKey,
                     defaultNamingModelKey = uiState.settings.defaultNamingModelKey,
@@ -955,6 +956,7 @@ private fun AetherAppContent(
                         AetherLocaleManager.applyIfChanged(context, language)
                     },
                     onUpdateThemeMode = viewModel::updateAppThemeMode,
+                    onUpdateAccent = viewModel::updateAppAccent,
                     onUpsertProviderConfig = viewModel::upsertProviderConfig,
                     onRemoveProviderConfig = viewModel::removeProviderConfig,
                     onSetProviderEnabled = viewModel::setProviderEnabled,
@@ -1709,7 +1711,7 @@ private fun MessageBubble(message: ChatMessage) {
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Text(
-                text = "Aether",
+                text = "Qing",
                 style = MaterialTheme.typography.labelLarge,
                 color = AetherOnSurfaceVariant,
             )

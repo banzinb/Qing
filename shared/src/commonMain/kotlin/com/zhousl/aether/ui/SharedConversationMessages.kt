@@ -121,7 +121,6 @@ import com.zhousl.aether.runtime.MultiplatformLocalRuntime
 import com.zhousl.aether.shared.resources.*
 import com.zhousl.aether.ui.theme.AetherOnSurface
 import com.zhousl.aether.ui.theme.AetherOnSurfaceVariant
-import com.zhousl.aether.ui.theme.AetherOnPrimaryContainer
 import com.zhousl.aether.ui.theme.AetherMessageBubble
 import com.zhousl.aether.ui.theme.AetherOutlineSoft
 import com.zhousl.aether.ui.theme.AetherPrimary
@@ -578,7 +577,7 @@ internal fun SharedConversationMessage(
                                     .combinedClickable(onClick = {}, onLongClick = { menuOpen = true })
                                     .padding(horizontal = 18.dp, vertical = 14.dp),
                                 style = MaterialTheme.typography.bodyLarge,
-                                color = AetherOnPrimaryContainer,
+                                color = AetherOnSurface,
                             )
                         }
                         if (message.branchCount > 1) {

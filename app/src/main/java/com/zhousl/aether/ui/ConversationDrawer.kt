@@ -386,7 +386,7 @@ private fun LegacyConversationDrawer(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Text(
-                            text = "Aether",
+                            text = "Qing",
                             style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.SemiBold),
                             color = AetherOnSurface,
                         )

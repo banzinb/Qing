@@ -92,6 +92,7 @@ class SettingsRepository(
             ),
             language = AppLanguage.fromStorage(preferences[LANGUAGE]),
             themeMode = AppThemeMode.fromStorage(preferences[THEME_MODE]),
+            accent = AppAccent.fromStorage(preferences[ACCENT]),
             defaultChatModelKey = preferences[DEFAULT_CHAT_MODEL_KEY].orEmpty(),
             defaultTitleModelKey = preferences[DEFAULT_TITLE_MODEL_KEY].orEmpty(),
             defaultNamingModelKey = preferences[DEFAULT_NAMING_MODEL_KEY].orEmpty(),
@@ -359,6 +360,7 @@ class SettingsRepository(
             it[AGENT_MODE_AUTHORIZATION_METHOD] = settings.agentModeAuthorizationMethod.storageValue
             it[LANGUAGE] = settings.language.storageValue
             it[THEME_MODE] = settings.themeMode.storageValue
+            it[ACCENT] = settings.accent.storageValue
             it[DEFAULT_CHAT_MODEL_KEY] = settings.defaultChatModelKey
             it[DEFAULT_TITLE_MODEL_KEY] = settings.defaultTitleModelKey
             it[DEFAULT_NAMING_MODEL_KEY] = settings.defaultNamingModelKey
@@ -407,6 +409,10 @@ class SettingsRepository(
         context.dataStore.edit { it[THEME_MODE] = themeMode.storageValue }
     }
 
+    suspend fun updateAccent(accent: AppAccent) {
+        context.dataStore.edit { it[ACCENT] = accent.storageValue }
+    }
+
     suspend fun updateSettings(settings: AppSettings) {
         context.dataStore.edit {
             it[PI_PROVIDER_ID] = settings.piProviderId
@@ -452,6 +458,7 @@ class SettingsRepository(
             it[AGENT_MODE_AUTHORIZATION_METHOD] = settings.agentModeAuthorizationMethod.storageValue
             it[LANGUAGE] = settings.language.storageValue
             it[THEME_MODE] = settings.themeMode.storageValue
+            it[ACCENT] = settings.accent.storageValue
             it[DEFAULT_CHAT_MODEL_KEY] = settings.defaultChatModelKey
             it[DEFAULT_TITLE_MODEL_KEY] = settings.defaultTitleModelKey
             it[DEFAULT_NAMING_MODEL_KEY] = settings.defaultNamingModelKey
@@ -554,6 +561,7 @@ class SettingsRepository(
             stringPreferencesKey("agent_mode_authorization_method")
         val LANGUAGE = stringPreferencesKey("language")
         val THEME_MODE = stringPreferencesKey("theme_mode")
+        val ACCENT = stringPreferencesKey("accent")
         val DEFAULT_CHAT_MODEL_KEY = stringPreferencesKey("default_chat_model_key")
         val DEFAULT_TITLE_MODEL_KEY = stringPreferencesKey("default_title_model_key")
         val DEFAULT_NAMING_MODEL_KEY = stringPreferencesKey("default_naming_model_key")

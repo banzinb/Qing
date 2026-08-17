@@ -314,6 +314,7 @@ private fun AppSettings.toAndroidAppSettingsJson(): JsonObject = buildJsonObject
     put("agentModeAuthorizationMethod", agentModeAuthorizationMethod.storageValue)
     put("language", language.storageValue)
     put("themeMode", themeMode.storageValue)
+    put("accent", accent.storageValue)
     put("defaultChatModelKey", defaultChatModelKey)
     put("defaultTitleModelKey", defaultTitleModelKey)
     put("defaultNamingModelKey", defaultNamingModelKey)
@@ -425,6 +426,7 @@ private fun parseAndroidAppSettings(value: JsonObject): AppSettings {
         ),
         language = AppLanguage.fromStorage(value.stringValue("language"), defaults.language),
         themeMode = AppThemeMode.fromStorage(value.stringValue("themeMode")),
+        accent = AppAccent.fromStorage(value.stringValue("accent")),
         defaultChatModelKey = value.stringValueOrDefault(
             "defaultChatModelKey",
             defaults.defaultChatModelKey,

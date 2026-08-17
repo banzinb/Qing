@@ -155,7 +155,7 @@ class SharedPiChatClient(
         onStreamingStatus(
             SharedPiStreamingStatus(
                 text = "Thinking",
-                detail = "Aether is working on this turn.",
+                detail = "Qing is working on this turn.",
             )
         )
         val eventHandler: suspend (String, JsonObject) -> Unit = { event, eventPayload ->
