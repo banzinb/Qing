@@ -40,7 +40,7 @@ import com.zhousl.aether.data.AppSettings
 import com.zhousl.aether.data.AppThemeMode
 import com.zhousl.aether.shared.resources.Res
 import com.zhousl.aether.shared.resources.*
-import com.zhousl.aether.ui.theme.AetherBackground
+import com.zhousl.aether.ui.theme.AetherSettingsBackground
 import com.zhousl.aether.ui.theme.AetherOnSurface
 import com.zhousl.aether.ui.theme.AetherOnSurfaceVariant
 import com.zhousl.aether.ui.theme.AetherPrimary
@@ -57,7 +57,7 @@ internal fun SharedGeneralSettingsDetail(
     onSave: (AppSettings) -> Unit,
     onBack: () -> Unit,
 ) {
-    Box(modifier = Modifier.fillMaxSize().background(AetherBackground)) {
+    Box(modifier = Modifier.fillMaxSize().background(AetherSettingsBackground)) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -78,6 +78,8 @@ internal fun SharedGeneralSettingsDetail(
                                 AppLanguage.English -> stringResource(Res.string.settings_language_english_interface)
                                 AppLanguage.SimplifiedChinese ->
                                     stringResource(Res.string.settings_language_simplified_chinese_interface)
+                                AppLanguage.Persian ->
+                                    stringResource(Res.string.settings_language_persian_interface)
                             },
                             selected = option == settings.language,
                             onClick = {
@@ -172,6 +174,7 @@ internal fun SharedGeneralSettingsDetail(
 private fun sharedLanguageDisplayName(language: AppLanguage): String = when (language) {
     AppLanguage.English -> stringResource(Res.string.language_english)
     AppLanguage.SimplifiedChinese -> stringResource(Res.string.language_simplified_chinese)
+    AppLanguage.Persian -> stringResource(Res.string.language_persian)
 }
 
 @Composable
@@ -181,16 +184,7 @@ private fun sharedThemeDisplayName(themeMode: AppThemeMode): String = when (them
     AppThemeMode.Dark -> stringResource(Res.string.theme_dark)
 }
 
-
-@Composable
-private fun sharedAccentPreviewColor(accent: AppAccent): androidx.compose.ui.graphics.Color = when (accent) {
-    AppAccent.Azure -> QingAzureLight.primary
-    AppAccent.Teal -> QingTealLight.primary
-    AppAccent.Indigo -> QingIndigoLight.primary
-    AppAccent.Green -> QingGreenLight.primary
-}
-
-private data class SharedSelectionOption(
+internal data class SharedSelectionOption(
     val title: String,
     val subtitle: String,
     val selected: Boolean,
@@ -198,7 +192,7 @@ private data class SharedSelectionOption(
 )
 
 @Composable
-private fun SharedSelectionDropdownField(
+internal fun SharedSelectionDropdownField(
     label: String,
     supportingText: String,
     selectedLabel: String,
@@ -209,18 +203,20 @@ private fun SharedSelectionDropdownField(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp),
     ) {
         Text(label, style = MaterialTheme.typography.titleMedium, color = AetherOnSurface)
-        Spacer(Modifier.height(6.dp))
-        Text(
-            supportingText,
-            style = MaterialTheme.typography.bodySmall,
-            color = AetherOnSurfaceVariant,
-        )
+        if (supportingText.isNotBlank()) {
+            Spacer(Modifier.height(6.dp))
+            Text(
+                supportingText,
+                style = MaterialTheme.typography.bodySmall,
+                color = AetherOnSurfaceVariant,
+            )
+        }
         Spacer(Modifier.height(14.dp))
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(16.dp))
-                .background(AetherBackground)
+                .background(AetherSettingsBackground)
                 .clickable { expanded = true }
                 .padding(horizontal = 14.dp, vertical = 12.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -253,11 +249,13 @@ private fun SharedSelectionDropdownField(
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text(option.title, color = AetherOnSurface)
-                        Text(
-                            option.subtitle,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = AetherOnSurfaceVariant,
-                        )
+                        if (option.subtitle.isNotBlank()) {
+                            Text(
+                                option.subtitle,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = AetherOnSurfaceVariant,
+                            )
+                        }
                     }
                     if (option.selected) {
                         Spacer(Modifier.width(12.dp))

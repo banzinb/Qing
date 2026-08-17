@@ -19,6 +19,33 @@ private val Context.dataStore by preferencesDataStore(name = "aether_settings")
 class SettingsRepository(
     private val context: Context,
 ) {
+    suspend fun loadModelCatalogCache(): Map<String, ModelCatalogInfo> = context.dataStore.data.first()
+        .let { preferences -> parseModelCatalogCache(preferences[MODEL_CATALOG_CACHE_JSON].orEmpty()) }
+
+    suspend fun saveModelCatalogCache(cache: Map<String, ModelCatalogInfo>) {
+        context.dataStore.edit { preferences ->
+            val merged = parseModelCatalogCache(preferences[MODEL_CATALOG_CACHE_JSON].orEmpty()) + cache
+            preferences[MODEL_CATALOG_CACHE_JSON] = serializeModelCatalogCache(merged)
+        }
+    }
+
+    suspend fun loadThinkingCatalogCache(): Map<String, List<String>> = context.dataStore.data.first()
+        .let { preferences -> parseThinkingCatalogCache(preferences[THINKING_CATALOG_CACHE_JSON].orEmpty()) }
+
+    suspend fun saveThinkingCatalogCache(cache: Map<String, List<String>>) {
+        if (cache.isEmpty()) return
+        context.dataStore.edit { preferences ->
+            val merged = parseThinkingCatalogCache(preferences[THINKING_CATALOG_CACHE_JSON].orEmpty()) + cache
+            preferences[THINKING_CATALOG_CACHE_JSON] = serializeThinkingCatalogCache(merged)
+        }
+    }
+    suspend fun initializeLanguageIfNeeded() {
+        val preferences = context.dataStore.data.first()
+        if (preferences[LANGUAGE] == null) {
+            context.dataStore.edit { it[LANGUAGE] = defaultAppLanguage().storageValue }
+        }
+    }
+
     val settings: Flow<AppSettings> = context.dataStore.data.map { preferences ->
         val defaults = AppSettings()
         val storedWorkspaceMode = AgentWorkspaceMode.fromStorage(preferences[AGENT_WORKSPACE_MODE])
@@ -40,8 +67,6 @@ class SettingsRepository(
             userAgent = normalizeLlmUserAgent(preferences[USER_AGENT]),
             reasoningEffort = normalizeReasoningEffort(preferences[REASONING_EFFORT]),
             systemPrompt = preferences[SYSTEM_PROMPT] ?: defaults.systemPrompt,
-            tavilyApiKey = preferences[TAVILY_API_KEY].orEmpty(),
-            tavilyBaseUrl = normalizeTavilyBaseUrl(preferences[TAVILY_BASE_URL] ?: defaults.tavilyBaseUrl),
             llmInactivityReconnectTimeoutSeconds = normalizeLlmInactivityReconnectTimeoutSeconds(
                 preferences[LLM_INACTIVITY_RECONNECT_TIMEOUT_SECONDS]
             ),
@@ -59,7 +84,6 @@ class SettingsRepository(
             ),
             termuxSetupCompleted = preferences[TERMUX_SETUP_COMPLETED] ?: false,
             termuxSetupNoticeDismissed = preferences[TERMUX_SETUP_NOTICE_DISMISSED] ?: false,
-            termuxLiveOutputEnabled = preferences[TERMUX_LIVE_OUTPUT_ENABLED] ?: true,
             termuxEnvironmentVariables = parseTermuxEnvironmentVariables(
                 preferences[TERMUX_ENVIRONMENT_VARIABLES].orEmpty()
             ),
@@ -330,8 +354,6 @@ class SettingsRepository(
             it[USER_AGENT] = normalizeLlmUserAgent(settings.userAgent)
             it[REASONING_EFFORT] = normalizeReasoningEffort(settings.reasoningEffort)
             it[SYSTEM_PROMPT] = settings.systemPrompt
-            it[TAVILY_API_KEY] = settings.tavilyApiKey
-            it[TAVILY_BASE_URL] = normalizeTavilyBaseUrl(settings.tavilyBaseUrl)
             it[LLM_INACTIVITY_RECONNECT_TIMEOUT_SECONDS] =
                 normalizeLlmInactivityReconnectTimeoutSeconds(
                     settings.llmInactivityReconnectTimeoutSeconds
@@ -345,7 +367,6 @@ class SettingsRepository(
                 normalizeOldCommandHistoryRetentionHours(settings.oldCommandHistoryRetentionHours)
             it[TERMUX_SETUP_COMPLETED] = settings.termuxSetupCompleted
             it[TERMUX_SETUP_NOTICE_DISMISSED] = settings.termuxSetupNoticeDismissed
-            it[TERMUX_LIVE_OUTPUT_ENABLED] = settings.termuxLiveOutputEnabled
             it[TERMUX_ENVIRONMENT_VARIABLES] =
                 serializeTermuxEnvironmentVariables(settings.termuxEnvironmentVariables)
             it[ENABLED_RUNTIME_IDS] = serializeRuntimeIds(settings.enabledRuntimeIds)
@@ -371,7 +392,8 @@ class SettingsRepository(
             it.remove(UNSUPPORTED_PARALLEL_TOOL_CALL_PROVIDER_KEYS)
             it[ONBOARDING_SEEN_VERSION] = settings.onboardingSeenVersion
             it[ONBOARDING_COMPLETED_VERSION] = settings.onboardingCompletedVersion
-            it[PRIVACY_POLICY_ACCEPTED] = settings.privacyPolicyAccepted
+            it[PRIVACY_POLICY_ACCEPTED] =
+                (it[PRIVACY_POLICY_ACCEPTED] ?: false) || settings.privacyPolicyAccepted
             it[LAST_UPDATE_CHECK_AT_MILLIS] = settings.lastUpdateCheckAtMillis
             it[PROVIDER_CONFIGS] = serializeProviderConfigs(providerConfigs)
         }
@@ -391,14 +413,6 @@ class SettingsRepository(
 
     suspend fun updateSystemPrompt(value: String) {
         context.dataStore.edit { it[SYSTEM_PROMPT] = value }
-    }
-
-    suspend fun updateTavilyApiKey(value: String) {
-        context.dataStore.edit { it[TAVILY_API_KEY] = value }
-    }
-
-    suspend fun updateTavilyBaseUrl(value: String) {
-        context.dataStore.edit { it[TAVILY_BASE_URL] = normalizeTavilyBaseUrl(value) }
     }
 
     suspend fun updateLanguage(language: AppLanguage) {
@@ -428,8 +442,6 @@ class SettingsRepository(
             it[USER_AGENT] = normalizeLlmUserAgent(settings.userAgent)
             it[REASONING_EFFORT] = normalizeReasoningEffort(settings.reasoningEffort)
             it[SYSTEM_PROMPT] = settings.systemPrompt
-            it[TAVILY_API_KEY] = settings.tavilyApiKey
-            it[TAVILY_BASE_URL] = normalizeTavilyBaseUrl(settings.tavilyBaseUrl)
             it[LLM_INACTIVITY_RECONNECT_TIMEOUT_SECONDS] =
                 normalizeLlmInactivityReconnectTimeoutSeconds(
                     settings.llmInactivityReconnectTimeoutSeconds
@@ -443,7 +455,6 @@ class SettingsRepository(
                 normalizeOldCommandHistoryRetentionHours(settings.oldCommandHistoryRetentionHours)
             it[TERMUX_SETUP_COMPLETED] = settings.termuxSetupCompleted
             it[TERMUX_SETUP_NOTICE_DISMISSED] = settings.termuxSetupNoticeDismissed
-            it[TERMUX_LIVE_OUTPUT_ENABLED] = settings.termuxLiveOutputEnabled
             it[TERMUX_ENVIRONMENT_VARIABLES] =
                 serializeTermuxEnvironmentVariables(settings.termuxEnvironmentVariables)
             it[ENABLED_RUNTIME_IDS] = serializeRuntimeIds(settings.enabledRuntimeIds)
@@ -467,7 +478,8 @@ class SettingsRepository(
             it.remove(PROVIDER)
             it.remove(BASIC_FUNCTION_CALLING_COMPATIBILITY_MODE)
             it.remove(UNSUPPORTED_PARALLEL_TOOL_CALL_PROVIDER_KEYS)
-            it[PRIVACY_POLICY_ACCEPTED] = settings.privacyPolicyAccepted
+            it[PRIVACY_POLICY_ACCEPTED] =
+                (it[PRIVACY_POLICY_ACCEPTED] ?: false) || settings.privacyPolicyAccepted
             it[LAST_UPDATE_CHECK_AT_MILLIS] = settings.lastUpdateCheckAtMillis
             it[PC_BRIDGE_URL] = normalizePcBridgeUrl(settings.pcBridgeUrl)
             it[PC_BRIDGE_TOKEN] = settings.pcBridgeToken
@@ -522,8 +534,6 @@ class SettingsRepository(
         val USER_AGENT = stringPreferencesKey("user_agent")
         val REASONING_EFFORT = stringPreferencesKey("reasoning_effort")
         val SYSTEM_PROMPT = stringPreferencesKey("system_prompt")
-        val TAVILY_API_KEY = stringPreferencesKey("tavily_api_key")
-        val TAVILY_BASE_URL = stringPreferencesKey("tavily_base_url")
         val LLM_INACTIVITY_RECONNECT_TIMEOUT_SECONDS =
             intPreferencesKey("llm_inactivity_reconnect_timeout_seconds")
         val KEEP_TASKS_RUNNING_IN_BACKGROUND =
@@ -541,8 +551,6 @@ class SettingsRepository(
             booleanPreferencesKey("termux_setup_completed")
         val TERMUX_SETUP_NOTICE_DISMISSED =
             booleanPreferencesKey("termux_setup_notice_dismissed")
-        val TERMUX_LIVE_OUTPUT_ENABLED =
-            booleanPreferencesKey("termux_live_output_enabled")
         val TERMUX_ENVIRONMENT_VARIABLES =
             stringPreferencesKey("termux_environment_variables")
         val ENABLED_RUNTIME_IDS =
@@ -566,6 +574,8 @@ class SettingsRepository(
         val DEFAULT_TITLE_MODEL_KEY = stringPreferencesKey("default_title_model_key")
         val DEFAULT_NAMING_MODEL_KEY = stringPreferencesKey("default_naming_model_key")
         val DEFAULT_COMPACTING_MODEL_KEY = stringPreferencesKey("default_compacting_model_key")
+        val MODEL_CATALOG_CACHE_JSON = stringPreferencesKey("model_catalog_cache_json")
+        val THINKING_CATALOG_CACHE_JSON = stringPreferencesKey("thinking_catalog_cache_json")
         val DEFAULT_SELECTED_SKILL_IDS = stringPreferencesKey("default_selected_skill_ids")
         val UNSUPPORTED_PARALLEL_TOOL_CALL_PROVIDER_KEYS =
             stringPreferencesKey("unsupported_parallel_tool_call_provider_keys")
@@ -850,3 +860,65 @@ private fun isAnyPackageInstalled(
         }.isSuccess
     }
 }
+
+private fun serializeModelCatalogCache(cache: Map<String, ModelCatalogInfo>): String = JSONArray().apply {
+    cache.forEach { (key, info) ->
+        put(JSONObject().apply {
+            put("key", key)
+            put("displayName", info.displayName)
+            put("labId", info.labId)
+            put("labName", info.labName)
+            put("labLogoUrl", info.labLogoUrl)
+            put("labLogoPathData", JSONArray(info.labLogoPathData))
+            put("labLogoViewportWidth", info.labLogoViewportWidth)
+            put("labLogoViewportHeight", info.labLogoViewportHeight)
+        })
+    }
+}.toString()
+
+private fun parseModelCatalogCache(raw: String): Map<String, ModelCatalogInfo> = runCatching {
+    val array = JSONArray(raw)
+    buildMap {
+        for (index in 0 until array.length()) {
+            val item = array.optJSONObject(index) ?: continue
+            val key = item.optString("key").takeIf(String::isNotBlank) ?: continue
+            val paths = item.optJSONArray("labLogoPathData")?.let { values ->
+                buildList { for (i in 0 until values.length()) add(values.optString(i)) }
+            }.orEmpty()
+            put(key, ModelCatalogInfo(
+                displayName = item.optString("displayName"), labId = item.optString("labId"),
+                labName = item.optString("labName"), labLogoUrl = item.optString("labLogoUrl"),
+                labLogoPathData = paths,
+                labLogoViewportWidth = item.optDouble("labLogoViewportWidth", 40.0).toFloat(),
+                labLogoViewportHeight = item.optDouble("labLogoViewportHeight", 40.0).toFloat(),
+            ))
+        }
+    }
+}.getOrDefault(emptyMap())
+
+private fun serializeThinkingCatalogCache(cache: Map<String, List<String>>): String = JSONArray().apply {
+    cache.forEach { (key, levels) ->
+        put(JSONObject().apply {
+            put("key", key)
+            put("levels", JSONArray(levels))
+        })
+    }
+}.toString()
+
+private fun parseThinkingCatalogCache(raw: String): Map<String, List<String>> = runCatching {
+    val array = JSONArray(raw)
+    buildMap {
+        for (index in 0 until array.length()) {
+            val item = array.optJSONObject(index) ?: continue
+            val key = item.optString("key").takeIf(String::isNotBlank) ?: continue
+            val levels = item.optJSONArray("levels")?.let { values ->
+                buildList {
+                    for (i in 0 until values.length()) {
+                        values.optString(i).trim().takeIf(String::isNotBlank)?.let(::add)
+                    }
+                }
+            }.orEmpty()
+            put(key, levels)
+        }
+    }
+}.getOrDefault(emptyMap())

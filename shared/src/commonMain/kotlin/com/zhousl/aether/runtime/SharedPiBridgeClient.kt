@@ -153,8 +153,96 @@ class SharedPiBridgeClient(
         abortOnCancellation = false,
     )
 
+    suspend fun compactSession(
+        sessionId: String,
+        customInstructions: String = "",
+    ): JsonObject = request(
+        type = "compact_session",
+        payload = buildJsonObject {
+            put("session_id", sessionId)
+            if (customInstructions.isNotBlank()) put("custom_instructions", customInstructions)
+        },
+        timeoutMillis = 10 * 60_000L,
+        abortOnCancellation = false,
+    )
+
+    suspend fun navigateSession(
+        sessionId: String,
+        entryId: String,
+        reset: Boolean = false,
+        summarize: Boolean = false,
+        customInstructions: String = "",
+        modelConfig: JsonObject? = null,
+        workspaceDirectory: String = "",
+        systemPrompt: String = "",
+        skillPaths: List<String> = emptyList(),
+        runtime: String = "alpine",
+        platform: String = "ios",
+        workspaceTrusted: Boolean = true,
+    ): JsonObject = request(
+        type = "navigate_session",
+        payload = buildJsonObject {
+            put("session_id", sessionId)
+            put("entry_id", entryId)
+            put("reset", reset)
+            put("summarize", summarize)
+            if (customInstructions.isNotBlank()) put("custom_instructions", customInstructions)
+            modelConfig?.let { put("model_config", it) }
+            workspaceDirectory.trim().takeIf(String::isNotBlank)?.let { put("workspace_directory", it) }
+            systemPrompt.trim().takeIf(String::isNotBlank)?.let { put("system_prompt", it) }
+            if (skillPaths.isNotEmpty()) {
+                put("skill_paths", buildJsonArray {
+                    skillPaths.distinct().forEach { add(JsonPrimitive(it)) }
+                })
+            }
+            put("runtime", runtime)
+            put("platform", platform)
+            put("workspace_trusted", workspaceTrusted)
+        },
+        timeoutMillis = 10 * 60_000L,
+        abortOnCancellation = true,
+    )
+
+    suspend fun reloadSession(sessionId: String): JsonObject = request(
+        type = "reload_session",
+        payload = buildJsonObject { put("session_id", sessionId) },
+        timeoutMillis = 10 * 60_000L,
+        abortOnCancellation = false,
+    )
+
+    suspend fun exportSessionJsonl(sessionId: String): JsonObject = request(
+        type = "export_session_jsonl",
+        payload = buildJsonObject { put("session_id", sessionId) },
+        timeoutMillis = 60_000L,
+        abortOnCancellation = false,
+    )
+
+    suspend fun importSessionJsonl(sessionId: String, jsonl: String): JsonObject = request(
+        type = "import_session_jsonl",
+        payload = buildJsonObject {
+            put("session_id", sessionId)
+            put("jsonl", jsonl)
+        },
+        timeoutMillis = 60_000L,
+        abortOnCancellation = false,
+    )
+
     suspend fun listExtensionPackages(): JsonObject =
         request("list_extension_packages", timeoutMillis = 30_000, abortOnCancellation = false)
+
+    suspend fun listDiscoveredSkills(
+        workspaceDirectory: String,
+        skillPaths: List<String> = emptyList(),
+    ): JsonObject = request(
+        type = "list_discovered_skills",
+        payload = buildJsonObject {
+            put("workspace_directory", workspaceDirectory)
+            put("workspace_trusted", true)
+            put("skill_paths", kotlinx.serialization.json.JsonArray(skillPaths.map(::JsonPrimitive)))
+        },
+        timeoutMillis = 30_000,
+        abortOnCancellation = false,
+    )
 
     suspend fun installExtensionPackage(source: String): JsonObject =
         request(
@@ -246,6 +334,17 @@ class SharedPiBridgeClient(
         onEvent = onEvent,
         abortOnCancellation = false,
     )
+
+    suspend fun subscribeAetherExtensions(
+        onEvent: suspend (String, JsonObject) -> Unit,
+    ) {
+        request(
+            type = "subscribe_aether_extensions",
+            timeoutMillis = null,
+            onEvent = onEvent,
+            abortOnCancellation = false,
+        )
+    }
 
     suspend fun sendAetherHostResult(
         callId: String,

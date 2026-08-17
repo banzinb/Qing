@@ -4,8 +4,6 @@ import android.content.Context
 import android.content.res.AssetManager
 import android.net.Uri
 import android.util.Base64
-import com.zhousl.aether.ui.ChatMessage
-import com.zhousl.aether.ui.MessageAuthor
 import java.io.File
 import java.io.FileOutputStream
 import java.io.FilterInputStream
@@ -34,15 +32,21 @@ private const val MaxSkillArchiveBytes = 32L * 1024L * 1024L
 private const val MaxSkillExtractedBytes = 128L * 1024L * 1024L
 private const val MaxSkillEntryBytes = 16L * 1024L * 1024L
 private const val MaxSkillZipEntries = 4096
-private const val DefaultImplicitSkillMatchLimit = 2
-private const val ImplicitSkillMatchMinScore = 5
-private const val BundledSkillsAssetRoot = "skills"
+private const val DiscoveredSkillPreferencesName = "aether_discovered_skills"
+private const val IgnoredDiscoveredSkillSourcesKey = "ignored_sources"
 
 data class PiPackageSkillSource(
     val packageSource: String,
     val packageName: String,
     val guestPath: String,
     val hostPath: File,
+)
+
+data class PiDiscoveredSkillSource(
+    val guestFilePath: String,
+    val guestBaseDir: String,
+    val hostFile: File,
+    val hostRoot: File,
 )
 
 class AgentSkillManager(
@@ -137,8 +141,82 @@ class AgentSkillManager(
                 .installedSkills
                 .firstOrNull { it.id == skillId }
                 ?: return@runCatching
+            if (skill.source.kind == SkillInstallKind.PiDiscovered) {
+                ignoredDiscoveredSkillSources().edit()
+                    .putStringSet(
+                        IgnoredDiscoveredSkillSourcesKey,
+                        ignoredDiscoveredSkillSources().getStringSet(
+                            IgnoredDiscoveredSkillSourcesKey,
+                            emptySet(),
+                        ).orEmpty() + skill.source.uri,
+                    )
+                    .apply()
+            }
             validatedInstalledSkillRoot(skill)?.deleteRecursively()
             extensionsRepository.removeInstalledSkill(skillId)
+        }
+    }
+
+    suspend fun syncPiDiscoveredSkills(
+        discoveredSkills: List<PiDiscoveredSkillSource>,
+    ): Result<Unit> = withContext(Dispatchers.IO) {
+        runCatching {
+            val ignored = ignoredDiscoveredSkillSources()
+                .getStringSet(IgnoredDiscoveredSkillSourcesKey, emptySet())
+                .orEmpty()
+            val desired = discoveredSkills
+                .filter { it.guestFilePath !in ignored }
+                .distinctBy(PiDiscoveredSkillSource::guestFilePath)
+            val desiredPaths = desired.map(PiDiscoveredSkillSource::guestFilePath).toSet()
+            val initialSkills = extensionsRepository.extensionState.firstValue().installedSkills
+            desired.forEach { discovered ->
+                runCatching {
+                    val id = piDiscoveredSkillId(discovered.guestFilePath)
+                    val existing = initialSkills.firstOrNull { it.id == id }
+                    val sourceRoot = if (
+                        discovered.hostFile.name.equals(SkillFileName, ignoreCase = true) &&
+                        discovered.hostRoot.isDirectory &&
+                        File(discovered.hostRoot, SkillFileName).isFile
+                    ) {
+                        discovered.hostRoot
+                    } else {
+                        createTempDirectory().also { staging ->
+                            discovered.hostFile.copyTo(File(staging, SkillFileName), overwrite = true)
+                        }
+                    }
+                    try {
+                        val checksum = sha256OfDirectory(sourceRoot)
+                        if (
+                            existing?.checksumSha256 == checksum &&
+                            validatedInstalledSkillRoot(existing) != null
+                        ) return@runCatching
+                        installParsedSkill(
+                            sourceRoot = sourceRoot,
+                            source = SkillInstallSource(
+                                kind = SkillInstallKind.PiDiscovered,
+                                label = discovered.guestFilePath,
+                                uri = discovered.guestFilePath,
+                                subpath = discovered.guestBaseDir,
+                            ),
+                            skillIdOverride = id,
+                            installedAtMillis = existing?.installedAtMillis,
+                            isEnabled = existing?.isEnabled ?: true,
+                        )
+                    } finally {
+                        if (sourceRoot != discovered.hostRoot) sourceRoot.deleteRecursively()
+                    }
+                }
+            }
+            val refreshed = extensionsRepository.extensionState.firstValue().installedSkills
+            val stale = refreshed.filter {
+                it.source.kind == SkillInstallKind.PiDiscovered && it.source.uri !in desiredPaths
+            }
+            stale.forEach { validatedInstalledSkillRoot(it)?.deleteRecursively() }
+            if (stale.isNotEmpty()) {
+                extensionsRepository.updateInstalledSkills(
+                    refreshed.filterNot { skill -> stale.any { it.id == skill.id } },
+                )
+            }
         }
     }
 
@@ -220,92 +298,6 @@ class AgentSkillManager(
                 bodyMarkdown = parsed.bodyMarkdown,
                 resourceEntries = skill.resourceEntries,
             )
-        }
-    }
-
-    fun findImplicitlyRelevantSkills(
-        skills: List<InstalledSkill>,
-        messages: List<ChatMessage>,
-        excludedSkillIds: Set<String> = emptySet(),
-        limit: Int = DefaultImplicitSkillMatchLimit,
-    ): List<InstalledSkill> {
-        if (limit <= 0) return emptyList()
-        val requestText = buildImplicitSkillRequestText(messages)
-        if (requestText.isBlank()) return emptyList()
-        val normalizedRequestText = normalizeImplicitSkillMatchText(requestText)
-        val requestTokens = extractImplicitSkillTokens(requestText)
-        if (normalizedRequestText.isBlank() && requestTokens.isEmpty()) return emptyList()
-        return skills.asSequence()
-            .filter { it.isEnabled && it.id !in excludedSkillIds }
-            .mapNotNull { skill ->
-                scoreImplicitSkillMatch(
-                    skill = skill,
-                    normalizedRequestText = normalizedRequestText,
-                    requestTokens = requestTokens,
-                )?.let { match -> skill to match }
-            }
-            .sortedWith(
-                compareByDescending<Pair<InstalledSkill, ImplicitSkillMatch>> { it.second.score }
-                    .thenBy { it.first.name.lowercase(Locale.US) },
-            )
-            .take(limit)
-            .map { it.first }
-            .toList()
-    }
-
-    suspend fun installBundledSkills(): Result<Int> = withContext(Dispatchers.IO) {
-        runCatching {
-            val bundleNames = context.assets.list(BundledSkillsAssetRoot).orEmpty()
-            bundleNames.sorted().sumOf { bundleName ->
-                runCatching { installBundledSkill(bundleName) }.getOrDefault(0)
-            }
-        }
-    }
-
-    private suspend fun installBundledSkill(bundleName: String): Int {
-        val assets = context.assets
-        val assetRoot = "$BundledSkillsAssetRoot/$bundleName"
-        val entries = runCatching { assets.list(assetRoot) }.getOrNull().orEmpty()
-        if (entries.none { it.equals(SkillFileName, ignoreCase = true) }) return 0
-        val workingDirectory = createTempDirectory()
-        return try {
-            val copiedRoot = workingDirectory.resolve(bundleName).apply { mkdirs() }
-            copyAssetDirectory(assets, assetRoot, copiedRoot)
-            val skillRoot = locateSkillRoot(copiedRoot)
-            val parsed = parseSkillDocument(File(skillRoot, SkillFileName))
-            val skillId = buildSkillId(parsed.name)
-            val currentSkills = extensionsRepository.extensionState.firstValue().installedSkills
-            val existing = currentSkills.firstOrNull { it.id == skillId }
-            if (existing == null && skillId in extensionsRepository.seededBundledSkillIds.first()) return 0
-            if (existing != null && existing.source.kind != SkillInstallKind.Bundled) {
-                extensionsRepository.markBundledSkillSeeded(skillId)
-                return 0
-            }
-            val checksum = sha256OfDirectory(skillRoot)
-            if (
-                existing != null &&
-                existing.checksumSha256 == checksum &&
-                validatedInstalledSkillRoot(existing) != null
-            ) {
-                extensionsRepository.markBundledSkillSeeded(skillId)
-                return 0
-            }
-            installParsedSkill(
-                sourceRoot = skillRoot,
-                source = SkillInstallSource(
-                    kind = SkillInstallKind.Bundled,
-                    label = "Qing preinstalled skill",
-                    uri = "bundled://skills/$bundleName",
-                    subpath = "",
-                ),
-                skillIdOverride = existing?.id ?: skillId,
-                installedAtMillis = existing?.installedAtMillis,
-                isEnabled = existing?.isEnabled ?: true,
-            )
-            extensionsRepository.markBundledSkillSeeded(skillId)
-            1
-        } finally {
-            workingDirectory.deleteRecursively()
         }
     }
 
@@ -700,6 +692,11 @@ class AgentSkillManager(
         guestPath: String,
     ): String = "${packageSource.trim()}|${guestPath.trim()}"
 
+    private fun ignoredDiscoveredSkillSources() = context.getSharedPreferences(
+        DiscoveredSkillPreferencesName,
+        Context.MODE_PRIVATE,
+    )
+
     private fun sha256OfText(text: String): String =
         MessageDigest.getInstance("SHA-256")
             .digest(text.toByteArray(Charsets.UTF_8))
@@ -880,6 +877,13 @@ class AgentSkillManager(
     private suspend fun <T> kotlinx.coroutines.flow.Flow<T>.firstValue(): T = first()
 }
 
+internal fun piDiscoveredSkillId(sourcePath: String): String {
+    val digest = MessageDigest.getInstance("SHA-256")
+        .digest(sourcePath.trim().toByteArray(Charsets.UTF_8))
+        .joinToString("") { "%02x".format(it) }
+    return "pi-discovered-${digest.take(20)}"
+}
+
 private class LimitedInputStream(
     input: InputStream,
     private val limitBytes: Long,
@@ -923,166 +927,6 @@ private data class ParsedSkillDocument(
     val allowedTools: List<String>,
     val bodyMarkdown: String,
     val diagnostics: List<String>,
-)
-
-private data class ImplicitSkillMatch(
-    val score: Int,
-    val matchedTokenCount: Int,
-    val matchedPhraseCount: Int,
-)
-
-internal fun buildImplicitSkillRequestText(
-    messages: List<ChatMessage>,
-): String {
-    if (messages.isEmpty()) return ""
-    val recentUserMessages = mutableListOf<ChatMessage>()
-    for (message in messages.asReversed()) {
-        when (message.author) {
-            MessageAuthor.User -> recentUserMessages += message
-            MessageAuthor.Agent -> if (recentUserMessages.isNotEmpty()) break
-        }
-    }
-    return recentUserMessages
-        .asReversed()
-        .joinToString(separator = "\n") { message ->
-            buildString {
-                var hasContent = false
-                if (message.text.isNotBlank()) {
-                    append(message.text)
-                    hasContent = true
-                }
-                if (message.attachments.isNotEmpty()) {
-                    if (hasContent) append('\n')
-                    append("Attachments: ")
-                    append(
-                        message.attachments.joinToString(", ") { attachment ->
-                            listOf(attachment.name, attachment.mimeType)
-                                .filter { it.isNotBlank() }
-                                .joinToString(" ")
-                        }
-                    )
-                }
-            }
-        }
-        .trim()
-}
-
-internal fun scoreImplicitSkillMatch(
-    skill: InstalledSkill,
-    requestText: String,
-): Int? = scoreImplicitSkillMatch(
-    skill = skill,
-    normalizedRequestText = normalizeImplicitSkillMatchText(requestText),
-    requestTokens = extractImplicitSkillTokens(requestText),
-)?.score
-
-private fun scoreImplicitSkillMatch(
-    skill: InstalledSkill,
-    normalizedRequestText: String,
-    requestTokens: Set<String>,
-): ImplicitSkillMatch? {
-    if (normalizedRequestText.isBlank() && requestTokens.isEmpty()) return null
-
-    val normalizedName = normalizeImplicitSkillMatchText(skill.name)
-    val normalizedActionLabel = normalizeImplicitSkillMatchText(skill.quickActionLabel())
-    val phraseMatches = buildSet {
-        if (normalizedName.length >= 3 && normalizedRequestText.contains(normalizedName)) add(normalizedName)
-        if (
-            normalizedActionLabel.length >= 3 &&
-            normalizedActionLabel != normalizedName &&
-            normalizedRequestText.contains(normalizedActionLabel)
-        ) {
-            add(normalizedActionLabel)
-        }
-    }
-
-    val primaryTokens = extractImplicitSkillTokens(
-        listOf(skill.name, skill.quickActionLabel()).joinToString(" "),
-    )
-    val secondaryTokens = extractImplicitSkillTokens(
-        buildString {
-            append(skill.description)
-            append(' ')
-            append(skill.compatibility)
-            if (skill.allowedTools.isNotEmpty()) {
-                append(' ')
-                append(skill.allowedTools.joinToString(" "))
-            }
-        },
-    )
-
-    val matchedPrimaryTokens = primaryTokens.intersect(requestTokens)
-    val matchedSecondaryTokens = secondaryTokens.intersect(requestTokens) - matchedPrimaryTokens
-
-    val score = phraseMatches.sumOf { phrase ->
-        if (phrase == normalizedName) 8 else 6
-    } + matchedPrimaryTokens.sumOf(::implicitSkillPrimaryTokenScore) +
-        matchedSecondaryTokens.sumOf(::implicitSkillSecondaryTokenScore)
-
-    val matchedTokenCount = matchedPrimaryTokens.size + matchedSecondaryTokens.size
-    if (phraseMatches.isEmpty() && matchedTokenCount < 2) return null
-    if (score < ImplicitSkillMatchMinScore) return null
-
-    return ImplicitSkillMatch(
-        score = score,
-        matchedTokenCount = matchedTokenCount,
-        matchedPhraseCount = phraseMatches.size,
-    )
-}
-
-private fun normalizeImplicitSkillMatchText(
-    value: String,
-): String = value.lowercase(Locale.US)
-    .replace(Regex("""[^\p{L}\p{Nd}]+"""), " ")
-    .trim()
-
-private fun extractImplicitSkillTokens(
-    value: String,
-): Set<String> = Regex("""[\p{L}\p{Nd}][\p{L}\p{Nd}_+.-]*""")
-    .findAll(value.lowercase(Locale.US))
-    .map { it.value.trim('.', '-', '_', '+') }
-    .filter { token ->
-        token.length >= 2 &&
-            token !in ImplicitSkillStopwords &&
-            token.any { character -> character.isLetterOrDigit() }
-    }
-    .toSet()
-
-private fun implicitSkillPrimaryTokenScore(token: String): Int = when {
-    token.length >= 8 -> 4
-    token.length >= 5 -> 3
-    else -> 2
-}
-
-private fun implicitSkillSecondaryTokenScore(token: String): Int = when {
-    token.length >= 8 -> 3
-    token.length >= 5 -> 2
-    else -> 1
-}
-
-private val ImplicitSkillStopwords = setOf(
-    "a",
-    "an",
-    "and",
-    "are",
-    "for",
-    "from",
-    "into",
-    "that",
-    "the",
-    "this",
-    "use",
-    "using",
-    "with",
-    "agent",
-    "skill",
-    "skills",
-    "tool",
-    "tools",
-    "task",
-    "tasks",
-    "help",
-    "your",
 )
 
 internal fun resolveRemoteDownloadPlan(rawUrl: String): RemoteDownloadPlan {

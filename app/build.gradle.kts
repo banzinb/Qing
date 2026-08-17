@@ -41,10 +41,15 @@ val appVersionName = providers.gradleProperty("aether.versionName")
     .orNull
     ?.trim()
     ?.takeIf { it.isNotEmpty() }
-    ?: "2.0.0"
+    ?: "2.1.2"
 val piBridgeProjectDir = rootProject.layout.projectDirectory.dir("pi-bridge")
 val piBridgeGeneratedAssetsDir = layout.buildDirectory.dir("generated/assets/piBridge")
 val piProviderIconsGeneratedResDir = layout.buildDirectory.dir("generated/res/piProviderIcons")
+// Make shared Compose resources available to Android resource APIs.
+val sharedComposeResourcesDir = rootProject.project(":shared").projectDir.resolve(
+    "src/commonMain/composeResources",
+)
+val sharedComposeResourcesGeneratedResDir = layout.buildDirectory.dir("generated/res/sharedComposeResources")
 val piProviderIconFiles = mapOf(
     "provider_amazon_bedrock.png" to "bedrock-color.png",
     "provider_ant_ling.png" to "antgroup-color.png",
@@ -143,16 +148,18 @@ android {
         debug {
             manifestPlaceholders["appIcon"] = "@mipmap/ic_launcher"
             manifestPlaceholders["appRoundIcon"] = "@mipmap/ic_launcher_round"
+            manifestPlaceholders["appLabel"] = "@string/app_name"
         }
 
         create("nightly") {
             initWith(getByName("debug"))
             applicationIdSuffix = ".nightly"
             matchingFallbacks += listOf("debug")
-            resValue("string", "app_name", "Qing Nightly")
+            resValue("string", "nightly_app_name", "Aether Nightly")
             buildConfigField("String", "UPDATE_CHANNEL", "\"nightly\"")
             manifestPlaceholders["appIcon"] = "@mipmap/ic_launcher_nightly"
             manifestPlaceholders["appRoundIcon"] = "@mipmap/ic_launcher_nightly_round"
+            manifestPlaceholders["appLabel"] = "@string/nightly_app_name"
             signingConfig = if (nightlyKeystoreFile.isNotBlank()) {
                 signingConfigs.getByName("nightly")
             } else {
@@ -165,6 +172,7 @@ android {
             isShrinkResources = true
             manifestPlaceholders["appIcon"] = "@mipmap/ic_launcher"
             manifestPlaceholders["appRoundIcon"] = "@mipmap/ic_launcher_round"
+            manifestPlaceholders["appLabel"] = "@string/app_name"
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -221,6 +229,7 @@ dependencies {
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.androidx.lifecycle.process)
     implementation(libs.androidx.activity.compose)
+    implementation(libs.androidx.appcompat)
     implementation(libs.androidx.datastore.preferences)
     implementation(libs.androidx.room.runtime)
     implementation(libs.androidx.room.ktx)
@@ -284,8 +293,25 @@ val buildPiBridge = tasks.register<Exec>("buildPiBridge") {
     commandLine(npmExecutable(), "run", "build")
     inputs.file(piBridgeProjectDir.file("package.json"))
     inputs.file(piBridgeProjectDir.file("tsconfig.json"))
+    inputs.dir(piBridgeProjectDir.dir("scripts"))
     inputs.dir(piBridgeProjectDir.dir("src"))
     outputs.file(piBridgeProjectDir.file("dist/bridge.mjs"))
+}
+
+val copySharedComposeResources = tasks.register<SyncGeneratedSourceDirectory>("copySharedComposeResources") {
+    outputDirectory.set(sharedComposeResourcesGeneratedResDir)
+    from(sharedComposeResourcesDir) {
+        include("values*/**")
+    }
+    // Escape apostrophes in shared i18n strings for Android's resource parser.
+    filter { line ->
+        if (line.trimStart().startsWith("<string ")) {
+            line.replace("'", "\\'").replace("&apos;", "\\'")
+        } else {
+            line
+        }
+    }
+    includeEmptyDirs = false
 }
 
 val copyPiProviderIcons = tasks.register<SyncGeneratedSourceDirectory>("copyPiProviderIcons") {
@@ -318,6 +344,10 @@ androidComponents {
     onVariants(selector().all()) { variant ->
         variant.sources.assets?.addGeneratedSourceDirectory(
             copyPiBridgeAsset,
+            SyncGeneratedSourceDirectory::outputDirectory,
+        )
+        variant.sources.res?.addGeneratedSourceDirectory(
+            copySharedComposeResources,
             SyncGeneratedSourceDirectory::outputDirectory,
         )
         variant.sources.res?.addGeneratedSourceDirectory(

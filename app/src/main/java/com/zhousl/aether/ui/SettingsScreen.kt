@@ -83,6 +83,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
@@ -94,6 +95,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -126,6 +128,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import com.zhousl.aether.BuildConfig
 
 import com.zhousl.aether.R
@@ -182,17 +186,19 @@ import com.zhousl.aether.data.resolveAutomaticModelKey
 import com.zhousl.aether.data.sortedForAutomaticModelPurpose
 import com.zhousl.aether.mod.AetherNativeModState
 import com.zhousl.aether.runtime.LocalRuntimeIssue
+import org.json.JSONArray
+import org.json.JSONObject
 import com.zhousl.aether.runtime.LocalRuntimeSetupState
 import com.zhousl.aether.runtime.AlpineSetupActivity
 import com.zhousl.aether.runtime.AlpineSetupProgress
 import com.zhousl.aether.runtime.AlpineTerminalLaunchSpec
 import com.zhousl.aether.termux.TermuxSetupState
-import com.zhousl.aether.ui.theme.AetherBackground
 import com.zhousl.aether.ui.theme.AetherOnSurface
 import com.zhousl.aether.ui.theme.AetherOnPrimary
 import com.zhousl.aether.ui.theme.AetherOnSurfaceVariant
 import com.zhousl.aether.ui.theme.AetherPrimary
 import com.zhousl.aether.ui.theme.AetherScrim
+import com.zhousl.aether.ui.theme.AetherSettingsBackground
 import com.zhousl.aether.ui.theme.AetherSurface
 import com.zhousl.aether.ui.theme.AetherSurfaceHigh
 import com.zhousl.aether.ui.theme.QingAzureLight
@@ -220,6 +226,8 @@ private enum class SettingsPage {
     Personalization,
     WebTools,
     Reliability,
+    ExtensionSettings,
+    ExtensionSettingsCategory,
     Skills,
     AddSkill,
     Extensions,
@@ -251,6 +259,7 @@ private fun SettingsPage.depth(): Int = when (this) {
     SettingsPage.Personalization,
     SettingsPage.WebTools,
     SettingsPage.Reliability,
+    SettingsPage.ExtensionSettings,
     SettingsPage.Skills,
     SettingsPage.Extensions,
     SettingsPage.McpServers,
@@ -274,6 +283,7 @@ private fun SettingsPage.depth(): Int = when (this) {
     SettingsPage.AlpineTerminal,
     SettingsPage.AlpineChrome,
     SettingsPage.RootSetupProgress -> 2
+    SettingsPage.ExtensionSettingsCategory -> 2
     SettingsPage.DefaultChatModel,
     SettingsPage.DefaultTitleModel,
     SettingsPage.DefaultNamingModel,
@@ -339,8 +349,8 @@ private val PageTransitionEasing = CubicBezierEasing(0.22f, 0.84f, 0.18f, 1f)
 private val SettingsTopFadeHeight = 40.dp
 private val StatisticsInputColor = Color(0xFF5D7CFF)
 private val StatisticsOutputColor = Color(0xFF7B68EE)
-private val StatisticsReasoningColor = Color(0xFF6E56CF)
-private val StatisticsNeutralChartColor = Color(0xFF747C89)
+private val StatisticsReasoningColor = Color(0xFFA9B8FF)
+private val StatisticsNeutralChartColor = Color(0xFFDCE4FF)
 
 
 
@@ -348,12 +358,14 @@ private val StatisticsNeutralChartColor = Color(0xFF747C89)
 private fun settingsLanguageDisplayName(language: AppLanguage): String = when (language) {
     AppLanguage.English -> stringResource(R.string.language_english)
     AppLanguage.SimplifiedChinese -> stringResource(R.string.language_simplified_chinese)
+    AppLanguage.Persian -> stringResource(R.string.language_persian)
 }
 
 @Composable
 private fun settingsLanguageSubtitle(language: AppLanguage): String = when (language) {
     AppLanguage.English -> stringResource(R.string.settings_language_english_interface)
     AppLanguage.SimplifiedChinese -> stringResource(R.string.settings_language_simplified_chinese_interface)
+    AppLanguage.Persian -> stringResource(R.string.settings_language_persian_interface)
 }
 
 @Composable
@@ -396,18 +408,18 @@ private fun settingsReleaseSummary(versionName: String): String =
 
 private fun settingsTopOverlayBodyGradient(): Brush = Brush.verticalGradient(
     colorStops = arrayOf(
-        0.0f to AetherBackground.copy(alpha = 0.96f),
-        0.18f to AetherBackground.copy(alpha = 0.86f),
-        0.42f to AetherBackground.copy(alpha = 0.48f),
-        0.72f to AetherBackground.copy(alpha = 0.22f),
-        1.0f to AetherBackground.copy(alpha = 0.12f),
+        0.0f to AetherSettingsBackground.copy(alpha = 0.96f),
+        0.18f to AetherSettingsBackground.copy(alpha = 0.86f),
+        0.42f to AetherSettingsBackground.copy(alpha = 0.48f),
+        0.72f to AetherSettingsBackground.copy(alpha = 0.22f),
+        1.0f to AetherSettingsBackground.copy(alpha = 0.12f),
     )
 )
 
 private fun settingsTopOverlayTailGradient(): Brush = Brush.verticalGradient(
     colorStops = arrayOf(
-        0.0f to AetherBackground.copy(alpha = 0.12f),
-        0.42f to AetherBackground.copy(alpha = 0.05f),
+        0.0f to AetherSettingsBackground.copy(alpha = 0.12f),
+        0.42f to AetherSettingsBackground.copy(alpha = 0.05f),
         1.0f to Color.Transparent,
     )
 )
@@ -430,7 +442,6 @@ fun SettingsScreen(
     agentWorkspaceMode: AgentWorkspaceMode,
     autoCleanOldCommandHistory: Boolean,
     oldCommandHistoryRetentionHours: Int,
-    termuxLiveOutputEnabled: Boolean,
     termuxEnvironmentVariables: List<TermuxEnvironmentVariable>,
     agentModeAuthorizationEnabled: Boolean,
     agentModeAuthorizationMethod: AgentModeAuthorizationMethod,
@@ -457,6 +468,7 @@ fun SettingsScreen(
     developerTermuxReadyOverride: Boolean?,
     installedSkills: List<com.zhousl.aether.data.InstalledSkill>,
     installedPiExtensions: List<InstalledPiExtension>,
+    hasLoadedInstalledPiExtensions: Boolean,
     nativeModState: AetherNativeModState,
     piExtensionCatalog: List<PiExtensionCatalogEntry>,
     isLoadingPiExtensions: Boolean,
@@ -483,7 +495,6 @@ fun SettingsScreen(
         AgentWorkspaceMode,
         Boolean,
         Int,
-        Boolean,
         List<TermuxEnvironmentVariable>,
         Boolean,
         AgentModeAuthorizationMethod,
@@ -528,7 +539,6 @@ fun SettingsScreen(
     onToggleScheduledTaskEnabled: (String, Boolean) -> Unit,
     onRemoveScheduledTask: (String) -> Unit,
     onRequestTermuxPermission: () -> Unit,
-    onRequestNotificationPermission: () -> Unit,
     onImportAppData: () -> Unit,
     onExportAppData: () -> Unit,
     onExportLogs: () -> Unit,
@@ -604,10 +614,8 @@ fun SettingsScreen(
     var oldCommandHistoryRetentionHoursValue by rememberSaveable(stateSaver = TextFieldValue.Saver) {
         mutableStateOf(TextFieldValue(oldCommandHistoryRetentionHours.toString()))
     }
-    var termuxLiveOutputEnabledValue by rememberSaveable {
-        mutableStateOf(termuxLiveOutputEnabled)
-    }
-    var termuxEnvironmentVariablesValue by rememberSaveable {
+    // TermuxEnvironmentVariable is not Parcelable; saving this list crashes during state save.
+    var termuxEnvironmentVariablesValue by remember {
         mutableStateOf(termuxEnvironmentVariables)
     }
     var agentModeAuthorizationEnabledValue by rememberSaveable {
@@ -671,7 +679,7 @@ fun SettingsScreen(
         lastObservedRootSetupIssue = rootSetupState.issue
     }
 
-    fun persistAndExit() {
+    fun persistSettings() {
         onSave(
             systemPromptValue.text,
             tavilyApiKeyValue.text,
@@ -689,7 +697,6 @@ fun SettingsScreen(
             normalizeOldCommandHistoryRetentionHours(
                 oldCommandHistoryRetentionHoursValue.text.trim().toIntOrNull()
             ),
-            termuxLiveOutputEnabledValue,
             termuxEnvironmentVariablesValue,
             agentModeAuthorizationEnabledValue,
             agentModeAuthorizationMethodValue,
@@ -701,73 +708,25 @@ fun SettingsScreen(
             defaultNamingModelKeyValue,
             defaultCompactingModelKeyValue,
         )
+    }
+
+    fun persistAndExit() {
+        persistSettings()
         onBack()
     }
 
     fun persistAndReplayOnboarding() {
-        onSave(
-            systemPromptValue.text,
-            tavilyApiKeyValue.text,
-            normalizeTavilyBaseUrl(tavilyBaseUrlValue.text),
-            searchBackendValue,
-            normalizeSearXngBaseUrl(searxngBaseUrlValue.text),
-            searxngApiKeyValue.text,
-            normalizeLlmInactivityReconnectTimeoutSeconds(
-                llmInactivityReconnectTimeoutValue.text.trim().toIntOrNull()
-            ),
-            keepTasksRunningInBackgroundValue,
-            notifyOnTaskCompletionValue,
-            agentWorkspaceModeValue,
-            autoCleanOldCommandHistoryValue,
-            normalizeOldCommandHistoryRetentionHours(
-                oldCommandHistoryRetentionHoursValue.text.trim().toIntOrNull()
-            ),
-            termuxLiveOutputEnabledValue,
-            termuxEnvironmentVariablesValue,
-            agentModeAuthorizationEnabledValue,
-            agentModeAuthorizationMethodValue,
-            languageValue,
-            themeModeValue,
-            accentValue,
-            defaultChatModelKeyValue,
-            defaultTitleModelKeyValue,
-            defaultNamingModelKeyValue,
-            defaultCompactingModelKeyValue,
-        )
+        persistSettings()
         onReplayOnboarding()
     }
 
     fun persistAndReplayFollowUpOnboarding() {
-        onSave(
-            systemPromptValue.text,
-            tavilyApiKeyValue.text,
-            normalizeTavilyBaseUrl(tavilyBaseUrlValue.text),
-            searchBackendValue,
-            normalizeSearXngBaseUrl(searxngBaseUrlValue.text),
-            searxngApiKeyValue.text,
-            normalizeLlmInactivityReconnectTimeoutSeconds(
-                llmInactivityReconnectTimeoutValue.text.trim().toIntOrNull()
-            ),
-            keepTasksRunningInBackgroundValue,
-            notifyOnTaskCompletionValue,
-            agentWorkspaceModeValue,
-            autoCleanOldCommandHistoryValue,
-            normalizeOldCommandHistoryRetentionHours(
-                oldCommandHistoryRetentionHoursValue.text.trim().toIntOrNull()
-            ),
-            termuxLiveOutputEnabledValue,
-            termuxEnvironmentVariablesValue,
-            agentModeAuthorizationEnabledValue,
-            agentModeAuthorizationMethodValue,
-            languageValue,
-            themeModeValue,
-            accentValue,
-            defaultChatModelKeyValue,
-            defaultTitleModelKeyValue,
-            defaultNamingModelKeyValue,
-            defaultCompactingModelKeyValue,
-        )
+        persistSettings()
         onReplayFollowUpOnboarding()
+    }
+
+    LifecycleEventEffect(Lifecycle.Event.ON_STOP) {
+        persistSettings()
     }
 
     // Local page navigation
@@ -775,6 +734,12 @@ fun SettingsScreen(
     val page = SettingsPage.valueOf(currentPage)
     var rootSetupReturnPage by rememberSaveable { mutableStateOf(SettingsPage.Termux.name) }
     var selectedPiPackageSourceValue by rememberSaveable { mutableStateOf("") }
+    var selectedExtensionSettingsId by rememberSaveable { mutableStateOf("") }
+    var selectedExtensionSettingsCategoryId by rememberSaveable { mutableStateOf("") }
+    val extensionSettings = LocalAetherExtensionUiController.current
+        ?.snapshot
+        ?.settings
+        .orEmpty()
 
     fun rootSetupReturnPageValue(): SettingsPage =
         runCatching { SettingsPage.valueOf(rootSetupReturnPage) }
@@ -811,6 +776,8 @@ fun SettingsScreen(
         SettingsPage.AddProvider, SettingsPage.EditProvider -> SettingsPage.Providers
         SettingsPage.AddSkill -> SettingsPage.Skills
         SettingsPage.PackageDetail -> SettingsPage.Extensions
+        SettingsPage.ExtensionSettings -> SettingsPage.Hub
+        SettingsPage.ExtensionSettingsCategory -> SettingsPage.ExtensionSettings
         SettingsPage.AddMcpServer, SettingsPage.EditMcpServer -> SettingsPage.McpServers
         SettingsPage.AddScheduledTask, SettingsPage.EditScheduledTask -> SettingsPage.ScheduledTasks
         SettingsPage.AlpineTerminal,
@@ -827,6 +794,7 @@ fun SettingsScreen(
         }
     }
 
+    val pageStateHolder = rememberSaveableStateHolder()
     AnimatedContent(
         targetState = page,
         transitionSpec = {
@@ -843,7 +811,8 @@ fun SettingsScreen(
         },
         label = "settings_page_transition",
     ) { targetPage ->
-        when (targetPage) {
+        pageStateHolder.SaveableStateProvider(targetPage.name) {
+            when (targetPage) {
             SettingsPage.Hub -> SettingsHub(
                 generalSettingsSummary = settingsGeneralSummary(
                     language = languageValue,
@@ -857,11 +826,8 @@ fun SettingsScreen(
                         else -> stringResource(R.string.settings_no_providers_configured)
                     }
                 },
-                searchSummary = settingsSearchSummary(
-                    backend = searchBackendValue,
-                    tavilyKey = tavilyApiKeyValue.text,
-                    searxngBaseUrl = searxngBaseUrlValue.text,
-                ),
+                systemPromptSnippet = systemPromptValue.text.take(60),
+                tavilyConfigured = tavilyApiKeyValue.text.isNotBlank(),
                 reliabilitySummary = buildString {
                     append(
                         stringResource(
@@ -888,6 +854,13 @@ fun SettingsScreen(
                 showRuntimeDefaults = termuxSetupState.isReady && alpineSetupState.isReady,
                 skillCount = installedSkills.size,
                 piExtensionCount = installedPiExtensions.size,
+                piExtensionsLoaded = hasLoadedInstalledPiExtensions,
+                extensionSettings = extensionSettings,
+                onOpenExtensionSettings = { id ->
+                    selectedExtensionSettingsId = id
+                    selectedExtensionSettingsCategoryId = ""
+                    currentPage = SettingsPage.ExtensionSettings.name
+                },
                 mcpServerCount = mcpServers.size,
                 scheduledTaskCount = scheduledTasks.size,
                 statisticsSummary = buildSettingsStatisticsSummary(usageStatisticsSnapshots),
@@ -962,7 +935,10 @@ fun SettingsScreen(
                 )?.fullLabel?.let { stringResource(R.string.settings_automatic_model_with_name, it) }
                     ?: stringResource(R.string.settings_automatic_model),
                 automaticSubtitle = stringResource(R.string.settings_prioritize_sota_models),
-                onSelected = { defaultChatModelKeyValue = it },
+                onSelected = {
+                    defaultChatModelKeyValue = it
+                    persistSettings()
+                },
                 onBack = { currentPage = SettingsPage.DefaultModels.name },
             )
 
@@ -978,7 +954,10 @@ fun SettingsScreen(
                 )?.fullLabel?.let { stringResource(R.string.settings_automatic_model_with_name, it) }
                     ?: stringResource(R.string.settings_automatic_model),
                 automaticSubtitle = stringResource(R.string.settings_prioritize_sota_models),
-                onSelected = { defaultTitleModelKeyValue = it },
+                onSelected = {
+                    defaultTitleModelKeyValue = it
+                    persistSettings()
+                },
                 onBack = { currentPage = SettingsPage.DefaultModels.name },
             )
 
@@ -994,7 +973,10 @@ fun SettingsScreen(
                 )?.fullLabel?.let { stringResource(R.string.settings_automatic_model_with_name, it) }
                     ?: stringResource(R.string.settings_automatic_model),
                 automaticSubtitle = stringResource(R.string.settings_prioritize_sota_models),
-                onSelected = { defaultNamingModelKeyValue = it },
+                onSelected = {
+                    defaultNamingModelKeyValue = it
+                    persistSettings()
+                },
                 onBack = { currentPage = SettingsPage.DefaultModels.name },
             )
 
@@ -1010,7 +992,10 @@ fun SettingsScreen(
                 )?.fullLabel?.let { stringResource(R.string.settings_automatic_model_with_name, it) }
                     ?: stringResource(R.string.settings_automatic_model),
                 automaticSubtitle = stringResource(R.string.settings_prioritize_efficient_summary_models),
-                onSelected = { defaultCompactingModelKeyValue = it },
+                onSelected = {
+                    defaultCompactingModelKeyValue = it
+                    persistSettings()
+                },
                 onBack = { currentPage = SettingsPage.DefaultModels.name },
             )
 
@@ -1080,12 +1065,48 @@ fun SettingsScreen(
                 keepTasksRunningInBackground = keepTasksRunningInBackgroundValue,
                 onKeepTasksRunningInBackgroundChanged = { keepTasksRunningInBackgroundValue = it },
                 notifyOnTaskCompletion = notifyOnTaskCompletionValue,
-                onNotifyOnTaskCompletionChanged = { enabled ->
-                    notifyOnTaskCompletionValue = enabled
-                    if (enabled) onRequestNotificationPermission()
-                },
+                onNotifyOnTaskCompletionChanged = { notifyOnTaskCompletionValue = it },
                 onBack = { currentPage = SettingsPage.Hub.name },
             )
+            SettingsPage.ExtensionSettings -> {
+                val selected = extensionSettings.firstOrNull { it.id == selectedExtensionSettingsId }
+                if (selected == null) {
+                    currentPage = SettingsPage.Hub.name
+                } else if (selected.categories.isNotEmpty()) {
+                    AetherExtensionSettingsCategoriesPage(
+                        page = selected,
+                        onCategorySelected = { categoryId ->
+                            selectedExtensionSettingsCategoryId = categoryId
+                            currentPage = SettingsPage.ExtensionSettingsCategory.name
+                        },
+                        onBack = { currentPage = SettingsPage.Hub.name },
+                    )
+                } else {
+                    AetherExtensionSettingsPage(
+                        page = selected,
+                        category = null,
+                        onBack = { currentPage = SettingsPage.Hub.name },
+                    )
+                }
+            }
+
+            SettingsPage.ExtensionSettingsCategory -> {
+                val selectedPage = extensionSettings.firstOrNull { it.id == selectedExtensionSettingsId }
+                val selectedCategory = selectedPage?.categories?.firstOrNull { it.id == selectedExtensionSettingsCategoryId }
+                if (selectedPage == null || selectedCategory == null) {
+                    currentPage = SettingsPage.ExtensionSettings.name
+                } else {
+                    AetherExtensionSettingsPage(
+                        page = selectedPage,
+                        category = selectedCategory,
+                        onCategorySelected = { categoryId ->
+                            selectedExtensionSettingsCategoryId = categoryId
+                            currentPage = SettingsPage.ExtensionSettingsCategory.name
+                        },
+                        onBack = { currentPage = SettingsPage.ExtensionSettings.name },
+                    )
+                }
+            }
 
             SettingsPage.Skills -> SkillsListPage(
                 title = stringResource(R.string.settings_agent_skills),
@@ -1116,6 +1137,7 @@ fun SettingsScreen(
 
             SettingsPage.Extensions -> PiExtensionsPage(
                 installedExtensions = installedPiExtensions,
+                hasLoadedInstalledExtensions = hasLoadedInstalledPiExtensions,
                 nativeModState = nativeModState,
                 catalog = piExtensionCatalog,
                 isLoading = isLoadingPiExtensions,
@@ -1251,10 +1273,8 @@ fun SettingsScreen(
                 termuxSetupState = termuxSetupState,
                 rootSetupState = rootSetupState,
                 selectedWorkspaceMode = agentWorkspaceModeValue,
-                liveOutputEnabled = termuxLiveOutputEnabledValue,
                 environmentVariables = termuxEnvironmentVariablesValue,
                 onWorkspaceModeSelected = { agentWorkspaceModeValue = it },
-                onLiveOutputEnabledChanged = { termuxLiveOutputEnabledValue = it },
                 onEnvironmentVariablesChanged = { termuxEnvironmentVariablesValue = it },
                 onRequestTermuxPermission = onRequestTermuxPermission,
                 onOpenAppPermissions = onOpenAppPermissions,
@@ -1374,6 +1394,7 @@ fun SettingsScreen(
                 onDownloadAndInstallUpdate = onDownloadAndInstallUpdate,
                 onBack = { currentPage = SettingsPage.Hub.name },
             )
+            }
         }
     }
 }
@@ -1386,7 +1407,8 @@ fun SettingsScreen(
 private fun SettingsHub(
     generalSettingsSummary: String,
     activeProviderName: String,
-    searchSummary: String,
+    systemPromptSnippet: String,
+    tavilyConfigured: Boolean,
     reliabilitySummary: String,
     termuxReady: Boolean,
     alpineReady: Boolean,
@@ -1394,6 +1416,9 @@ private fun SettingsHub(
     showRuntimeDefaults: Boolean,
     skillCount: Int,
     piExtensionCount: Int,
+    piExtensionsLoaded: Boolean,
+    extensionSettings: List<com.zhousl.aether.data.AetherAppExtensionSettingsPage>,
+    onOpenExtensionSettings: (String) -> Unit,
     mcpServerCount: Int,
     scheduledTaskCount: Int,
     statisticsSummary: String,
@@ -1411,7 +1436,7 @@ private fun SettingsHub(
     }
     Scaffold(
         modifier = Modifier.fillMaxSize(),
-        containerColor = AetherBackground,
+        containerColor = AetherSettingsBackground,
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
     ) { innerPadding ->
         Box(
@@ -1462,15 +1487,8 @@ private fun SettingsHub(
                 SettingsNavRow(
                     icon = Icons.Rounded.Person,
                     title = stringResource(R.string.settings_personalization),
-                    subtitle = stringResource(R.string.settings_personalization_summary),
+                    subtitle = systemPromptSnippet.ifBlank { stringResource(R.string.settings_custom_instructions) },
                     onClick = { onNavigate(SettingsPage.Personalization) },
-                )
-                CardDivider()
-                SettingsNavRow(
-                    icon = Icons.Rounded.Link,
-                    title = stringResource(R.string.settings_web_tools),
-                    subtitle = searchSummary,
-                    onClick = { onNavigate(SettingsPage.WebTools) },
                 )
                 CardDivider()
                 SettingsNavRow(
@@ -1479,6 +1497,21 @@ private fun SettingsHub(
                     subtitle = reliabilitySummary,
                     onClick = { onNavigate(SettingsPage.Reliability) },
                 )
+            }
+
+            if (extensionSettings.isNotEmpty()) {
+                Spacer(Modifier.height(16.dp))
+                SettingsCardGroup {
+                    extensionSettings.forEachIndexed { index, settingPage ->
+                        if (index > 0) CardDivider()
+                        SettingsNavRow(
+                            icon = extensionIcon(settingPage.icon),
+                            title = settingPage.title,
+                            subtitle = settingPage.subtitle.ifBlank { settingPage.extensionName },
+                            onClick = { onOpenExtensionSettings(settingPage.id) },
+                        )
+                    }
+                }
             }
 
             Spacer(Modifier.height(16.dp))
@@ -1495,18 +1528,15 @@ private fun SettingsHub(
                 SettingsNavRow(
                     iconPainter = painterResource(R.drawable.pi_logo_on_light),
                     title = stringResource(R.string.settings_pi_extensions),
-                    subtitle = stringResource(
-                        R.string.settings_pi_extensions_count_configured,
-                        piExtensionCount,
-                    ),
+                    subtitle = if (piExtensionsLoaded) {
+                        stringResource(
+                            R.string.settings_pi_extensions_count_configured,
+                            piExtensionCount,
+                        )
+                    } else {
+                        stringResource(R.string.settings_loading_installed_extensions)
+                    },
                     onClick = { onNavigate(SettingsPage.Extensions) },
-                )
-                CardDivider()
-                SettingsNavRow(
-                    icon = Icons.Rounded.Code,
-                    title = stringResource(R.string.settings_mcp_servers),
-                    subtitle = stringResource(R.string.settings_mcp_server_count_summary, mcpServerCount),
-                    onClick = { onNavigate(SettingsPage.McpServers) },
                 )
                 CardDivider()
                 SettingsNavRow(
@@ -2262,11 +2292,7 @@ private fun GeneralSettingsPage(
                 AppLanguage.entries.forEach { option ->
                     SettingsChoiceRow(
                         title = settingsLanguageDisplayName(option),
-                        subtitle = if (option == AppLanguage.English) {
-                            stringResource(R.string.settings_language_english_interface)
-                        } else {
-                            stringResource(R.string.settings_language_simplified_chinese_interface)
-                        },
+                        subtitle = settingsLanguageSubtitle(option),
                         selected = option == selectedLanguage,
                         onClick = { onLanguageSelected(option) },
                     )
@@ -2668,7 +2694,7 @@ private fun ProviderCard(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(16.dp))
-            .background(AetherSurfaceHigh)
+            .background(AetherSurface)
             .padding(16.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -2725,7 +2751,7 @@ private fun ProviderCard(
             Icon(
                 Icons.Rounded.Delete,
                 contentDescription = stringResource(R.string.action_remove),
-                tint = MaterialTheme.colorScheme.error,
+                tint = Color(0xFFD25757),
             )
         }
     }
@@ -2890,7 +2916,7 @@ private fun ModelSelectionListRow(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(18.dp))
-            .background(if (selected) AetherBackground.copy(alpha = 0.9f) else Color.Transparent)
+            .background(if (selected) AetherSettingsBackground.copy(alpha = 0.9f) else Color.Transparent)
             .clickable(onClick = onClick)
             .padding(horizontal = 18.dp, vertical = 18.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -3112,6 +3138,655 @@ private fun ReliabilityPage(
 }
 
 @Composable
+private fun AetherExtensionSettingsCategoriesPage(
+    page: com.zhousl.aether.data.AetherAppExtensionSettingsPage,
+    onCategorySelected: (String) -> Unit,
+    onBack: () -> Unit,
+) {
+    val controller = LocalAetherExtensionUiController.current
+    val trailingIcon = settingsTrailingIcon(page.trailingIcon)
+    SubPageScaffold(
+        title = page.title,
+        onBack = onBack,
+        trailingIcon = trailingIcon,
+        onTrailingAction = {
+            if (page.trailingCategory.isNotBlank()) {
+                onCategorySelected(page.trailingCategory)
+            } else if (page.trailingAction.isNotBlank()) {
+                controller?.onAction?.invoke(page.extensionId, page.trailingAction, page.trailingArgs)
+            } else {
+                onBack()
+            }
+        },
+    ) {
+        if (page.subtitle.isNotBlank()) {
+            Text(page.subtitle, style = MaterialTheme.typography.bodySmall, color = AetherOnSurfaceVariant, modifier = Modifier.padding(horizontal = 4.dp))
+            Spacer(Modifier.height(12.dp))
+        }
+        if (page.sections.isNotEmpty()) {
+            AetherExtensionSettingsSections(page.sections, page, controller, onCategorySelected)
+            Spacer(Modifier.height(16.dp))
+        }
+        val visibleCategories = page.categories.filterNot(com.zhousl.aether.data.AetherAppExtensionSettingsCategory::hidden)
+        SettingsCardGroup {
+            visibleCategories.forEachIndexed { index, category ->
+                SettingsNavRow(
+                    icon = extensionIcon(category.icon),
+                    title = category.title,
+                    subtitle = category.subtitle,
+                ) { onCategorySelected(category.id) }
+                if (index < visibleCategories.lastIndex) CardDivider()
+            }
+        }
+    }
+}
+
+@Composable
+private fun AetherExtensionSettingsSections(
+    sections: List<JSONObject>,
+    page: com.zhousl.aether.data.AetherAppExtensionSettingsPage,
+    controller: AetherExtensionUiController?,
+    onCategorySelected: (String) -> Unit = {},
+) {
+    sections.forEachIndexed { sectionIndex, section ->
+        val sectionTitle = section.optString("title")
+        val sectionDescription = section.optString("description")
+        if (sectionIndex > 0) Spacer(Modifier.height(16.dp))
+        if (sectionTitle.isNotBlank() || sectionDescription.isNotBlank()) {
+            if (sectionTitle.isNotBlank()) {
+                Text(
+                    sectionTitle,
+                    style = MaterialTheme.typography.labelLarge,
+                    color = AetherOnSurface,
+                    modifier = Modifier.padding(horizontal = 4.dp),
+                )
+            }
+            if (sectionDescription.isNotBlank()) {
+                if (sectionTitle.isNotBlank()) Spacer(Modifier.height(4.dp))
+                Text(
+                    sectionDescription,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = AetherOnSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 4.dp),
+                )
+            }
+            Spacer(Modifier.height(8.dp))
+        }
+
+        val settings = section.optJSONArray("settings") ?: JSONArray()
+        var index = 0
+        while (index < settings.length()) {
+            val setting = settings.optJSONObject(index) ?: run { index += 1; continue }
+            val type = setting.optString("type").ifBlank { "text" }
+            when (type) {
+                "item-card", "card" -> {
+                    AetherExtensionItemCard(
+                        setting = setting,
+                        page = page,
+                        controller = controller,
+                        onCategorySelected = onCategorySelected,
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    index += 1
+                }
+                "empty-state" -> {
+                    AetherExtensionEmptyState(
+                        setting = setting,
+                        page = page,
+                        controller = controller,
+                        onCategorySelected = onCategorySelected,
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    index += 1
+                }
+                else -> {
+                    val group = mutableListOf<JSONObject>()
+                    while (index < settings.length()) {
+                        val next = settings.optJSONObject(index) ?: break
+                        val nextType = next.optString("type").ifBlank { "text" }
+                        if (nextType == "item-card" || nextType == "card" || nextType == "empty-state") break
+                        group.add(next)
+                        index += 1
+                    }
+                    SettingsCardGroup {
+                        Column {
+                            group.forEachIndexed { groupIndex, itemSetting ->
+                                AetherExtensionControlRow(
+                                    setting = itemSetting,
+                                    page = page,
+                                    controller = controller,
+                                    onCategorySelected = onCategorySelected,
+                                )
+                                val itemType = itemSetting.optString("type").ifBlank { "text" }
+                                if (groupIndex < group.size - 1 && itemType !in setOf("divider", "spacer")) CardDivider()
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AetherExtensionControlRow(
+    setting: JSONObject,
+    page: com.zhousl.aether.data.AetherAppExtensionSettingsPage,
+    controller: AetherExtensionUiController?,
+    onCategorySelected: (String) -> Unit,
+) {
+    val uriHandler = LocalUriHandler.current
+    val id = "${page.id}:${setting.optString("id")}"
+    val type = setting.optString("type").ifBlank { "text" }
+    val label = setting.optString("label").ifBlank { setting.optString("title") }
+    val description = setting.optString("description").ifBlank { setting.optString("subtitle") }
+    val action = setting.optString("action").ifBlank {
+        "settings:${page.localId}:${setting.optString("id")}"
+    }
+
+    fun update(value: Any?) {
+        controller?.onAction?.invoke(
+            page.extensionId,
+            "settings:${page.localId}:${setting.optString("id")}",
+            JSONObject().put("setting", setting.optString("id")).put("value", value),
+        )
+    }
+
+    when (type) {
+        "toggle" -> {
+            var checked by remember(id, setting.optBoolean("value")) {
+                mutableStateOf(setting.optBoolean("value"))
+            }
+            Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp)) {
+                SettingsToggleRow(label, description, checked) {
+                    checked = it
+                    update(it)
+                }
+            }
+        }
+        "select", "dropdown", "segmented", "tab", "tabs" -> {
+            val options = setting.optJSONArray("options") ?: JSONArray()
+            var selected by remember(id, setting.optString("value")) {
+                mutableStateOf(setting.optString("value"))
+            }
+            if (type == "segmented" || type == "tab" || type == "tabs") {
+                Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp)) {
+                    Text(label, style = MaterialTheme.typography.bodyMedium, color = AetherOnSurface)
+                    if (description.isNotBlank()) Text(description, style = MaterialTheme.typography.bodySmall, color = AetherOnSurfaceVariant)
+                    Spacer(Modifier.height(8.dp))
+                    SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                        for (optionIndex in 0 until options.length()) {
+                            val option = options.optJSONObject(optionIndex) ?: continue
+                            val value = option.optString("value")
+                            SegmentedButton(
+                                selected = selected == value,
+                                onClick = { selected = value; update(value) },
+                                shape = SegmentedButtonDefaults.itemShape(optionIndex, options.length()),
+                            ) { Text(option.optString("label").ifBlank { value }) }
+                        }
+                    }
+                }
+            } else {
+                val selectedLabel = (0 until options.length())
+                    .mapNotNull(options::optJSONObject)
+                    .firstOrNull { it.optString("value") == selected }
+                    ?.optString("label")
+                    .orEmpty()
+                SelectionDropdownField(
+                    label = label,
+                    supportingText = description,
+                    selectedLabel = selectedLabel.ifBlank { selected },
+                    options = (0 until options.length()).mapNotNull { optionIndex ->
+                        val option = options.optJSONObject(optionIndex) ?: return@mapNotNull null
+                        val value = option.optString("value")
+                        SelectionOption(
+                            key = value,
+                            title = option.optString("label").ifBlank { value },
+                            subtitle = option.optString("description"),
+                            selected = selected == value,
+                            onClick = { selected = value; update(value) },
+                        )
+                    },
+                )
+            }
+        }
+        "slider" -> {
+            val minimum = setting.optDouble("min", 0.0).toFloat()
+            val maximum = setting.optDouble("max", 1.0).toFloat().coerceAtLeast(minimum + 0.0001f)
+            val step = setting.optDouble("step", 0.01).toFloat().takeIf { it > 0f } ?: 0.01f
+            val discreteSteps = (((maximum - minimum) / step).roundToInt() - 1).coerceAtLeast(0)
+            var value by remember(id, setting.optDouble("value", minimum.toDouble())) {
+                mutableStateOf(setting.optDouble("value", minimum.toDouble()).toFloat().coerceIn(minimum, maximum))
+            }
+            Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp)) {
+                Text(label, style = MaterialTheme.typography.bodyMedium, color = AetherOnSurface)
+                if (description.isNotBlank()) {
+                    Text(description, style = MaterialTheme.typography.bodySmall, color = AetherOnSurfaceVariant)
+                }
+                Slider(
+                    value = value,
+                    onValueChange = { value = it },
+                    onValueChangeFinished = { update(value) },
+                    valueRange = minimum..maximum,
+                    steps = discreteSteps.takeIf { it in 1..20 } ?: 0,
+                )
+            }
+        }
+        "button" -> {
+            val buttonIcon = setting.optString("icon")
+                .takeIf(String::isNotBlank)
+                ?.let(::extensionIcon)
+            val buttonModifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)
+            val onClick: () -> Unit = {
+                controller?.onAction?.invoke(
+                    page.extensionId,
+                    action,
+                    setting.optJSONObject("args") ?: JSONObject(),
+                )
+            }
+            when (setting.optString("tone").lowercase()) {
+                "neutral", "secondary", "danger", "error" -> SettingsSubtleActionButton(
+                    label = label,
+                    onClick = onClick,
+                    modifier = buttonModifier,
+                    enabled = setting.optBoolean("enabled", true),
+                    icon = buttonIcon,
+                )
+                else -> SettingsActionButton(
+                    label = label,
+                    onClick = onClick,
+                    modifier = buttonModifier,
+                    enabled = setting.optBoolean("enabled", true),
+                    icon = buttonIcon,
+                )
+            }
+        }
+        "link" -> SettingsNavRow(
+            icon = Icons.Rounded.Link,
+            title = label,
+            subtitle = description,
+            enabled = setting.optBoolean("enabled", true),
+        ) {
+            val category = setting.optString("category")
+            val url = setting.optString("url")
+            when {
+                category.isNotBlank() -> onCategorySelected(category)
+                url.isNotBlank() -> runCatching { uriHandler.openUri(url) }
+                else -> controller?.onAction?.invoke(
+                    page.extensionId,
+                    action,
+                    setting.optJSONObject("args") ?: JSONObject(),
+                )
+            }
+        }
+        "action-row", "chips" -> {
+            val actions = setting.optJSONArray("actions") ?: JSONArray()
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                for (actionIndex in 0 until actions.length()) {
+                    val item = actions.optJSONObject(actionIndex) ?: continue
+                    val itemLabel = item.optString("label")
+                    val itemAction = item.optString("action")
+                    val itemCategory = item.optString("category")
+                    val itemArgs = item.optJSONObject("args") ?: JSONObject()
+                    SettingsSubtleActionButton(
+                        label = itemLabel,
+                        enabled = item.optBoolean("enabled", true),
+                        onClick = {
+                            when {
+                                itemCategory.isNotBlank() -> onCategorySelected(itemCategory)
+                                itemAction.isNotBlank() -> controller?.onAction?.invoke(page.extensionId, itemAction, itemArgs)
+                            }
+                        },
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+            }
+        }
+        "detail-line", "key-value" -> {
+            val value = setting.optString("value").ifBlank { description }
+            Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+                Text(label, style = MaterialTheme.typography.labelSmall, color = AetherOnSurfaceVariant)
+                Text(value, style = MaterialTheme.typography.bodySmall, color = AetherOnSurface)
+            }
+        }
+        "pill", "badge" -> {
+            Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+                ActionPreviewPill(label)
+            }
+        }
+        "result-card", "callout" -> {
+            val value = setting.optString("text").ifBlank { setting.optString("value").ifBlank { label } }
+            val title = setting.optString("title")
+            Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp)) {
+                if (title.isNotBlank()) {
+                    Text(title, style = MaterialTheme.typography.labelMedium, color = AetherOnSurface)
+                    Spacer(Modifier.height(4.dp))
+                }
+                Text(value, style = MaterialTheme.typography.bodySmall, color = AetherOnSurfaceVariant)
+            }
+        }
+        "divider" -> CardDivider()
+        "spacer" -> Spacer(Modifier.height(setting.optInt("size", 8).coerceAtLeast(1).dp))
+        "label" -> Text(label, color = AetherOnSurfaceVariant, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
+        else -> {
+            var value by rememberSaveable(id, stateSaver = TextFieldValue.Saver) {
+                mutableStateOf(TextFieldValue(setting.optString("value")))
+            }
+            ChatGptTextField(
+                label = label,
+                value = value,
+                minLines = if (type == "textarea" || setting.optBoolean("multiline")) 4 else 1,
+                isSecret = type == "password" || setting.optBoolean("secret"),
+                placeholder = setting.optString("placeholder").ifBlank { label },
+                supportingText = description,
+                keyboardOptions = if (type == "number") KeyboardOptions(keyboardType = KeyboardType.Number) else KeyboardOptions.Default,
+                onValueChange = { value = it; update(it.text) },
+            )
+        }
+    }
+}
+
+@Composable
+private fun AetherExtensionItemCard(
+    setting: JSONObject,
+    page: com.zhousl.aether.data.AetherAppExtensionSettingsPage,
+    controller: AetherExtensionUiController?,
+    onCategorySelected: (String) -> Unit,
+) {
+    val id = "${page.id}:${setting.optString("id")}"
+    val title = setting.optString("title").ifBlank { setting.optString("label") }
+    val subtitle = setting.optString("subtitle").ifBlank { setting.optString("tag") }
+    val pill = setting.optString("pill").ifBlank { setting.optString("badge") }
+    val editAction = setting.optString("editAction")
+    val editCategory = setting.optString("editCategory")
+    val editArgs = setting.optJSONObject("editArgs") ?: JSONObject()
+    val deleteAction = setting.optString("deleteAction")
+    val deleteArgs = setting.optJSONObject("deleteArgs") ?: JSONObject()
+    val toggleAction = setting.optString("toggleAction")
+    val hasToggle = setting.has("checked") || setting.has("value") || toggleAction.isNotBlank()
+    var expanded by rememberSaveable(id) { mutableStateOf(setting.optBoolean("expanded", false)) }
+    var checked by remember(id, setting.optBoolean("checked", setting.optBoolean("value", true))) {
+        mutableStateOf(setting.optBoolean("checked", setting.optBoolean("value", true)))
+    }
+    val actions = setting.optJSONArray("actions") ?: JSONArray()
+    val details = setting.optJSONArray("details") ?: JSONArray()
+    val resultText = setting.optString("resultText").ifBlank { setting.optString("result").ifBlank { setting.optString("status") } }
+    val subSettings = setting.optJSONArray("settings") ?: JSONArray()
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(AetherSurfaceHigh)
+            .animateContentSize()
+            .padding(16.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = AetherOnSurface,
+                )
+                if (subtitle.isNotBlank()) {
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = subtitle,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = AetherOnSurfaceVariant,
+                    )
+                }
+                if (pill.isNotBlank()) {
+                    Spacer(Modifier.height(8.dp))
+                    ActionPreviewPill(label = pill)
+                }
+            }
+            IconButton(onClick = { expanded = !expanded }, modifier = Modifier.size(36.dp)) {
+                Icon(
+                    if (expanded) Icons.Rounded.ArrowDropDown else Icons.AutoMirrored.Rounded.ArrowForwardIos,
+                    contentDescription = if (expanded) stringResource(R.string.action_collapse) else stringResource(R.string.action_expand),
+                    tint = AetherOnSurfaceVariant,
+                    modifier = Modifier.size(20.dp),
+                )
+            }
+            if (editAction.isNotBlank() || editCategory.isNotBlank()) {
+                IconButton(
+                    onClick = {
+                        if (editCategory.isNotBlank()) {
+                            onCategorySelected(editCategory)
+                        } else if (editAction.isNotBlank()) {
+                            controller?.onAction?.invoke(page.extensionId, editAction, editArgs)
+                        }
+                    },
+                    modifier = Modifier.size(36.dp),
+                ) {
+                    Icon(
+                        Icons.Rounded.Edit,
+                        contentDescription = stringResource(R.string.action_edit),
+                        tint = AetherOnSurface,
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
+            }
+            if (deleteAction.isNotBlank()) {
+                IconButton(
+                    onClick = {
+                        controller?.onAction?.invoke(page.extensionId, deleteAction, deleteArgs)
+                    },
+                    modifier = Modifier.size(36.dp),
+                ) {
+                    Icon(
+                        Icons.Rounded.Delete,
+                        contentDescription = stringResource(R.string.action_remove),
+                        tint = Color(0xFFD25757),
+                        modifier = Modifier.size(20.dp),
+                    )
+                }
+            }
+        }
+
+        if (hasToggle) {
+            Spacer(Modifier.height(12.dp))
+            SettingsToggleRow(
+                title = "",
+                subtitle = "",
+                checked = checked,
+                onCheckedChange = {
+                    checked = it
+                    if (toggleAction.isNotBlank()) {
+                        controller?.onAction?.invoke(
+                            page.extensionId,
+                            toggleAction,
+                            JSONObject()
+                                .put("setting", setting.optString("id"))
+                                .put("value", it)
+                                .put("checked", it),
+                        )
+                    }
+                },
+            )
+        }
+
+        if (expanded) {
+            if (actions.length() > 0) {
+                Spacer(Modifier.height(14.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    for (actionIndex in 0 until actions.length()) {
+                        val item = actions.optJSONObject(actionIndex) ?: continue
+                        val itemLabel = item.optString("label")
+                        val itemAction = item.optString("action")
+                        val itemCategory = item.optString("category")
+                        val itemArgs = item.optJSONObject("args") ?: JSONObject()
+                        SettingsSubtleActionButton(
+                            label = itemLabel,
+                            enabled = item.optBoolean("enabled", true),
+                            onClick = {
+                                if (itemCategory.isNotBlank()) {
+                                    onCategorySelected(itemCategory)
+                                } else if (itemAction.isNotBlank()) {
+                                    controller?.onAction?.invoke(page.extensionId, itemAction, itemArgs)
+                                }
+                            },
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                }
+            }
+
+            if (details.length() > 0) {
+                Spacer(Modifier.height(14.dp))
+                for (detailIndex in 0 until details.length()) {
+                    val detail = details.optJSONObject(detailIndex) ?: continue
+                    val detailLabel = detail.optString("label")
+                    val detailValue = detail.optString("value")
+                    Column(Modifier.fillMaxWidth().padding(top = 8.dp)) {
+                        Text(detailLabel, style = MaterialTheme.typography.labelSmall, color = AetherOnSurfaceVariant)
+                        Text(detailValue, style = MaterialTheme.typography.bodySmall, color = AetherOnSurface)
+                    }
+                }
+            }
+
+            if (resultText.isNotBlank()) {
+                Spacer(Modifier.height(14.dp))
+                SettingsCardGroup {
+                    Text(
+                        text = resultText,
+                        modifier = Modifier.padding(16.dp),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = AetherOnSurfaceVariant,
+                    )
+                }
+            }
+
+            if (subSettings.length() > 0) {
+                Spacer(Modifier.height(14.dp))
+                SettingsCardGroup {
+                    Column {
+                        for (subIndex in 0 until subSettings.length()) {
+                            val subSetting = subSettings.optJSONObject(subIndex) ?: continue
+                            AetherExtensionControlRow(
+                                setting = subSetting,
+                                page = page,
+                                controller = controller,
+                                onCategorySelected = onCategorySelected,
+                            )
+                            val subType = subSetting.optString("type").ifBlank { "text" }
+                            if (subIndex < subSettings.length() - 1 && subType !in setOf("divider", "spacer")) CardDivider()
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AetherExtensionEmptyState(
+    setting: JSONObject,
+    page: com.zhousl.aether.data.AetherAppExtensionSettingsPage,
+    controller: AetherExtensionUiController?,
+    onCategorySelected: (String) -> Unit,
+) {
+    val title = setting.optString("title").ifBlank { setting.optString("label") }
+    val description = setting.optString("description").ifBlank { setting.optString("subtitle") }
+    val buttonLabel = setting.optString("buttonLabel").ifBlank { "Add" }
+    val action = setting.optString("action")
+    val category = setting.optString("category")
+    val args = setting.optJSONObject("args") ?: JSONObject()
+
+    SettingsCardGroup {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            if (title.isNotBlank()) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleMedium,
+                    color = AetherOnSurface,
+                )
+                Spacer(Modifier.height(8.dp))
+            }
+            if (description.isNotBlank()) {
+                Text(
+                    text = description,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = AetherOnSurfaceVariant,
+                )
+                Spacer(Modifier.height(16.dp))
+            }
+            if (buttonLabel.isNotBlank()) {
+                SettingsActionButton(
+                    label = buttonLabel,
+                    onClick = {
+                        if (category.isNotBlank()) {
+                            onCategorySelected(category)
+                        } else if (action.isNotBlank()) {
+                            controller?.onAction?.invoke(page.extensionId, action, args)
+                        }
+                    },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun AetherExtensionSettingsPage(
+    page: com.zhousl.aether.data.AetherAppExtensionSettingsPage,
+    category: com.zhousl.aether.data.AetherAppExtensionSettingsCategory?,
+    onBack: () -> Unit,
+    onCategorySelected: (String) -> Unit = {},
+) {
+    val controller = LocalAetherExtensionUiController.current
+    val trailingIcon = settingsTrailingIcon(category?.trailingIcon?.ifBlank { null } ?: page.trailingIcon)
+    val trailingAction = category?.trailingAction?.ifBlank { null } ?: page.trailingAction
+    val trailingCategory = category?.trailingCategory?.ifBlank { null } ?: page.trailingCategory
+    val trailingArgs = category?.trailingArgs?.takeIf { it.length() > 0 } ?: page.trailingArgs
+    SubPageScaffold(
+        title = category?.title ?: page.title,
+        onBack = onBack,
+        trailingIcon = trailingIcon,
+        onTrailingAction = {
+            if (!trailingCategory.isNullOrBlank()) {
+                onCategorySelected(trailingCategory)
+            } else if (trailingAction.isNotBlank()) {
+                controller?.onAction?.invoke(page.extensionId, trailingAction, trailingArgs)
+            } else {
+                onBack()
+            }
+        },
+    ) {
+        if (category != null && category.subtitle.isNotBlank()) {
+            Text(category.subtitle, style = MaterialTheme.typography.bodySmall, color = AetherOnSurfaceVariant, modifier = Modifier.padding(horizontal = 4.dp))
+            Spacer(Modifier.height(12.dp))
+        }
+        AetherExtensionSettingsSections(category?.sections ?: page.sections, page, controller)
+    }
+}
+
+private fun settingsTrailingIcon(name: String): ImageVector? {
+    if (name.isBlank()) return null
+    return when (name.lowercase()) {
+        "none", "hidden", "false" -> null
+        else -> extensionIcon(name)
+    }
+}
+
+
+@Composable
 private fun WebToolsPage(
     title: String,
     searchBackendValue: SearchBackend,
@@ -3321,7 +3996,7 @@ private fun SkillCard(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(16.dp))
-            .background(AetherSurfaceHigh)
+            .background(AetherSurface)
             .animateContentSize()
             .padding(16.dp),
     ) {
@@ -3378,7 +4053,7 @@ private fun SkillCard(
                 Icon(
                     Icons.Rounded.Delete,
                     contentDescription = stringResource(R.string.action_remove),
-                    tint = MaterialTheme.colorScheme.error,
+                    tint = Color(0xFFD25757),
                     modifier = Modifier.size(20.dp),
                 )
             }
@@ -3746,6 +4421,7 @@ private fun ScriptExtensionStatusCard(
 @Composable
 private fun PiExtensionsPage(
     installedExtensions: List<InstalledPiExtension>,
+    hasLoadedInstalledExtensions: Boolean,
     nativeModState: AetherNativeModState,
     catalog: List<PiExtensionCatalogEntry>,
     isLoading: Boolean,
@@ -3794,6 +4470,7 @@ private fun PiExtensionsPage(
         onBack = onBack,
         trailingIcon = Icons.Rounded.FileUpload,
         trailingEnabled = operationSource.isBlank(),
+        trailingLoading = operationSource == "import",
         trailingContentDescription = stringResource(R.string.settings_import_extension),
         onTrailingAction = onImport,
     ) {
@@ -3921,7 +4598,24 @@ private fun PiExtensionsPage(
             }
 
             else -> {
-                if (installedExtensions.isEmpty()) {
+                if (!hasLoadedInstalledExtensions) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 32.dp),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(22.dp),
+                            strokeWidth = 2.dp,
+                            color = AetherPrimary,
+                        )
+                        Spacer(Modifier.width(12.dp))
+                        Text(
+                            stringResource(R.string.settings_loading_installed_extensions),
+                            color = AetherOnSurfaceVariant,
+                        )
+                    }
+                } else if (installedExtensions.isEmpty()) {
                     SettingsCardGroup {
                         Column(
                             modifier = Modifier.fillMaxWidth().padding(24.dp),
@@ -3943,6 +4637,7 @@ private fun PiExtensionsPage(
                                 label = stringResource(R.string.settings_import_extension),
                                 onClick = onImport,
                                 enabled = operationSource.isBlank(),
+                                isLoading = operationSource == "import",
                             )
                         }
                     }
@@ -4662,7 +5357,7 @@ private fun McpServerCard(
                 Icon(
                     Icons.Rounded.Delete,
                     contentDescription = stringResource(R.string.action_remove),
-                    tint = MaterialTheme.colorScheme.error,
+                    tint = Color(0xFFD25757),
                     modifier = Modifier.size(20.dp),
                 )
             }
@@ -4830,7 +5525,7 @@ private fun ScheduledTaskCard(
                 Icon(
                     Icons.Rounded.Delete,
                     contentDescription = stringResource(R.string.action_delete),
-                    tint = MaterialTheme.colorScheme.error,
+                    tint = Color(0xFFD25757),
                     modifier = Modifier.size(20.dp),
                 )
             }
@@ -5269,10 +5964,8 @@ private fun TermuxSettingsPage(
     termuxSetupState: TermuxSetupState,
     rootSetupState: RootSetupState,
     selectedWorkspaceMode: AgentWorkspaceMode,
-    liveOutputEnabled: Boolean,
     environmentVariables: List<TermuxEnvironmentVariable>,
     onWorkspaceModeSelected: (AgentWorkspaceMode) -> Unit,
-    onLiveOutputEnabledChanged: (Boolean) -> Unit,
     onEnvironmentVariablesChanged: (List<TermuxEnvironmentVariable>) -> Unit,
     onRequestTermuxPermission: () -> Unit,
     onOpenAppPermissions: () -> Unit,
@@ -5332,13 +6025,6 @@ private fun TermuxSettingsPage(
         WorkspaceModeSettingsSection(
             selectedWorkspaceMode = selectedWorkspaceMode,
             onWorkspaceModeSelected = onWorkspaceModeSelected,
-        )
-
-        Spacer(Modifier.height(16.dp))
-
-        TermuxLiveOutputSettingsSection(
-            liveOutputEnabled = liveOutputEnabled,
-            onLiveOutputEnabledChanged = onLiveOutputEnabledChanged,
         )
 
         Spacer(Modifier.height(16.dp))
@@ -5425,23 +6111,6 @@ private fun RuntimeCleanupDeveloperSettingsSection(
                     )
                 }
             }
-        }
-    }
-}
-
-@Composable
-private fun TermuxLiveOutputSettingsSection(
-    liveOutputEnabled: Boolean,
-    onLiveOutputEnabledChanged: (Boolean) -> Unit,
-) {
-    SettingsCardGroup {
-        Column(modifier = Modifier.padding(16.dp)) {
-            SettingsToggleRow(
-                title = stringResource(R.string.settings_live_command_output),
-                subtitle = stringResource(R.string.settings_live_command_output_description),
-                checked = liveOutputEnabled,
-                onCheckedChange = onLiveOutputEnabledChanged,
-            )
         }
     }
 }
@@ -6007,7 +6676,7 @@ private fun AgentModeSettingsPage(
                                 if (display.isAetherDisplay) {
                                     MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.78f)
                                 } else {
-                                    AetherBackground
+                                    AetherSettingsBackground
                                 }
                                     )
                                     .padding(horizontal = 14.dp, vertical = 12.dp),
@@ -6811,6 +7480,7 @@ private fun AboutPage(
                 },
                 onClick = onDownloadAndInstallUpdate,
                 enabled = !appUpdate.isDownloading,
+                isLoading = appUpdate.isDownloading,
                 modifier = Modifier.fillMaxWidth(),
             )
         }
@@ -6849,6 +7519,7 @@ private fun SubPageScaffold(
     onBack: () -> Unit,
     trailingIcon: ImageVector? = null,
     trailingEnabled: Boolean = true,
+    trailingLoading: Boolean = false,
     trailingContentDescription: String = title,
     onTrailingAction: (() -> Unit)? = null,
     secondaryTrailingIcon: ImageVector? = null,
@@ -6867,7 +7538,7 @@ private fun SubPageScaffold(
     }
     Scaffold(
         modifier = Modifier.fillMaxSize(),
-        containerColor = AetherBackground,
+        containerColor = AetherSettingsBackground,
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
     ) { innerPadding ->
         Box(
@@ -6895,6 +7566,7 @@ private fun SubPageScaffold(
                 onBack = onBack,
                 trailingIcon = trailingIcon,
                 trailingEnabled = trailingEnabled,
+                trailingLoading = trailingLoading,
                 trailingContentDescription = trailingContentDescription,
                 onTrailingAction = onTrailingAction,
                 secondaryTrailingIcon = secondaryTrailingIcon,
@@ -6916,6 +7588,7 @@ private fun SettingsTopBarOverlay(
     onBack: () -> Unit,
     trailingIcon: ImageVector? = null,
     trailingEnabled: Boolean = true,
+    trailingLoading: Boolean = false,
     trailingContentDescription: String = title,
     onTrailingAction: (() -> Unit)? = null,
     secondaryTrailingIcon: ImageVector? = null,
@@ -6938,6 +7611,7 @@ private fun SettingsTopBarOverlay(
                 onBack = onBack,
                 trailingIcon = trailingIcon,
                 trailingEnabled = trailingEnabled,
+                trailingLoading = trailingLoading,
                 trailingContentDescription = trailingContentDescription,
                 onTrailingAction = onTrailingAction,
                 secondaryTrailingIcon = secondaryTrailingIcon,
@@ -6961,6 +7635,7 @@ private fun SettingsTopBar(
     onBack: () -> Unit,
     trailingIcon: ImageVector? = null,
     trailingEnabled: Boolean = true,
+    trailingLoading: Boolean = false,
     trailingContentDescription: String = title,
     onTrailingAction: (() -> Unit)? = null,
     secondaryTrailingIcon: ImageVector? = null,
@@ -6999,7 +7674,15 @@ private fun SettingsTopBar(
                     onClick = onSecondaryTrailingAction,
                 )
             }
-            if (trailingIcon != null && onTrailingAction != null) {
+            if (trailingLoading) {
+                Box(modifier = Modifier.size(44.dp), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(20.dp),
+                        strokeWidth = 2.dp,
+                        color = AetherPrimary,
+                    )
+                }
+            } else if (trailingIcon != null && onTrailingAction != null) {
                 SettingsCircleButton(
                     icon = trailingIcon,
                     contentDescription = trailingContentDescription,

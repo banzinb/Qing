@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -28,11 +29,13 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalDrawerSheet
@@ -79,6 +82,7 @@ import com.zhousl.aether.ui.theme.AetherOnSurface
 import com.zhousl.aether.ui.theme.AetherOnSurfaceVariant
 import com.zhousl.aether.ui.theme.AetherBackground
 import com.zhousl.aether.ui.theme.AetherScrim
+import com.zhousl.aether.ui.theme.AetherSidebarBackground
 import com.zhousl.aether.ui.theme.AetherSurface
 import com.zhousl.aether.ui.theme.AetherSurfaceHigh
 import kotlinx.coroutines.delay
@@ -110,14 +114,18 @@ fun AetherConversationDrawer(
     onSettingsSelected: () -> Unit,
     permanent: Boolean = false,
     extraContent: @Composable ((dismissSearch: () -> Unit) -> Unit) = {},
+    headerContent: @Composable () -> Unit = {},
+    footerContent: @Composable () -> Unit = {},
 ) {
     var searchExpanded by rememberSaveable { mutableStateOf(false) }
     var searchQuery by rememberSaveable { mutableStateOf("") }
     var overlayHeightPx by remember { mutableIntStateOf(0) }
+    var footerHeightPx by remember { mutableIntStateOf(0) }
     val density = LocalDensity.current
     val overlayHeight = with(density) {
         if (overlayHeightPx > 0) overlayHeightPx.toDp() else 132.dp
     }
+    val listBottomPadding = 96.dp + with(density) { footerHeightPx.toDp() }
     val filteredSessions = remember(sessions, searchQuery) {
         val query = searchQuery.trim().lowercase()
         if (query.isBlank()) sessions else sessions.filter { it.title.lowercase().contains(query) }
@@ -126,7 +134,7 @@ fun AetherConversationDrawer(
         searchExpanded = false
         searchQuery = ""
     }
-    val drawerBackground = if (permanent) AetherBackground else AetherSurface
+    val drawerBackground = if (permanent) AetherBackground else AetherSidebarBackground
 
     ModalDrawerSheet(
         modifier = Modifier.fillMaxHeight().width(if (permanent) 320.dp else 322.dp),
@@ -140,11 +148,12 @@ fun AetherConversationDrawer(
                 Column(
                     modifier = Modifier
                         .fillMaxSize()
+                        .verticalScroll(rememberScrollState())
                         .padding(
                             start = 16.dp,
                             end = 16.dp,
                             top = overlayHeight - SharedDrawerOverlayFadeHeight,
-                            bottom = 96.dp,
+                            bottom = listBottomPadding,
                         ),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
@@ -169,7 +178,7 @@ fun AetherConversationDrawer(
                         start = 16.dp,
                         end = 16.dp,
                         top = overlayHeight - SharedDrawerOverlayFadeHeight,
-                        bottom = 96.dp,
+                        bottom = listBottomPadding,
                     ),
                     verticalArrangement = Arrangement.spacedBy(2.dp),
                 ) {
@@ -214,9 +223,10 @@ fun AetherConversationDrawer(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Text(
-                            text = "Qing",
-                            style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.SemiBold),
+                            text = "Aether",
+                            style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Normal),
                             color = AetherOnSurface,
+                            modifier = Modifier.padding(start = 6.dp),
                         )
                         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                             HeaderCircleButton(
@@ -227,7 +237,8 @@ fun AetherConversationDrawer(
                                     else searchExpanded = true
                                 },
                                 size = 46.dp,
-                                containerColor = AetherSurface.copy(alpha = 0.90f),
+                                containerColor = Color.Transparent,
+                                showHalo = false,
                             )
                             HeaderCircleButton(
                                 icon = LucideIcons.Settings,
@@ -237,7 +248,8 @@ fun AetherConversationDrawer(
                                     onSettingsSelected()
                                 },
                                 size = 46.dp,
-                                containerColor = AetherSurface.copy(alpha = 0.90f),
+                                containerColor = Color.Transparent,
+                                showHalo = false,
                             )
                         }
                     }
@@ -249,12 +261,31 @@ fun AetherConversationDrawer(
                     }
                     Spacer(modifier = Modifier.height(if (searchExpanded || searchQuery.isNotBlank()) 10.dp else 12.dp))
                 }
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp),
+                ) {
+                    headerContent()
+                }
                 Spacer(
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(SharedDrawerOverlayFadeHeight)
                         .background(sharedDrawerOverlayTailGradient(drawerBackground)),
                 )
+            }
+
+            Column(
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .fillMaxWidth()
+                    .navigationBarsPadding()
+                    .padding(horizontal = 16.dp)
+                    .offset(y = (-86).dp)
+                    .onSizeChanged { footerHeightPx = it.height },
+            ) {
+                footerContent()
             }
 
             Row(
@@ -264,7 +295,7 @@ fun AetherConversationDrawer(
                     .padding(end = 18.dp, bottom = 18.dp)
                     .shadow(18.dp, RoundedCornerShape(999.dp), ambientColor = AetherScrim, spotColor = AetherScrim)
                     .clip(RoundedCornerShape(999.dp))
-                    .background(Brush.horizontalGradient(listOf(Color(0xFF7A4DFF), Color(0xFF925BFF))))
+                    .background(Color(0xFFAD7BF9))
                     .clickable {
                         dismissSearch()
                         onNewChat()

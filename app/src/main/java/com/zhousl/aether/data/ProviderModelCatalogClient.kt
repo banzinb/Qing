@@ -1,138 +1,169 @@
 package com.zhousl.aether.data
 
-import com.zhousl.aether.data.pi.PiKernelBridge
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
 
-private val PiThinkingLevels = listOf("off", "minimal", "low", "medium", "high", "xhigh", "max")
-
-internal fun supportedThinkingLevels(levels: JSONArray): List<String> =
-    buildList {
-        for (index in 0 until levels.length()) {
-            val level = levels.optString(index).trim()
-            if (level in PiThinkingLevels && level !in this) add(level)
-        }
-    }
-
-internal fun piThinkingLevelClamps(clamps: JSONObject): Map<String, String> =
-    PiThinkingLevels.mapNotNull { level ->
-        clamps.optString(level).takeIf { it in PiThinkingLevels }?.let { level to it }
-    }.toMap()
+private val ThinkingLevels = listOf("off", "minimal", "low", "medium", "high", "xhigh", "max")
 
 internal fun thinkingCatalogKey(providerId: String, modelId: String): String =
     "${providerId.trim()}/${modelId.substringAfterLast('/').trim()}"
 
+private fun ProviderModelOption.publicCatalogProviderIds(): List<String> = buildList {
+    add(
+        when (piProviderId.trim()) {
+            "openai-codex" -> "openai"
+            "kimi-coding" -> "moonshotai"
+            else -> piProviderId.trim()
+        }
+    )
+    modelId.substringBeforeLast('/', "").trim().takeIf(String::isNotBlank)?.let(::add)
+    if (modelId.substringAfterLast('/').trim().startsWith("kimi-", ignoreCase = true)) {
+        add("moonshotai")
+    }
+}.filter(String::isNotBlank).distinct()
+
+private fun ProviderModelOption.publicCatalogModelKeys(): List<String> = listOf(
+    modelId,
+    modelId.substringAfter("$piProviderId/", modelId),
+    modelId.substringAfterLast('/'),
+).map(String::trim).filter(String::isNotBlank).distinct()
+
+private fun JSONObject.findPublicCatalogModel(option: ProviderModelOption): JSONObject? {
+    option.publicCatalogModelKeys().firstNotNullOfOrNull(::optJSONObject)?.let { return it }
+    val normalizedModelId = option.modelId.substringAfterLast('/').trim()
+    return keys().asSequence().mapNotNull { key ->
+        optJSONObject(key)?.takeIf { model ->
+            listOf(key, model.optString("id")).any { candidateId ->
+                candidateId.substringAfterLast('/').trim()
+                    .equals(normalizedModelId, ignoreCase = true)
+            }
+        }
+    }.firstOrNull()
+}
+
+private fun JSONObject.findPublicCatalogModelAcrossProviders(option: ProviderModelOption): JSONObject? {
+    option.publicCatalogProviderIds().firstNotNullOfOrNull { providerId ->
+        optJSONObject(providerId)?.optJSONObject("models")?.findPublicCatalogModel(option)
+    }?.let { return it }
+    return keys().asSequence().mapNotNull { providerId ->
+        optJSONObject(providerId)?.optJSONObject("models")?.findPublicCatalogModel(option)
+    }.firstOrNull()
+}
+
+internal fun publicCatalogThinkingLevels(
+    catalog: JSONObject,
+    options: List<ProviderModelOption>,
+): Map<String, List<String>> {
+    val providers = catalog.optJSONObject("providers") ?: return emptyMap()
+    return buildMap {
+        options.forEach { option ->
+            val model = providers.findPublicCatalogModelAcrossProviders(option)
+            val levels = model?.takeIf { it.optBoolean("reasoning") }?.let { definition ->
+                buildList {
+                    val reasoningOptions = definition.optJSONArray("reasoning_options")
+                    if ((0 until (reasoningOptions?.length() ?: 0)).any {
+                            reasoningOptions?.optJSONObject(it)?.optString("type") == "toggle"
+                        }
+                    ) {
+                        add("off")
+                    }
+                    for (index in 0 until (reasoningOptions?.length() ?: 0)) {
+                        val effort = reasoningOptions?.optJSONObject(index) ?: continue
+                        if (effort.optString("type") != "effort") continue
+                        val values = effort.optJSONArray("values") ?: continue
+                        for (valueIndex in 0 until values.length()) {
+                            val value = values.optString(valueIndex).trim()
+                            val normalizedValue = if (value == "none") "off" else value
+                            if (normalizedValue in ThinkingLevels && normalizedValue !in this) {
+                                add(normalizedValue)
+                            }
+                        }
+                    }
+                }
+            }.orEmpty()
+            put(thinkingCatalogKey(option.piProviderId, option.modelId), levels)
+        }
+    }
+}
+
 object ProviderModelCatalogClient {
+
+    private const val ModelsDevUrl = "https://models.dev/catalog.json"
 
     data class FetchModelsResult(
         val models: List<String>,
         val error: String? = null,
-        val thinkingLevelsByModel: Map<String, List<String>> = emptyMap(),
-        val thinkingLevelClampsByModel: Map<String, Map<String, String>> = emptyMap(),
     )
 
     suspend fun fetchModels(
         config: LlmProviderConfig,
-        piKernelBridge: PiKernelBridge? = null,
-        startPiBridgeIfNeeded: Boolean = true,
-    ): FetchModelsResult = withContext(Dispatchers.IO) {
-        try {
-            val definition = PiProviderCatalog.resolve(
-                config.piProviderId,
-            )
-            if (!shouldFetchModelsFromEndpoint(config, definition)) {
-                return@withContext fetchPiBuiltinModels(
-                    definition = definition,
-                    piKernelBridge = piKernelBridge,
-                    startPiBridgeIfNeeded = startPiBridgeIfNeeded,
-                )
-            }
-            fetchOpenAiModels(config)
-        } catch (e: Exception) {
-            FetchModelsResult(emptyList(), e.message ?: "Unknown error")
-        }
-    }
+    ): FetchModelsResult = fetchModels(config, ModelsDevUrl)
 
-    suspend fun fetchPiThinkingLevels(
+    internal suspend fun fetchModels(
         config: LlmProviderConfig,
-        piKernelBridge: PiKernelBridge?,
-        startPiBridgeIfNeeded: Boolean = true,
+        modelsDevUrl: String,
     ): FetchModelsResult = withContext(Dispatchers.IO) {
         try {
             val definition = PiProviderCatalog.resolve(config.piProviderId)
-            if (!definition.isBuiltIn) return@withContext FetchModelsResult(emptyList())
-            fetchPiBuiltinModels(
-                definition = definition,
-                piKernelBridge = piKernelBridge,
-                startPiBridgeIfNeeded = startPiBridgeIfNeeded,
+            val providerModels = runCatching { fetchProviderModels(config) }.getOrElse { error ->
+                FetchModelsResult(emptyList(), error.message ?: "Unable to fetch models.")
+            }
+            if (providerModels.models.isNotEmpty()) return@withContext providerModels
+
+            val publicModels = fetchModelsDevModels(definition, modelsDevUrl)
+            if (publicModels.models.isNotEmpty()) publicModels else FetchModelsResult(
+                models = emptyList(),
+                error = providerModels.error ?: publicModels.error,
             )
         } catch (e: Exception) {
             FetchModelsResult(emptyList(), e.message ?: "Unknown error")
         }
     }
 
-    private suspend fun fetchPiBuiltinModels(
-        definition: PiProviderDefinition,
-        piKernelBridge: PiKernelBridge?,
-        startPiBridgeIfNeeded: Boolean,
-    ): FetchModelsResult {
-        if (piKernelBridge == null) {
-            return FetchModelsResult(listOf(definition.defaultModelId).filter(String::isNotBlank))
-        }
-        val providers = piKernelBridge.listProviders(startIfNeeded = startPiBridgeIfNeeded)
-            .optJSONArray("providers")
-            ?: return FetchModelsResult(emptyList(), "No provider catalog was returned.")
-        for (providerIndex in 0 until providers.length()) {
-            val provider = providers.optJSONObject(providerIndex) ?: continue
-            if (provider.optString("id") != definition.id) continue
-            val models = provider.optJSONArray("models") ?: return FetchModelsResult(emptyList())
-            val thinkingLevelsByModel = mutableMapOf<String, List<String>>()
-            val thinkingLevelClampsByModel = mutableMapOf<String, Map<String, String>>()
-            for (modelIndex in 0 until models.length()) {
-                val model = models.optJSONObject(modelIndex) ?: continue
-                val modelId = model.optString("id").trim()
-                if (modelId.isBlank() || !model.optBoolean("reasoning")) continue
-                val levels = model.optJSONArray("thinking_levels") ?: JSONArray()
-                thinkingLevelsByModel[modelId] = supportedThinkingLevels(levels)
-                model.optJSONObject("thinking_level_clamps")?.let { clamps ->
-                    thinkingLevelClampsByModel[modelId] = piThinkingLevelClamps(clamps)
+    suspend fun fetchPublicThinkingLevels(options: List<ProviderModelOption>): Map<String, List<String>> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val connection = URL("https://models.dev/catalog.json").openConnection() as HttpURLConnection
+                connection.requestMethod = "GET"
+                connection.connectTimeout = 10_000
+                connection.readTimeout = 20_000
+                try {
+                    if (connection.responseCode != 200) return@runCatching emptyMap()
+                    publicCatalogThinkingLevels(
+                        JSONObject(connection.inputStream.bufferedReader().readText()),
+                        options,
+                    )
+                } finally {
+                    connection.disconnect()
                 }
-            }
-            return FetchModelsResult(
-                models = buildList {
-                    for (modelIndex in 0 until models.length()) {
-                        val modelId = models.optJSONObject(modelIndex)
-                            ?.optString("id")
-                            ?.trim()
-                            .orEmpty()
-                        if (modelId.isNotBlank()) add(modelId)
-                    }
-                }.distinct(),
-                thinkingLevelsByModel = thinkingLevelsByModel,
-                thinkingLevelClampsByModel = thinkingLevelClampsByModel,
-            )
+            }.getOrDefault(emptyMap())
         }
-        return FetchModelsResult(emptyList(), "Provider ${definition.id} is unavailable.")
+
+    private fun fetchModelsDevModels(
+        definition: PiProviderDefinition,
+        modelsDevUrl: String = ModelsDevUrl,
+    ): FetchModelsResult {
+        val connection = URL(modelsDevUrl).openConnection() as HttpURLConnection
+        connection.requestMethod = "GET"
+        connection.connectTimeout = 10_000
+        connection.readTimeout = 20_000
+        return try {
+            if (connection.responseCode != 200) {
+                return FetchModelsResult(emptyList(), "models.dev returned HTTP ${connection.responseCode}.")
+            }
+            modelsDevProviderModels(
+                JSONObject(connection.inputStream.bufferedReader().readText()),
+                definition.modelsDevProviderIds(),
+            )
+        } finally {
+            connection.disconnect()
+        }
     }
 
-    internal fun shouldFetchModelsFromEndpoint(
-        config: LlmProviderConfig,
-        definition: PiProviderDefinition = PiProviderCatalog.resolve(config.piProviderId),
-    ): Boolean {
-        if (!definition.isBuiltIn) return true
-        if (definition.id == "openai" && config.authMethod == ProviderAuthMethod.ApiKey) return true
-
-        val normalizedBaseUrl = config.baseUrl.trim().trimEnd('/')
-        return definition.id == "openai" &&
-            normalizedBaseUrl.isNotBlank() &&
-            normalizedBaseUrl != definition.defaultBaseUrl
-    }
-
-    private fun fetchOpenAiModels(config: LlmProviderConfig): FetchModelsResult {
+    private fun fetchProviderModels(config: LlmProviderConfig): FetchModelsResult {
         val baseUrl = config.baseUrl.trim().trimEnd('/')
         val modelsUrl = when {
             baseUrl.endsWith("/responses") -> baseUrl.replace("/responses", "/models")
@@ -179,4 +210,33 @@ object ProviderModelCatalogClient {
         }
     }
 
+}
+
+internal fun modelsDevProviderModels(
+    catalog: JSONObject,
+    providerIds: List<String>,
+): ProviderModelCatalogClient.FetchModelsResult {
+    val providers = catalog.optJSONObject("providers")
+        ?: return ProviderModelCatalogClient.FetchModelsResult(
+            emptyList(),
+            "No provider catalog was returned by models.dev.",
+        )
+    providerIds.forEach { providerId ->
+        val models = providers.optJSONObject(providerId)?.optJSONObject("models") ?: return@forEach
+        val modelIds = buildList {
+            models.keys().forEach { key ->
+                val modelId = models.optJSONObject(key)?.optString("id").orEmpty()
+                    .ifBlank { key }
+                    .trim()
+                if (modelId.isNotBlank()) add(modelId)
+            }
+        }.distinctBy(String::lowercase)
+        if (modelIds.isNotEmpty()) {
+            return ProviderModelCatalogClient.FetchModelsResult(modelIds)
+        }
+    }
+    return ProviderModelCatalogClient.FetchModelsResult(
+        emptyList(),
+        "Provider ${providerIds.joinToString()} is unavailable in models.dev.",
+    )
 }

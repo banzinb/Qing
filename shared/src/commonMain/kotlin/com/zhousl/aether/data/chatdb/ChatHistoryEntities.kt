@@ -12,13 +12,52 @@ data class ChatSessionEntity(
     val title: String,
     val preview: String,
     val hasCustomTitle: Boolean,
-    val selectedSkillIdsJson: String,
-    val activeSkillsJson: String,
-    val activeMcpServerIdsJson: String,
     val agentModeEnabled: Boolean,
     val chromeEnabled: Boolean,
     val selectedModelKey: String,
     val sortOrder: Long,
+)
+
+@Entity(
+    tableName = "chat_agent_sessions",
+    foreignKeys = [
+        ForeignKey(
+            entity = ChatSessionEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["chatSessionId"],
+            onDelete = ForeignKey.CASCADE,
+        ),
+    ],
+    indices = [Index(value = ["piSessionId"], unique = true)],
+)
+data class ChatAgentSessionEntity(
+    @PrimaryKey
+    val chatSessionId: String,
+    val piSessionId: String,
+    val jsonlPath: String,
+    val runtime: String,
+    val migrationVersion: Int = 1,
+    val updatedAtMillis: Long = 0L,
+)
+
+@Entity(
+    tableName = "chat_agent_message_refs",
+    primaryKeys = ["chatSessionId", "aetherMessageId", "piEntryId"],
+    foreignKeys = [
+        ForeignKey(
+            entity = ChatMessageEntity::class,
+            parentColumns = ["sessionId", "id"],
+            childColumns = ["chatSessionId", "aetherMessageId"],
+            onDelete = ForeignKey.CASCADE,
+        ),
+    ],
+    indices = [Index(value = ["chatSessionId", "piEntryId"]), Index(value = ["chatSessionId", "aetherMessageId"])],
+)
+data class ChatAgentMessageRefEntity(
+    val chatSessionId: String,
+    val aetherMessageId: String,
+    val piEntryId: String,
+    val ordinal: Int = 0,
 )
 
 @Entity(
@@ -51,6 +90,7 @@ data class ChatMessageEntity(
     val displayKind: String? = null,
     val messageSchemaVersion: Int = 1,
     val hasUsageStatistics: Boolean = false,
+    val isIncomplete: Boolean = false,
 )
 
 data class ChatMessageSummaryEntity(
@@ -64,6 +104,7 @@ data class ChatMessageSummaryEntity(
     val displayKind: String? = null,
     val messageSchemaVersion: Int = 1,
     val messageJsonLength: Int? = null,
+    val isIncomplete: Boolean = false,
 )
 
 data class ChatSessionMessageStatsEntity(
@@ -118,4 +159,3 @@ data class ChatSessionSnapshot(
     val messages: List<ChatMessageEntity>,
     val workspaceFileRefs: List<ChatWorkspaceFileRefEntity> = emptyList(),
 )
-

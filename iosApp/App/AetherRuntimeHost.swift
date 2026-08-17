@@ -5,14 +5,54 @@ import UniformTypeIdentifiers
 import QuickLook
 import Darwin
 import BackgroundTasks
+import AuthenticationServices
 import AetherShared
 
-private func aetherLocalized(_ key: String, _ arguments: CVarArg...) -> String {
-    let format = NSLocalizedString(key, comment: "")
-    return String(format: format, locale: Locale.current, arguments: arguments)
+private let alpineNetworkTraceURL = URL(string: "https://www.cloudflare.com/cdn-cgi/trace")!
+private let alpineOfficialRepository = "https://dl-cdn.alpinelinux.org/alpine"
+private let alpineChinaRepository = "https://mirrors.tuna.tsinghua.edu.cn/alpine"
+
+private enum AlpineNetworkEnvironment {
+    case china
+    case international
+    case unknown
 }
 
-final class AetherRuntimeHost: NSObject, NativeRuntimeHost, UIDocumentPickerDelegate, PHPickerViewControllerDelegate, QLPreviewControllerDataSource {
+private func cloudflareCountryCode(_ trace: String) -> String? {
+    trace.split(separator: "\n").first { line in
+        line.lowercased().hasPrefix("loc=")
+    }.map { String($0.dropFirst(4)).trimmingCharacters(in: .whitespacesAndNewlines).uppercased() }
+}
+
+private func alpineRepositories(
+    _ contents: String,
+    environment: AlpineNetworkEnvironment
+) -> String {
+    contents.split(separator: "\n", omittingEmptySubsequences: false).flatMap { line -> [String] in
+        let originalLine = String(line)
+        let official = originalLine
+            .replacingOccurrences(of: "https://dl-cdn.alpinelinux.org/alpine", with: alpineOfficialRepository)
+            .replacingOccurrences(of: "http://dl-cdn.alpinelinux.org/alpine", with: alpineOfficialRepository)
+            .replacingOccurrences(of: "https://mirrors.tuna.tsinghua.edu.cn/alpine", with: alpineOfficialRepository)
+            .replacingOccurrences(of: "http://mirrors.tuna.tsinghua.edu.cn/alpine", with: alpineOfficialRepository)
+        let isAlpineRepository = originalLine.contains("dl-cdn.alpinelinux.org/alpine") ||
+            originalLine.contains("mirrors.tuna.tsinghua.edu.cn/alpine")
+        guard isAlpineRepository else { return [originalLine] }
+        let china = official.replacingOccurrences(of: alpineOfficialRepository, with: alpineChinaRepository)
+        switch environment {
+        case .china:
+            return [china, official]
+        case .international:
+            return [official]
+        case .unknown:
+            return [official, china]
+        }
+    }.reduce(into: [String]()) { lines, line in
+        if !lines.contains(line) { lines.append(line) }
+    }.joined(separator: "\n")
+}
+
+final class AetherRuntimeHost: NSObject, NativeRuntimeHost, UIDocumentPickerDelegate, PHPickerViewControllerDelegate, QLPreviewControllerDataSource, ASWebAuthenticationPresentationContextProviding {
     static let shared = AetherRuntimeHost()
 
     private let runtime = AetherISHRuntime.shared()
@@ -24,11 +64,45 @@ final class AetherRuntimeHost: NSObject, NativeRuntimeHost, UIDocumentPickerDele
     private var fileExportListener: NativeFileExportListener?
     private var fileExportURL: URL?
     private var previewURL: URL?
+    private var authenticationSession: ASWebAuthenticationSession?
     private let backgroundExecution = AetherBackgroundExecutionCoordinator.shared
+    private var startupNetworkEnvironment: AlpineNetworkEnvironment?
 
     private let maximumPickedDirectoryEntries = 4_096
     private let maximumPickedDirectoryEntryBytes = 16 * 1024 * 1024
     private let maximumPickedDirectoryBytes = 128 * 1024 * 1024
+
+    func refreshApkRepositoriesForCurrentNetwork() {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.timeoutIntervalForRequest = 4
+        configuration.timeoutIntervalForResource = 4
+        let session = URLSession(configuration: configuration)
+        var request = URLRequest(
+            url: alpineNetworkTraceURL,
+            cachePolicy: .reloadIgnoringLocalCacheData,
+            timeoutInterval: 4
+        )
+        request.setValue("text/plain", forHTTPHeaderField: "Accept")
+        request.setValue("Aether-Alpine-Network-Check", forHTTPHeaderField: "User-Agent")
+        session.dataTask(with: request) { [weak self] data, response, _ in
+            let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
+            let countryCode = data.flatMap { String(data: $0, encoding: .utf8) }.flatMap(cloudflareCountryCode)
+            let environment: AlpineNetworkEnvironment
+            if (200...299).contains(statusCode), let countryCode {
+                environment = countryCode.caseInsensitiveCompare("CN") == .orderedSame ? .china : .international
+            } else {
+                environment = .unknown
+            }
+            self?.operations.async {
+                guard let self else { return }
+                self.startupNetworkEnvironment = environment
+                if self.initialized {
+                    try? self.configureApkRepositories(environment: environment)
+                }
+            }
+            session.finishTasksAndInvalidate()
+        }.resume()
+    }
 
     func isRuntimeReady(listener: NativeBooleanResultListener) {
         operations.async { [self] in
@@ -41,10 +115,22 @@ final class AetherRuntimeHost: NSObject, NativeRuntimeHost, UIDocumentPickerDele
                 let hasDatabase = FileManager.default.fileExists(
                     atPath: root.appendingPathComponent("meta.db", isDirectory: false).path
                 )
-                let hasSetupMarker = FileManager.default.fileExists(
-                    atPath: try alpineSetupCompleteMarkerURL().path
-                )
-                onMain { listener.onSuccess(value: hasData && hasDatabase && hasSetupMarker) }
+                guard hasData && hasDatabase else {
+                    onMain { listener.onSuccess(value: false) }
+                    return
+                }
+                if initialized {
+                    onMain { listener.onSuccess(value: true) }
+                    return
+                }
+
+                // The iSH kernel state is process-local. After an app relaunch the
+                // rootfs can be complete while the in-memory runtime is not booted;
+                // recover it before reporting readiness to shared UI and tools.
+                initialize(listener: RuntimeReadinessInitializationListener(
+                    onReady: { listener.onSuccess(value: true) },
+                    onError: { listener.onError(message: $0) },
+                ))
             } catch {
                 onMain { listener.onError(message: error.localizedDescription) }
             }
@@ -79,7 +165,7 @@ final class AetherRuntimeHost: NSObject, NativeRuntimeHost, UIDocumentPickerDele
                 onMain { listener.onReady() }
                 return
             }
-            onMain { listener.onProgress(phase: "rootfs", detail: aetherLocalized("runtime_preparing_alpine"), fraction: 0.02) }
+            onMain { listener.onProgress(phase: "rootfs", detail: "Preparing Alpine", fraction: 0.02) }
             runtime.initialize(
                 progress: { phase, detail, fraction in
                     self.onMain {
@@ -152,6 +238,7 @@ final class AetherRuntimeHost: NSObject, NativeRuntimeHost, UIDocumentPickerDele
                 let workspace = try workspaceURL()
                 let chromeRuntime = try chromeRuntimeURL()
                 let chromeDependencies = try chromeDependenciesURL()
+                try configureApkRepositories(environment: startupNetworkEnvironment ?? .unknown)
                 try guestCreateDirectories("/workspace")
                 try guestBind(hostPath: workspace.path, guestPath: "/workspace")
                 try guestCreateDirectories("/usr/lib/chromium")
@@ -171,7 +258,7 @@ final class AetherRuntimeHost: NSObject, NativeRuntimeHost, UIDocumentPickerDele
 
     private func checkNode(listener: NativeRuntimeInitializationListener) {
         onMain {
-            listener.onProgress(phase: "checking_node", detail: aetherLocalized("runtime_checking_node"), fraction: 0.82)
+            listener.onProgress(phase: "checking_node", detail: "Checking Node 22", fraction: 0.82)
         }
         let pid = runtime.startExecutable(
             "/bin/sh",
@@ -191,13 +278,13 @@ final class AetherRuntimeHost: NSObject, NativeRuntimeHost, UIDocumentPickerDele
             }
         )
         if pid < 0 {
-            onMain { listener.onError(message: aetherLocalized("runtime_node_check_failed", pid)) }
+            onMain { listener.onError(message: "Unable to check Node 22 in Alpine (\(pid)).") }
         }
     }
 
     private func installNode(listener: NativeRuntimeInitializationListener) {
         onMain {
-            listener.onProgress(phase: "installing_node", detail: aetherLocalized("runtime_installing_node"), fraction: 0.84)
+            listener.onProgress(phase: "installing_node", detail: "Installing Node 22", fraction: 0.84)
         }
         var installOutput = ""
         let pid = runtime.startExecutable(
@@ -224,7 +311,7 @@ final class AetherRuntimeHost: NSObject, NativeRuntimeHost, UIDocumentPickerDele
             }
         )
         if pid < 0 {
-            onMain { listener.onError(message: aetherLocalized("runtime_package_setup_start_failed", pid)) }
+            onMain { listener.onError(message: "Unable to start Alpine package setup (\(pid)).") }
         }
     }
 
@@ -259,7 +346,7 @@ final class AetherRuntimeHost: NSObject, NativeRuntimeHost, UIDocumentPickerDele
             }
         )
         if pid < 0 {
-            onMain { listener.onError(message: aetherLocalized("runtime_node_verify_failed", pid)) }
+            onMain { listener.onError(message: "Unable to verify Node 22 in Alpine (\(pid)).") }
         }
     }
 
@@ -283,11 +370,7 @@ final class AetherRuntimeHost: NSObject, NativeRuntimeHost, UIDocumentPickerDele
                 try Data().write(to: self.alpineSetupCompleteMarkerURL(), options: .atomic)
                 self.initialized = true
                 self.onMain {
-                    listener.onProgress(
-                        phase: "ready",
-                        detail: aetherLocalized("runtime_alpine_ready"),
-                        fraction: 1.0
-                    )
+                    listener.onProgress(phase: "ready", detail: "Alpine is ready", fraction: 1.0)
                     listener.onReady()
                 }
             } catch {
@@ -357,6 +440,36 @@ final class AetherRuntimeHost: NSObject, NativeRuntimeHost, UIDocumentPickerDele
         runtime.resizeTerminal(forProcessId: Int32(processId), columns: columns, rows: rows)
     }
 
+    func createTerminalView(listener: NativeTerminalViewListener) -> Any {
+        let view = AetherTerminalView(frame: .zero)
+        view.onInput = { data in listener.onInput(bytes: data.kotlinByteArray) }
+        view.onResize = { columns, rows in
+            listener.onResize(columns: Int32(columns), rows: Int32(rows))
+        }
+        view.onTitleChanged = { title in listener.onTitleChanged(title: title) }
+        return view
+    }
+
+    func updateTerminalView(view: Any, bytes: KotlinByteArray) {
+        (view as? AetherTerminalView)?.feed(bytes.data)
+    }
+
+    func setTerminalDarkTheme(view: Any, darkTheme: Bool) {
+        (view as? AetherTerminalView)?.setDarkTheme(darkTheme)
+    }
+
+    func focusTerminalView(view: Any) {
+        (view as? AetherTerminalView)?.focus()
+    }
+
+    func sendTerminalKey(view: Any, key: String, controlDown: Bool, altDown: Bool) {
+        (view as? AetherTerminalView)?.sendKey(key, control: controlDown, alt: altDown)
+    }
+
+    func destroyTerminalView(view: Any) {
+        (view as? AetherTerminalView)?.cleanup()
+    }
+
     func fileExists(path: String, listener: NativeBooleanResultListener) {
         operations.async { [self] in
             guard runtime.isInitialized else {
@@ -391,7 +504,7 @@ final class AetherRuntimeHost: NSObject, NativeRuntimeHost, UIDocumentPickerDele
                     throw NSError(
                         domain: "com.baimoqilin.aether.runtime-host",
                         code: 1,
-                        userInfo: [NSLocalizedDescriptionKey: aetherLocalized("runtime_invalid_file_size_limit")]
+                        userInfo: [NSLocalizedDescriptionKey: "Invalid file size limit."]
                     )
                 }
                 let data = try runtime.readFile(path, maximumBytes: UInt(maximumBytes))
@@ -409,7 +522,7 @@ final class AetherRuntimeHost: NSObject, NativeRuntimeHost, UIDocumentPickerDele
                     throw NSError(
                         domain: "com.baimoqilin.aether.runtime-host",
                         code: 1,
-                        userInfo: [NSLocalizedDescriptionKey: aetherLocalized("runtime_invalid_file_size_limit")]
+                        userInfo: [NSLocalizedDescriptionKey: "Invalid file size limit."]
                     )
                 }
                 let data = try runtime.readFilePrefix(path, maximumBytes: UInt(maximumBytes))
@@ -470,11 +583,11 @@ final class AetherRuntimeHost: NSObject, NativeRuntimeHost, UIDocumentPickerDele
     func pickFile(imagesOnly: Bool, listener: NativePickedFileListener) {
         onMain { [self] in
             guard !hasActiveDocumentPicker else {
-                listener.onError(message: aetherLocalized("picker_already_open"))
+                listener.onError(message: "Another file picker is already open.")
                 return
             }
             guard let presenter = topViewController() else {
-                listener.onError(message: aetherLocalized("picker_file_unavailable"))
+                listener.onError(message: "Unable to present the file picker.")
                 return
             }
             filePickerListener = listener
@@ -489,11 +602,11 @@ final class AetherRuntimeHost: NSObject, NativeRuntimeHost, UIDocumentPickerDele
     func pickFiles(imagesOnly: Bool, listener: NativePickedFilesListener) {
         onMain { [self] in
             guard !hasActiveDocumentPicker else {
-                listener.onError(message: aetherLocalized("picker_already_open"))
+                listener.onError(message: "Another file picker is already open.")
                 return
             }
             guard let presenter = topViewController() else {
-                listener.onError(message: aetherLocalized("picker_file_unavailable"))
+                listener.onError(message: "Unable to present the file picker.")
                 return
             }
             filesPickerListener = listener
@@ -517,15 +630,18 @@ final class AetherRuntimeHost: NSObject, NativeRuntimeHost, UIDocumentPickerDele
     func pickDirectory(listener: NativePickedDirectoryListener) {
         onMain { [self] in
             guard !hasActiveDocumentPicker else {
-                listener.onError(message: aetherLocalized("picker_already_open"))
+                listener.onError(message: "Another file picker is already open.")
                 return
             }
             guard let presenter = topViewController() else {
-                listener.onError(message: aetherLocalized("picker_folder_unavailable"))
+                listener.onError(message: "Unable to present the folder picker.")
                 return
             }
             directoryPickerListener = listener
-            let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.folder], asCopy: true)
+            // Folder imports must keep the provider-backed URL in place. Asking the
+            // document picker to copy a directory can crash when the provider commits
+            // the selection; read it under its security-scoped access instead.
+            let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.folder], asCopy: false)
             picker.delegate = self
             picker.allowsMultipleSelection = false
             presenter.present(picker, animated: true)
@@ -536,6 +652,45 @@ final class AetherRuntimeHost: NSObject, NativeRuntimeHost, UIDocumentPickerDele
         guard let target = URL(string: url), UIApplication.shared.canOpenURL(target) else { return false }
         onMain { UIApplication.shared.open(target) }
         return true
+    }
+
+    func openAuthenticationUrl(url: String, listener: NativeAuthenticationSessionListener) -> Bool {
+        guard let target = URL(string: url), ["http", "https"].contains(target.scheme?.lowercased()) else {
+            return false
+        }
+        onMain { [weak self] in
+            guard let self else { return }
+            self.authenticationSession?.cancel()
+            let session = ASWebAuthenticationSession(
+                url: target,
+                callbackURLScheme: "http"
+            ) { [weak self] callbackURL, error in
+                self?.authenticationSession = nil
+                if let callbackURL {
+                    listener.onCallback(url: callbackURL.absoluteString)
+                } else if let sessionError = error as? ASWebAuthenticationSessionError,
+                          sessionError.code == .canceledLogin {
+                    listener.onCancelled()
+                } else {
+                    listener.onError(message: error?.localizedDescription ?? "Authentication session failed.")
+                }
+            }
+            session.presentationContextProvider = self
+            session.prefersEphemeralWebBrowserSession = false
+            self.authenticationSession = session
+            if !session.start() {
+                self.authenticationSession = nil
+            }
+        }
+        return true
+    }
+
+    func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
+        UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap(\.windows)
+            .first { $0.isKeyWindow }
+            ?? ASPresentationAnchor()
     }
 
     func terminateApplication() -> Bool {
@@ -583,11 +738,11 @@ final class AetherRuntimeHost: NSObject, NativeRuntimeHost, UIDocumentPickerDele
     func exportFile(name: String, mimeType: String, bytes: KotlinByteArray, listener: NativeFileExportListener) {
         onMain { [self] in
             guard !hasActiveDocumentPicker else {
-                listener.onError(message: aetherLocalized("picker_already_open"))
+                listener.onError(message: "Another file picker is already open.")
                 return
             }
             guard let presenter = topViewController(), let url = temporaryFile(name: name, bytes: bytes.data) else {
-                listener.onError(message: aetherLocalized("picker_export_prepare_failed"))
+                listener.onError(message: "Unable to prepare the file for export.")
                 return
             }
             fileExportListener = listener
@@ -681,7 +836,7 @@ final class AetherRuntimeHost: NSObject, NativeRuntimeHost, UIDocumentPickerDele
             guard let typeIdentifier = provider.registeredTypeIdentifiers.first(where: {
                 UTType($0)?.conforms(to: .image) == true
             }) else {
-                firstError = RuntimeHostError.operationFailed(aetherLocalized("picker_unsupported_image"))
+                firstError = RuntimeHostError.operationFailed("The selected item is not a supported image.")
                 continue
             }
             group.enter()
@@ -695,7 +850,7 @@ final class AetherRuntimeHost: NSObject, NativeRuntimeHost, UIDocumentPickerDele
                 }
                 guard let self, let data else {
                     if firstError == nil {
-                        firstError = RuntimeHostError.operationFailed(aetherLocalized("picker_read_image_failed"))
+                        firstError = RuntimeHostError.operationFailed("Unable to read the selected image.")
                     }
                     return
                 }
@@ -790,7 +945,7 @@ final class AetherRuntimeHost: NSObject, NativeRuntimeHost, UIDocumentPickerDele
             throw NSError(
                 domain: "com.baimoqilin.aether.file-picker",
                 code: 2,
-                userInfo: [NSLocalizedDescriptionKey: aetherLocalized("picker_read_folder_failed")]
+                userInfo: [NSLocalizedDescriptionKey: "Unable to read the selected folder."]
             )
         }
 
@@ -810,7 +965,7 @@ final class AetherRuntimeHost: NSObject, NativeRuntimeHost, UIDocumentPickerDele
                 throw NSError(
                     domain: "com.baimoqilin.aether.file-picker",
                     code: 3,
-                    userInfo: [NSLocalizedDescriptionKey: aetherLocalized("picker_file_too_large", relativePath)]
+                    userInfo: [NSLocalizedDescriptionKey: "A file in the selected folder is too large: \(relativePath)"]
                 )
             }
             files.append((fileURL, relativePath, size))
@@ -818,7 +973,7 @@ final class AetherRuntimeHost: NSObject, NativeRuntimeHost, UIDocumentPickerDele
                 throw NSError(
                     domain: "com.baimoqilin.aether.file-picker",
                     code: 4,
-                    userInfo: [NSLocalizedDescriptionKey: aetherLocalized("picker_too_many_files")]
+                    userInfo: [NSLocalizedDescriptionKey: "The selected folder contains too many files."]
                 )
             }
             totalBytes += size
@@ -826,7 +981,7 @@ final class AetherRuntimeHost: NSObject, NativeRuntimeHost, UIDocumentPickerDele
                 throw NSError(
                     domain: "com.baimoqilin.aether.file-picker",
                     code: 5,
-                    userInfo: [NSLocalizedDescriptionKey: aetherLocalized("picker_folder_too_large")]
+                    userInfo: [NSLocalizedDescriptionKey: "The selected folder is too large."]
                 )
             }
         }
@@ -838,7 +993,7 @@ final class AetherRuntimeHost: NSObject, NativeRuntimeHost, UIDocumentPickerDele
                 throw NSError(
                     domain: "com.baimoqilin.aether.file-picker",
                     code: 3,
-                    userInfo: [NSLocalizedDescriptionKey: aetherLocalized("picker_file_too_large", file.relativePath)]
+                    userInfo: [NSLocalizedDescriptionKey: "A file in the selected folder is too large: \(file.relativePath)"]
                 )
             }
             let mimeType = UTType(filenameExtension: file.url.pathExtension)?.preferredMIMEType
@@ -920,7 +1075,7 @@ final class AetherRuntimeHost: NSObject, NativeRuntimeHost, UIDocumentPickerDele
             throw NSError(
                 domain: "com.baimoqilin.aether.runtime-host",
                 code: 2,
-                userInfo: [NSLocalizedDescriptionKey: aetherLocalized("runtime_restart_to_reset")]
+                userInfo: [NSLocalizedDescriptionKey: "Restart Aether to finish resetting Alpine."]
             )
         }
         let root = try alpineRuntimeRootURL()
@@ -957,7 +1112,7 @@ final class AetherRuntimeHost: NSObject, NativeRuntimeHost, UIDocumentPickerDele
 
     private func installBridgeAsset() throws {
         guard let source = Bundle.main.url(forResource: "bridge", withExtension: "mjs") else {
-            throw RuntimeHostError.operationFailed(aetherLocalized("runtime_bridge_missing"))
+            throw RuntimeHostError.operationFailed("Bundled Pi Bridge is missing.")
         }
         try guestCreateDirectories("/root/.aether/pi-bridge")
         let bytes = try Data(contentsOf: source)
@@ -971,7 +1126,7 @@ final class AetherRuntimeHost: NSObject, NativeRuntimeHost, UIDocumentPickerDele
     private func installNodeCompatibilityAssets() throws {
         for name in ["wasm-polyfill", "fetch-polyfill"] {
             guard let source = Bundle.main.url(forResource: name, withExtension: "js") else {
-                throw RuntimeHostError.operationFailed(aetherLocalized("runtime_node_asset_missing", name))
+                throw RuntimeHostError.operationFailed("Bundled Node compatibility asset \(name).js is missing.")
             }
             try runtime.writeFile(
                 "/lib/\(name).js",
@@ -979,6 +1134,20 @@ final class AetherRuntimeHost: NSObject, NativeRuntimeHost, UIDocumentPickerDele
                 executable: false
             )
         }
+    }
+
+    private func configureApkRepositories(environment: AlpineNetworkEnvironment) throws {
+        let repositoriesPath = "/etc/apk/repositories"
+        guard runtime.fileExists(repositoriesPath) else { return }
+        guard let original = try? runtime.readFile(repositoriesPath) else { return }
+        guard let originalContents = String(data: original, encoding: .utf8) else { return }
+        let contents = alpineRepositories(originalContents, environment: environment)
+        guard contents != String(data: original, encoding: .utf8) else { return }
+        try runtime.writeFile(
+            repositoriesPath,
+            data: Data(contents.utf8),
+            executable: false
+        )
     }
 
     private func guestCreateDirectories(_ path: String) throws {
@@ -1011,6 +1180,21 @@ final class AetherRuntimeHost: NSObject, NativeRuntimeHost, UIDocumentPickerDele
     }
 }
 
+private final class RuntimeReadinessInitializationListener: NSObject, NativeRuntimeInitializationListener {
+    private let readyHandler: () -> Void
+    private let errorHandler: (String) -> Void
+
+    init(onReady: @escaping () -> Void, onError: @escaping (String) -> Void) {
+        self.readyHandler = onReady
+        self.errorHandler = onError
+    }
+
+    func onProgress(phase: String, detail: String, fraction: Double) {}
+    func onOutput(text: String) {}
+    func onReady() { readyHandler() }
+    func onError(message: String) { errorHandler(message) }
+}
+
 private final class AetherBackgroundExecutionCoordinator {
     static let shared = AetherBackgroundExecutionCoordinator()
 
@@ -1039,7 +1223,7 @@ private final class AetherBackgroundExecutionCoordinator {
         onMainSync {
             guard #available(iOS 26.0, *), !registrationAttempted else { return }
             registrationAttempted = true
-            BGTaskScheduler.shared.register(
+            let registered = BGTaskScheduler.shared.register(
                 forTaskWithIdentifier: taskIdentifierPattern,
                 using: nil
             ) { [weak self] task in
@@ -1048,6 +1232,14 @@ private final class AetherBackgroundExecutionCoordinator {
                     return
                 }
                 self.onMain { self.attach(task) }
+            }
+            guard registered else {
+                NSLog("Aether continued-processing task handler was not registered for %@", self.taskIdentifierPattern)
+                return
+            }
+            if UIApplication.shared.backgroundRefreshStatus != .available {
+                NSLog("Aether background refresh is unavailable (status: %ld)",
+                      UIApplication.shared.backgroundRefreshStatus.rawValue)
             }
         }
     }
@@ -1100,18 +1292,25 @@ private final class AetherBackgroundExecutionCoordinator {
     private func ensureContinuedProcessingTask(name: String) {
         let scheduler = BGTaskScheduler.shared
         register()
-        guard !continuedTaskSubmitted, continuedTask == nil else { return }
+        guard continuedTask == nil else { return }
+        // A previously queued request may still be pending after a short-lived
+        // lease ended. Submitting the same wildcard replaces that request and
+        // lets the new foreground turn own the eventual launch.
+        pendingCompletionSuccess = nil
         let request = BGContinuedProcessingTaskRequest(
             identifier: taskIdentifierPattern,
             title: name,
-            subtitle: aetherLocalized("background_agent_working")
+            subtitle: "Agent is working"
         )
-        request.strategy = .fail
+        // Agent turns are user initiated. Queueing lets iOS start the continued
+        // task as soon as conditions allow instead of rejecting it under load.
+        request.strategy = .queue
         do {
             try scheduler.submit(request)
             continuedTaskSubmitted = true
         } catch {
             continuedTaskSubmitted = false
+            NSLog("Aether continued-processing task submission failed: %@", error.localizedDescription)
         }
     }
 

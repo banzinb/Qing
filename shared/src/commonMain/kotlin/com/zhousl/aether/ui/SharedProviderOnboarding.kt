@@ -21,9 +21,6 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.relocation.bringIntoViewRequester
@@ -64,17 +61,17 @@ import com.zhousl.aether.data.LlmProviderConfig
 import com.zhousl.aether.data.PiProviderCatalog
 import com.zhousl.aether.data.PiProviderDefinition
 import com.zhousl.aether.data.ProviderAuthMethod
-import com.zhousl.aether.data.automaticModelPriority
 import com.zhousl.aether.data.availableModelOptions
 import com.zhousl.aether.data.findModelOption
 import com.zhousl.aether.data.resolveAutomaticModelKey
+import com.zhousl.aether.data.sortedByPreferredModelName
 import com.zhousl.aether.data.pi.PiProviderAuthState
 import com.zhousl.aether.shared.resources.Res
 import com.zhousl.aether.shared.resources.*
 import com.zhousl.aether.ui.theme.AetherOnSurface
 import com.zhousl.aether.ui.theme.AetherOnSurfaceVariant
 import com.zhousl.aether.ui.theme.AetherSecondary
-import com.zhousl.aether.ui.theme.AetherSurfaceHigh
+import com.zhousl.aether.ui.theme.AetherSurface
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.jetbrains.compose.resources.stringResource
@@ -89,7 +86,7 @@ private val SharedProviderTourTextSecondary: Color
 private val SharedProviderTourTextTertiary: Color
     get() = AetherOnSurfaceVariant.copy(alpha = 0.72f)
 private val SharedProviderTourSurface: Color
-    get() = AetherSurfaceHigh
+    get() = AetherSurface
 private val SharedProviderTourButton: Color
     get() = Color.Black
 private val SharedProviderTourGreen: Color
@@ -102,12 +99,76 @@ private enum class SharedProviderTourStage {
     Model,
 }
 
-/**
- * Provider setup used by the initial shared onboarding flow. Its stages and
- * navigation intentionally mirror Android's ProviderSetupStep.
- */
 @Composable
 fun SharedProviderOnboardingStep(
+    stepIndex: Int,
+    stepCount: Int,
+    replayMode: Boolean,
+    formState: ProviderFormState,
+    isFetchingModels: Boolean,
+    onFetchModels: (LlmProviderConfig, (List<String>) -> Unit) -> Unit,
+    authState: PiProviderAuthState,
+    onStartProviderLogin: (String, String, ProviderAuthMethod, String) -> Unit,
+    onSubmitAuthPrompt: (String, String, Boolean) -> Unit,
+    onClearAuthState: () -> Unit,
+    onExit: () -> Unit,
+    onClose: () -> Unit,
+    onReturnToLanding: () -> Unit,
+    onComplete: () -> Unit,
+    onTimelineStepSelected: (OnboardingTimelineStep) -> Unit = {},
+) {
+    var stageIndex by rememberSaveable(stepIndex, replayMode) { mutableStateOf(0) }
+    var isFinishing by rememberSaveable(stepIndex, replayMode) { mutableStateOf(false) }
+    val message = when (stageIndex) {
+        1 -> stringResource(Res.string.onboarding_provider_pick_message)
+        2 -> stringResource(Res.string.onboarding_provider_credentials_message)
+        3 -> stringResource(Res.string.onboarding_provider_model_message)
+        else -> stringResource(Res.string.onboarding_provider_auth_message)
+    }
+
+    LaunchedEffect(isFinishing) {
+        if (isFinishing) {
+            delay(320)
+            onComplete()
+        }
+    }
+
+    OnboardingConversationStepPage(
+        stepIndex = stepIndex,
+        stepCount = stepCount,
+        message = message,
+        onBack = onReturnToLanding,
+        topRightLabel = if (replayMode) {
+            stringResource(Res.string.common_close)
+        } else {
+            stringResource(Res.string.common_skip)
+        },
+        onTopRight = if (replayMode) onClose else onExit,
+        isExiting = isFinishing,
+        timelineSpec = OnboardingTimelineSpec(
+            activeStep = OnboardingTimelineStep.Provider,
+            providerSubstep = stageIndex,
+            onStepSelected = onTimelineStepSelected,
+        ),
+    ) {
+        AddProviderWizard(
+            state = formState,
+            existingProviderIds = emptySet(),
+            isFetchingModels = isFetchingModels,
+            onFetchModels = onFetchModels,
+            authState = authState,
+            onStartProviderLogin = onStartProviderLogin,
+            onSubmitAuthPrompt = onSubmitAuthPrompt,
+            onClearAuthState = onClearAuthState,
+            onSave = { isFinishing = true },
+            saveLabel = stringResource(Res.string.common_start_chat),
+            onStageChanged = { stageIndex = it },
+        )
+    }
+}
+
+@Composable
+private fun LegacySharedProviderOnboardingStep(
     stepIndex: Int,
     stepCount: Int,
     replayMode: Boolean,
@@ -147,6 +208,7 @@ fun SharedProviderOnboardingStep(
             .map(String::trim)
             .filter(String::isNotBlank)
             .distinct()
+            .sortedByPreferredModelName()
     }
     val providerChoices = remember(providerSearch, selectedAuthMethod) {
         val query = providerSearch.trim().lowercase()
@@ -201,7 +263,6 @@ fun SharedProviderOnboardingStep(
             providerSearch = providerSearch,
             onProviderSearchChange = { providerSearch = it },
             providerChoices = providerChoices,
-            authMethod = selectedAuthMethod,
             onProviderSelected = { provider ->
                 onClearAuthState()
                 formState.applyProviderDefaults(provider)
@@ -309,9 +370,8 @@ fun SharedProviderOnboardingStep(
                     ) {
                         ProviderWizardChoiceRow(
                             icon = Icons.Rounded.VerifiedUser,
-                            title = stringResource(Res.string.onboarding_provider_subscription),
-                            subtitle = stringResource(Res.string.onboarding_provider_subscription_description),
-                            bareIcon = true,
+                            title = stringResource(Res.string.provider_add_subscription),
+                            subtitle = stringResource(Res.string.provider_add_subscription_description),
                             onClick = {
                                 selectedAuthMethodName = ProviderAuthMethod.OAuth.name
                                 providerSearch = ""
@@ -321,9 +381,8 @@ fun SharedProviderOnboardingStep(
                         )
                         ProviderWizardChoiceRow(
                             icon = Icons.Rounded.Key,
-                            title = stringResource(Res.string.onboarding_provider_api_key),
-                            subtitle = stringResource(Res.string.onboarding_provider_api_key_description),
-                            bareIcon = true,
+                            title = stringResource(Res.string.provider_add_api_key),
+                            subtitle = stringResource(Res.string.provider_add_api_key_description),
                             onClick = {
                                 selectedAuthMethodName = ProviderAuthMethod.ApiKey.name
                                 providerSearch = ""
@@ -333,9 +392,8 @@ fun SharedProviderOnboardingStep(
                         )
                         ProviderWizardChoiceRow(
                             icon = Icons.Rounded.Cloud,
-                            title = stringResource(Res.string.onboarding_provider_environment),
-                            subtitle = stringResource(Res.string.onboarding_provider_environment_description),
-                            bareIcon = true,
+                            title = stringResource(Res.string.provider_add_environment),
+                            subtitle = stringResource(Res.string.provider_add_environment_description),
                             onClick = {
                                 selectedAuthMethodName = ProviderAuthMethod.Ambient.name
                                 providerSearch = ""
@@ -364,11 +422,11 @@ fun SharedProviderOnboardingStep(
                             style = MaterialTheme.typography.bodySmall,
                             color = SharedProviderTourTextSecondary,
                         )
-                        LazyColumn(
-                            modifier = Modifier.fillMaxWidth().heightIn(max = 420.dp),
+                        Column(
+                            modifier = Modifier.fillMaxWidth(),
                             verticalArrangement = Arrangement.spacedBy(10.dp),
                         ) {
-                            items(modelChoices, key = { model -> model }) { model ->
+                            modelChoices.take(8).forEach { model ->
                                 SharedProviderModelOptionButton(
                                     label = model,
                                     selected = formState.modelId.trim().equals(model, ignoreCase = true),
@@ -419,7 +477,6 @@ internal fun SharedProviderPickerContent(
     providerSearch: String,
     onProviderSearchChange: (String) -> Unit,
     providerChoices: List<PiProviderDefinition>,
-    authMethod: ProviderAuthMethod,
     onProviderSelected: (PiProviderDefinition) -> Unit,
 ) {
     Column(
@@ -435,7 +492,7 @@ internal fun SharedProviderPickerContent(
         providerChoices.forEach { provider ->
             SharedProviderStageButton(
                 label = provider.displayName,
-                subtitle = sharedProviderTourSubtitle(provider, authMethod),
+                subtitle = "${provider.category} · ${provider.id}",
                 provider = provider,
                 onClick = { onProviderSelected(provider) },
             )
@@ -447,24 +504,6 @@ internal fun SharedProviderPickerContent(
             color = SharedProviderTourTextSecondary,
         )
     }
-}
-
-@Composable
-private fun sharedProviderTourSubtitle(
-    provider: PiProviderDefinition,
-    authMethod: ProviderAuthMethod,
-): String = when {
-    authMethod == ProviderAuthMethod.OAuth && provider.id == "openai-codex" ->
-        stringResource(Res.string.onboarding_provider_openai_codex_oauth_summary)
-    authMethod == ProviderAuthMethod.OAuth && provider.id == "anthropic" ->
-        stringResource(Res.string.onboarding_provider_anthropic_oauth_summary)
-    authMethod == ProviderAuthMethod.OAuth && provider.id == "github-copilot" ->
-        stringResource(Res.string.onboarding_provider_github_copilot_oauth_summary)
-    authMethod == ProviderAuthMethod.ApiKey && provider.id == "openai" ->
-        stringResource(Res.string.onboarding_provider_openai_api_summary)
-    authMethod == ProviderAuthMethod.ApiKey && provider.id == "openai-compatible" ->
-        stringResource(Res.string.onboarding_provider_custom_api_summary)
-    else -> "${provider.category} · ${provider.id}"
 }
 
 @Composable
@@ -712,74 +751,9 @@ internal fun prioritizedSharedProviderModelOptions(
     piProviderId: String?,
     cachedModels: List<String>,
 ): List<String> {
-    val fetchedModels = cachedModels
+    return cachedModels
         .map(String::trim)
         .filter(String::isNotBlank)
         .distinctBy { it.lowercase() }
-    val orderedModels = fetchedModels
-        .sortedWith(
-            compareBy<String> { sharedProviderPreferredModelRank(it) }
-                .thenBy { sharedProviderModelRank(piProviderId, it) }
-                .thenBy { it.lowercase() },
-        )
-    return orderedModels.withSharedAutomaticChatModelFirst(piProviderId)
-}
-
-private fun sharedProviderPreferredModelRank(model: String): Int =
-    automaticModelPriority(model, AutomaticModelPurpose.Chat) ?: Int.MAX_VALUE
-
-private fun List<String>.withSharedAutomaticChatModelFirst(
-    piProviderId: String?,
-): List<String> {
-    if (isEmpty() || piProviderId == null) return this
-    val definition = PiProviderCatalog.resolve(piProviderId)
-    val onboardingConfig = LlmProviderConfig(
-        id = "onboarding",
-        providerId = definition.id,
-        name = definition.displayName,
-        piProviderId = definition.id,
-        apiKey = "",
-        baseUrl = definition.defaultBaseUrl,
-        modelId = first(),
-        cachedModels = this,
-        enabledModelIds = this,
-    )
-    val options = listOf(onboardingConfig).availableModelOptions()
-    val automaticModel = options.findModelOption(
-        options.resolveAutomaticModelKey(AutomaticModelPurpose.Chat),
-    )?.modelId ?: return this
-    if (sharedProviderPreferredModelRank(automaticModel) > sharedProviderPreferredModelRank(first())) {
-        return this
-    }
-    return (listOf(automaticModel) + filterNot { it.equals(automaticModel, ignoreCase = true) })
-        .distinctBy { it.lowercase() }
-}
-
-private fun sharedProviderModelRank(
-    piProviderId: String?,
-    model: String,
-): Int = when (piProviderId) {
-    "openai",
-    "openai-codex" -> when {
-        model.lowercase().contains("gpt") -> 0
-        else -> 5
-    }
-
-    "anthropic" -> when {
-        model.lowercase().contains("claude") -> 0
-        else -> 5
-    }
-
-    "google",
-    "google-vertex" -> when {
-        model.lowercase().contains("gemini") -> 0
-        else -> 5
-    }
-
-    else -> when {
-        model.lowercase().contains("gpt") -> 0
-        model.lowercase().contains("claude") -> 1
-        model.lowercase().contains("gemini") -> 2
-        else -> 5
-    }
+        .sortedByPreferredModelName()
 }

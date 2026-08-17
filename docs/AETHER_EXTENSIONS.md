@@ -103,10 +103,21 @@ interface AetherExtensionAPI {
     clear(): void;
     snapshot(): object;
   };
+  readonly messages: {
+    append(type: string, payload?: object, text?: string): Promise<object>;
+  };
 
   registerSurface(slot: string, definition: SurfaceDefinition): () => void;
   registerComponent(target: string, definition: ComponentDefinition): () => void;
-  registerPage(definition: PageDefinition): () => void;
+  registerSettings(definition: SettingsDefinition): () => void;
+  registerComposerMenuItem(definition: ComposerMenuItemDefinition): () => void;
+  registerMessageType(definition: MessageTypeDefinition): () => void;
+  registerToolTitle(
+    toolName: string,
+    runningTitle: string,
+    completedTitle: string,
+    priority?: number,
+  ): () => void;
   registerAction(id: string, handler: ActionHandler): () => void;
   on(event: string, handler: EventHandler): () => void;
   intercept(operation: string, handler: EventHandler): () => void;
@@ -167,6 +178,28 @@ export const activateAether = defineAetherExtension((aether) => {
 });
 ```
 
+## Tool titles
+
+Script Mods can provide the user-facing title shown on a Pi tool card while
+the tool is running and after it completes. Tool-name matching is
+case-insensitive, and script-registered titles share the same priority-ordered
+registry as Native Mod titles. A higher `priority` wins; for equal priorities
+the latest script registration wins.
+
+```ts
+aether.registerToolTitle(
+  "web_search",
+  "Searching the web",
+  "Searched the web",
+  200,
+);
+```
+
+`priority` defaults to `100`. The returned cleanup function removes the title
+mapping. Tool names, running titles, and completed titles must be non-blank.
+Script title registrations hot-reload with the extension and are automatically
+removed when the extension is reloaded, disabled, or uninstalled.
+
 ## UI surfaces
 
 Surfaces add content without replacing the built-in UI.
@@ -180,7 +213,10 @@ Surfaces add content without replacing the built-in UI.
 | `chat.list.end` | After messages and pending work |
 | `chat.composer.top` | Directly above the composer |
 | `settings.hub` | Top of the settings hub |
-| `drawer` | Conversation drawer |
+| `drawer.header` | Fixed below the drawer title and search controls |
+| `drawer.footer` | Fixed full-width content above the floating new-chat action |
+| `drawer.list.end` | After the conversation list |
+| `drawer` | Legacy conversation-drawer list content |
 
 ```ts
 aether.registerSurface("chat.composer.top", {
@@ -192,6 +228,21 @@ aether.registerSurface("chat.composer.top", {
       ui.text(`${String(draft_input).length} chars`),
       ui.text(`Count: ${storage.count ?? 0}`),
     ]),
+});
+```
+
+The drawer header and footer remain fixed while the conversation list scrolls.
+The legacy `drawer` slot remains supported and is rendered at the list tail in
+this order: `drawer`, `drawer.list.end`, then built-in extension page launchers.
+
+The `drawer.opened` event carries an empty event payload and the current
+extension context. On mobile it fires once for each closed-to-open transition,
+including swipe gestures. On tablet it fires once when the permanent drawer
+enters composition; stable-open recomposition does not repeat it.
+
+```ts
+aether.on("drawer.opened", (_data, context) => {
+  aether.notify(`Drawer opened on ${context.screen}`);
 });
 ```
 
@@ -256,7 +307,6 @@ Supported native node types include:
 - `button`, `iconButton`
 - `switch`, `input`
 - `spacer`, `progress`
-- `pageButton`
 - `web`
 - `core` for wrapper nesting
 
@@ -297,23 +347,95 @@ ui.web({
 JavaScript, DOM storage, network access, file access, and content access are
 enabled. `Aether.postMessage(string)` invokes a registered extension action.
 
-## Pages
+## Settings pages
 
-Pages are native full-screen destinations and automatically appear in the
-conversation drawer:
+`registerSettings` adds a page to the dedicated Extensions group between
+Reliability and Agent Skills. The host renders the page with the same settings
+scaffold, cards, spacing, typography, and controls as Aether's built-in pages;
+extensions provide data only and cannot override page layout or styling.
 
 ```ts
-aether.registerPage({
-  id: "dashboard",
-  title: "Build dashboard",
-  subtitle: "Extension-owned UI",
-  icon: "code",
-  render: () => ui.column([
-    ui.text("Dashboard", { style: "headline" }),
-    ui.button("Run", "run"),
-  ]),
+aether.registerSettings({
+  id: "preferences",
+  icon: "settings",
+  title: "Preferences",
+  subtitle: "Extension behavior",
+  sections: [{
+    title: "General",
+    description: "Configure extension behavior",
+    settings: [
+      { id: "endpoint", type: "text", label: "Endpoint", default: "https://example.com" },
+      { id: "enabled", type: "toggle", label: "Enabled", default: true },
+      {
+        id: "mode",
+        type: "select",
+        label: "Mode",
+        options: [
+          { value: "fast", label: "Fast" },
+          { value: "quality", label: "Quality" },
+        ],
+        default: "fast",
+      },
+    ],
+  }],
 });
 ```
+
+The Aether Agent can inspect these native Settings Pages with
+`aether_config_get({ categories: ["extensions"] })`. It can update value
+controls through the same registered settings actions used by the native UI:
+
+```json
+{
+  "category": "extensions",
+  "settings": {
+    "extension_id": "my-extension",
+    "settings_id": "preferences",
+    "values": {
+      "enabled": true,
+      "mode": "quality"
+    }
+  }
+}
+```
+
+Pass that payload to `aether_config_set`. Text, password, textarea, number,
+toggle, selection, tab, and slider values are writable. Buttons, links, labels,
+dividers, and spacers are not treated as setting values. This interface only
+covers Settings Pages registered through `aether.extensions`; compatible Pi
+Extension configuration files remain regular files managed by the Agent.
+
+Extensions have exactly one native page registration API: `registerSettings`.
+There is no `registerPage`, `registerSettingsPage`, drawer-page, or full-screen
+page API. Extensions cannot create pages outside the native Settings flow.
+
+`registerSettings` supports either the legacy flat `sections` form or optional
+`categories`. When categories are present, Aether first shows a native list of
+child settings pages, then renders the selected category's sections and controls.
+Use one form or the other, not both. Setting IDs must be unique within a
+settings registration and values remain persisted per extension, settings ID,
+and setting ID.
+
+```ts
+aether.registerSettings({
+  id: "preferences",
+  title: "Preferences",
+  categories: [
+    {
+      id: "general",
+      title: "General",
+      sections: [{ settings: [{ id: "enabled", label: "Enabled", type: "toggle", default: true }] }],
+    },
+    { id: "advanced", title: "Advanced", sections: [{ settings: [] }] },
+  ],
+});
+```
+
+Supported control types are `text`, `password`, `textarea`, `number`,
+`toggle`, `select`/`dropdown`, `segmented`, `tab`/`tabs`, `slider`, `button`,
+`link`, `label`, `divider`, and `spacer`. Value controls are persisted automatically per
+extension, page, and setting ID. Buttons dispatch their `action` and `args`;
+links open `url`, or dispatch `action` when no URL is supplied.
 
 ## Service Registry
 
@@ -444,6 +566,24 @@ context.intercept("chat.new", priority = 500) { payload, _ ->
 ```
 
 Use `"*"` to observe/intercept every operation exposed through the registry.
+
+### Native tool titles
+
+Native Mods can also provide tool-card titles. Prefer
+`aether.registerToolTitle()` in Script Mods unless the mapping must be loaded
+before the Script runtime starts or needs to coexist with another Native-only
+feature. Native and Script registrations share one priority-ordered registry.
+
+```kotlin
+context.registerToolTitle(
+    toolName = "weather",
+    runningTitle = "Checking the weather",
+    completedTitle = "Checked the weather",
+    priority = 200,
+)
+```
+
+The returned cleanup function removes the mapping. Titles must be non-blank.
 
 ### Native Compose replacement
 

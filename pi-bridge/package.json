@@ -7,16 +7,16 @@
     "node": ">=22.19.0"
   },
   "scripts": {
-    "build": "esbuild src/bridge.ts --bundle --platform=node --format=esm --target=node22.19 --banner:js=\"import { createRequire as __aetherCreateRequire } from 'node:module';const require = __aetherCreateRequire(import.meta.url);\" --outfile=dist/bridge.mjs",
+    "build": "node scripts/build.mjs",
     "check": "tsc --noEmit",
     "test": "npm run build && node --test tests/*.test.mjs",
     "test:ping": "node dist/bridge.mjs --ping"
   },
   "dependencies": {
-    "@earendil-works/pi-agent-core": "0.83.0",
-    "@earendil-works/pi-ai": "0.83.0",
-    "@earendil-works/pi-coding-agent": "0.83.0",
-    "@earendil-works/pi-tui": "0.83.0",
+    "@earendil-works/pi-agent-core": "0.84.1",
+    "@earendil-works/pi-ai": "0.84.1",
+    "@earendil-works/pi-coding-agent": "0.84.1",
+    "@earendil-works/pi-tui": "0.84.1",
     "jiti": "2.7.0",
     "esbuild": "^0.27.2",
     "typebox": "1.3.7"

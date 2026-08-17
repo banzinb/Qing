@@ -31,8 +31,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.relocation.bringIntoViewRequester
@@ -101,9 +99,9 @@ import com.zhousl.aether.data.PiProviderCatalog
 import com.zhousl.aether.data.PiProviderDefinition
 import com.zhousl.aether.data.ProviderAuthMethod
 import com.zhousl.aether.data.availableModelOptions
-import com.zhousl.aether.data.automaticModelPriority
 import com.zhousl.aether.data.findModelOption
 import com.zhousl.aether.data.resolveAutomaticModelKey
+import com.zhousl.aether.data.sortedByPreferredModelName
 import com.zhousl.aether.data.RootSetupIssue
 import com.zhousl.aether.data.RootSetupState
 import com.zhousl.aether.runtime.LocalRuntimeIssue
@@ -136,6 +134,7 @@ private const val ContentFadeDuration = 920
 private const val MessageSettleDelayMillis = 800L
 private const val MessageMinDurationMillis = 1_000L
 private const val MessageMaxDurationMillis = 3_300L
+private const val SetupProgressTickMillis = 450L
 
 private val TourEasing = CubicBezierEasing(0.22f, 0.84f, 0.18f, 1f)
 private val InitialOnboardingSteps = listOf(
@@ -147,7 +146,6 @@ private val FollowUpOnboardingSteps = listOf(
     OnboardingStep.LocalRuntimeChoice,
     OnboardingStep.TermuxSetup,
     OnboardingStep.AgentModeAuthorization,
-    OnboardingStep.TavilySetup,
 )
 
 private val TourBackground: Color
@@ -237,14 +235,11 @@ fun OnboardingScreen(
 
     fun indexOf(step: OnboardingStep): Int = steps.indexOf(step).coerceAtLeast(0)
     fun continueAfterLocalAccessSetup() {
-        currentStep = OnboardingStep.TavilySetup
+        onCompleteFollowUp()
     }
     fun continueAfterTermuxStep() {
-        currentStep = if (termuxSetupState.isReady) {
-            OnboardingStep.AgentModeAuthorization
-        } else {
-            OnboardingStep.TavilySetup
-        }
+        if (termuxSetupState.isReady) currentStep = OnboardingStep.AgentModeAuthorization
+        else onCompleteFollowUp()
     }
 
     AnimatedContent(
@@ -302,7 +297,7 @@ fun OnboardingScreen(
                 },
                 onSkip = {
                     selectedRuntimePath = null
-                    currentStep = OnboardingStep.TavilySetup
+                    onCompleteFollowUp()
                 },
             )
 
@@ -312,7 +307,6 @@ fun OnboardingScreen(
                 setupState = alpineSetupState,
                 piCoreSetupState = piCoreSetupState,
                 required = isInitialFlow,
-                replayMode = replayMode,
                 onBack = {
                     if (setupPreviewMode) {
                         onClose()
@@ -335,7 +329,7 @@ fun OnboardingScreen(
                         currentStep = if (isInitialFlow) {
                             OnboardingStep.ProviderSetup
                         } else {
-                            OnboardingStep.TavilySetup
+                            OnboardingStep.LocalRuntimeChoice
                         }
                     }
                 },
@@ -368,33 +362,11 @@ fun OnboardingScreen(
                 onClose = onClose,
                 onContinue = { enabled, method ->
                     onSaveAgentModeAuthorization(enabled, method)
-                    currentStep = OnboardingStep.TavilySetup
-                },
-            )
-
-            OnboardingStep.TavilySetup -> TavilyStep(
-                stepIndex = stepIndex,
-                stepCount = steps.size,
-                value = tavilyApiKeyValue,
-                onValueChange = { tavilyApiKeyValue = it },
-                onBack = {
-                    currentStep = if (selectedRuntimePath == OnboardingStep.TermuxSetup && termuxSetupState.isReady) {
-                        OnboardingStep.AgentModeAuthorization
-                    } else if (selectedRuntimePath == OnboardingStep.TermuxSetup) {
-                        OnboardingStep.TermuxSetup
-                    } else {
-                        OnboardingStep.LocalRuntimeChoice
-                    }
-                },
-                onClose = onClose,
-                onContinue = {
-                    val trimmed = tavilyApiKeyValue.trim()
-                    if (trimmed.isNotBlank()) {
-                        onSaveTavilyApiKey(trimmed)
-                    }
                     onCompleteFollowUp()
                 },
             )
+
+            OnboardingStep.TavilySetup -> LaunchedEffect(Unit) { onCompleteFollowUp() }
         }
     }
 }
@@ -486,6 +458,68 @@ private fun ProviderSetupStep(
     onReturnToLanding: () -> Unit,
     onComplete: () -> Unit,
 ) {
+    var stageIndex by rememberSaveable(stepIndex, replayMode) { mutableStateOf(0) }
+    var isFinishing by rememberSaveable(stepIndex, replayMode) { mutableStateOf(false) }
+    val message = when (stageIndex) {
+        1 -> stringResource(R.string.onboarding_provider_pick_message)
+        2 -> stringResource(R.string.onboarding_provider_credentials_message)
+        3 -> stringResource(R.string.onboarding_provider_model_message)
+        else -> stringResource(R.string.onboarding_provider_auth_message)
+    }
+
+    LaunchedEffect(isFinishing) {
+        if (isFinishing) {
+            delay(320)
+            onComplete()
+        }
+    }
+
+    ConversationStepPage(
+        stepIndex = stepIndex,
+        stepCount = stepCount,
+        message = message,
+        onBack = onReturnToLanding,
+        topRightLabel = if (replayMode) {
+            stringResource(R.string.common_close)
+        } else {
+            stringResource(R.string.common_skip)
+        },
+        onTopRight = if (replayMode) onClose else onExit,
+        isExiting = isFinishing,
+    ) {
+        AddProviderWizard(
+            state = formState,
+            existingProviderIds = emptySet(),
+            isFetchingModels = isFetchingModels,
+            onFetchModels = onFetchModels,
+            authState = authState,
+            onStartProviderLogin = onStartProviderLogin,
+            onSubmitAuthPrompt = onSubmitAuthPrompt,
+            onClearAuthState = onClearAuthState,
+            onSave = { isFinishing = true },
+            saveLabel = stringResource(R.string.common_start_chat),
+            onStageChanged = { stageIndex = it },
+        )
+    }
+}
+
+@Composable
+private fun LegacyProviderSetupStep(
+    stepIndex: Int,
+    stepCount: Int,
+    replayMode: Boolean,
+    formState: ProviderFormState,
+    isFetchingModels: Boolean,
+    onFetchModels: (LlmProviderConfig, (List<String>) -> Unit) -> Unit,
+    authState: PiProviderAuthState,
+    onStartProviderLogin: (String, String, ProviderAuthMethod, String) -> Unit,
+    onSubmitAuthPrompt: (String, String, Boolean) -> Unit,
+    onClearAuthState: () -> Unit,
+    onExit: () -> Unit,
+    onClose: () -> Unit,
+    onReturnToLanding: () -> Unit,
+    onComplete: () -> Unit,
+) {
 
     var stage by rememberSaveable(stepIndex, replayMode) {
         mutableStateOf(ProviderTourStage.PickAuthentication)
@@ -510,6 +544,7 @@ private fun ProviderSetupStep(
             .map(String::trim)
             .filter(String::isNotBlank)
             .distinct()
+            .sortedByPreferredModelName()
     }
     val providerChoices = remember(providerSearch, selectedAuthMethod) {
         val query = providerSearch.trim().lowercase()
@@ -584,9 +619,8 @@ private fun ProviderSetupStep(
                     ) {
                         ProviderWizardChoiceRow(
                             icon = Icons.Rounded.VerifiedUser,
-                            title = stringResource(R.string.onboarding_provider_subscription),
-                            subtitle = stringResource(R.string.onboarding_provider_subscription_description),
-                            bareIcon = true,
+                            title = stringResource(R.string.provider_add_subscription),
+                            subtitle = stringResource(R.string.provider_add_subscription_description),
                             onClick = {
                                 selectedAuthMethodName = ProviderAuthMethod.OAuth.name
                                 providerSearch = ""
@@ -596,9 +630,8 @@ private fun ProviderSetupStep(
                         )
                         ProviderWizardChoiceRow(
                             icon = Icons.Rounded.Key,
-                            title = stringResource(R.string.onboarding_provider_api_key),
-                            subtitle = stringResource(R.string.onboarding_provider_api_key_description),
-                            bareIcon = true,
+                            title = stringResource(R.string.provider_add_api_key),
+                            subtitle = stringResource(R.string.provider_add_api_key_description),
                             onClick = {
                                 selectedAuthMethodName = ProviderAuthMethod.ApiKey.name
                                 providerSearch = ""
@@ -608,9 +641,8 @@ private fun ProviderSetupStep(
                         )
                         ProviderWizardChoiceRow(
                             icon = Icons.Rounded.Cloud,
-                            title = stringResource(R.string.onboarding_provider_environment),
-                            subtitle = stringResource(R.string.onboarding_provider_environment_description),
-                            bareIcon = true,
+                            title = stringResource(R.string.provider_add_environment),
+                            subtitle = stringResource(R.string.provider_add_environment_description),
                             onClick = {
                                 selectedAuthMethodName = ProviderAuthMethod.Ambient.name
                                 providerSearch = ""
@@ -635,7 +667,7 @@ private fun ProviderSetupStep(
                         providerChoices.forEach { provider ->
                             ProviderStageButton(
                                 label = provider.displayName,
-                                subtitle = providerTourSubtitle(provider, selectedAuthMethod),
+                                subtitle = "${provider.category} · ${provider.id}",
                                 provider = provider,
                                 onClick = {
                                     onClearAuthState()
@@ -714,11 +746,11 @@ private fun ProviderSetupStep(
                             style = MaterialTheme.typography.bodySmall,
                             color = TourTextSecondary,
                         )
-                        LazyColumn(
-                            modifier = Modifier.fillMaxWidth().heightIn(max = 420.dp),
+                        Column(
+                            modifier = Modifier.fillMaxWidth(),
                             verticalArrangement = Arrangement.spacedBy(10.dp),
                         ) {
-                            items(modelChoices, key = { model -> model }) { model ->
+                            modelChoices.take(8).forEach { model ->
                                 ModelOptionButton(
                                     label = model,
                                     selected = formState.modelId.trim().equals(model, ignoreCase = true),
@@ -760,24 +792,6 @@ private fun ProviderSetupStep(
             }
         }
     }
-}
-
-@Composable
-private fun providerTourSubtitle(
-    provider: PiProviderDefinition,
-    authMethod: ProviderAuthMethod,
-): String = when {
-    authMethod == ProviderAuthMethod.OAuth && provider.id == "openai-codex" ->
-        stringResource(R.string.onboarding_provider_openai_codex_oauth_summary)
-    authMethod == ProviderAuthMethod.OAuth && provider.id == "anthropic" ->
-        stringResource(R.string.onboarding_provider_anthropic_oauth_summary)
-    authMethod == ProviderAuthMethod.OAuth && provider.id == "github-copilot" ->
-        stringResource(R.string.onboarding_provider_github_copilot_oauth_summary)
-    authMethod == ProviderAuthMethod.ApiKey && provider.id == "openai" ->
-        stringResource(R.string.onboarding_provider_openai_api_summary)
-    authMethod == ProviderAuthMethod.ApiKey && provider.id == "openai-compatible" ->
-        stringResource(R.string.onboarding_provider_custom_api_summary)
-    else -> "${provider.category} · ${provider.id}"
 }
 
 @Composable
@@ -870,7 +884,6 @@ private fun AlpineRuntimeStep(
     setupState: LocalRuntimeSetupState,
     piCoreSetupState: PiCoreSetupState,
     required: Boolean,
-    replayMode: Boolean,
     onBack: () -> Unit,
     onClose: () -> Unit,
     onInitialize: () -> Unit,
@@ -920,11 +933,9 @@ private fun AlpineRuntimeStep(
                 PiCoreSetupProgress(piCoreSetupState)
             }
             when (setupState.issue) {
-                LocalRuntimeIssue.Ready -> if (replayMode || !required || piCoreSetupState.isReady) {
+                LocalRuntimeIssue.Ready -> if (!required || piCoreSetupState.isReady) {
                     TourActionRow(
-                        primaryLabel = stringResource(
-                            if (replayMode) R.string.common_next else R.string.common_continue,
-                        ),
+                        primaryLabel = stringResource(R.string.common_continue),
                         onPrimary = onContinue,
                         secondaryLabel = stringResource(R.string.common_refresh),
                         onSecondary = onRefresh,
@@ -1033,8 +1044,28 @@ private fun PiCoreSetupProgress(
     } else {
         setupState.phase.step
     }.coerceIn(0, stepCount)
+    var organicProgress by remember { mutableStateOf(0f) }
+    val phaseProgress = currentStep.toFloat() / stepCount
+    LaunchedEffect(setupState.isChecking, setupState.isReady, setupState.phase) {
+        if (setupState.isChecking && setupState.phase == PiCoreSetupPhase.CheckingAlpine) {
+            organicProgress = phaseProgress
+        }
+        organicProgress = maxOf(organicProgress, phaseProgress)
+        if (setupState.isReady) {
+            organicProgress = 1f
+        } else if (setupState.isChecking && setupState.phase != PiCoreSetupPhase.Failed) {
+            while (true) {
+                delay(SetupProgressTickMillis)
+                val remaining = 0.94f - organicProgress
+                if (remaining > 0f) {
+                    organicProgress = (organicProgress + (remaining * 0.018f).coerceIn(0.001f, 0.006f))
+                        .coerceAtMost(0.94f)
+                }
+            }
+        }
+    }
     val animatedProgress by animateFloatAsState(
-        targetValue = currentStep.toFloat() / stepCount,
+        targetValue = organicProgress,
         animationSpec = tween(
             durationMillis = 700,
             easing = TourEasing,
@@ -1059,7 +1090,7 @@ private fun PiCoreSetupProgress(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            if (currentStep > 0) {
+            if (organicProgress > 0f) {
                 Text(
                     text = stringResource(
                         R.string.onboarding_pi_setup_step,
@@ -2088,76 +2119,13 @@ internal fun prioritizedModelOptions(
     piProviderId: String?,
     cachedModels: List<String>,
 ): List<String> {
-    val fetchedModels = cachedModels
+    return cachedModels
         .map(String::trim)
         .filter(String::isNotBlank)
         .distinctBy { it.lowercase() }
-    val orderedModels = fetchedModels
-        .sortedWith(
-            compareBy<String> { preferredModelRank(it) }
-                .thenBy { providerModelRank(piProviderId, it) }
-                .thenBy { it.lowercase() },
-        )
-    return orderedModels.withAutomaticChatModelFirst(piProviderId)
+        .sortedByPreferredModelName()
 }
 
-private fun preferredModelRank(model: String): Int {
-    return automaticModelPriority(model, AutomaticModelPurpose.Chat) ?: Int.MAX_VALUE
-}
-
-private fun List<String>.withAutomaticChatModelFirst(
-    piProviderId: String?,
-): List<String> {
-    if (isEmpty() || piProviderId == null) return this
-    val definition = com.zhousl.aether.data.PiProviderCatalog.resolve(piProviderId)
-    val onboardingConfig = LlmProviderConfig(
-        id = "onboarding",
-        providerId = definition.id,
-        name = definition.displayName,
-        piProviderId = definition.id,
-        apiKey = "",
-        baseUrl = definition.defaultBaseUrl,
-        modelId = first(),
-        cachedModels = this,
-        enabledModelIds = this,
-    )
-    val options = listOf(onboardingConfig).availableModelOptions()
-    val automaticModel = options.findModelOption(
-        options.resolveAutomaticModelKey(AutomaticModelPurpose.Chat)
-    )?.modelId ?: return this
-    if (preferredModelRank(automaticModel) > preferredModelRank(first())) return this
-    return (listOf(automaticModel) + filterNot { it.equals(automaticModel, ignoreCase = true) })
-        .distinctBy { it.lowercase() }
-}
-
-private fun providerModelRank(
-    piProviderId: String?,
-    model: String,
-): Int = when (piProviderId) {
-    "openai",
-    "openai-codex" -> when {
-        model.lowercase().contains("gpt") -> 0
-        else -> 5
-    }
-
-    "anthropic" -> when {
-        model.lowercase().contains("claude") -> 0
-        else -> 5
-    }
-
-    "google",
-    "google-vertex" -> when {
-        model.lowercase().contains("gemini") -> 0
-        else -> 5
-    }
-
-    else -> when {
-        model.lowercase().contains("gpt") -> 0
-        model.lowercase().contains("claude") -> 1
-        model.lowercase().contains("gemini") -> 2
-        else -> 5
-    }
-}
 
 @Composable
 private fun termuxStatusSentence(setupState: TermuxSetupState): String = when (setupState.issue) {

@@ -178,6 +178,12 @@ sealed interface AssistantResponseBlock {
         override val id: String,
         val trace: ReasoningTrace,
     ) : AssistantResponseBlock
+
+    data class Status(
+        override val id: String,
+        val text: String,
+        val detail: String = "",
+    ) : AssistantResponseBlock
 }
 
 data class ChatMessage(
@@ -192,6 +198,9 @@ data class ChatMessage(
     val branchGroup: ChatBranchGroup? = null,
     val responseGroupId: String? = null,
     val assistantActionsHidden: Boolean = false,
+    val isIncomplete: Boolean = false,
+    val statusText: String = "",
+    val statusDetail: String = "",
     val providerPayloadJson: String = "",
     val displayKind: MessageDisplayKind = MessageDisplayKind.Standard,
     val usageStatistics: ChatUsageStatistics? = null,
@@ -262,6 +271,7 @@ data class AetherUiState(
     val rootSetupProgressReturnPage: RootSetupProgressReturnPage? = null,
     val installedSkills: List<InstalledSkill> = emptyList(),
     val installedPiExtensions: List<InstalledPiExtension> = emptyList(),
+    val hasLoadedInstalledPiExtensions: Boolean = false,
     val piExtensionCatalog: List<PiExtensionCatalogEntry> = emptyList(),
     val isLoadingPiExtensions: Boolean = false,
     val piExtensionCatalogError: String = "",

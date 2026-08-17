@@ -54,12 +54,14 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -95,8 +97,10 @@ import com.zhousl.aether.data.defaultAuthMethod
 import com.zhousl.aether.data.isValidProviderId
 import com.zhousl.aether.data.normalizeLlmUserAgent
 import com.zhousl.aether.data.sanitizeProviderId
+import com.zhousl.aether.data.sortedByPreferredModelName
 import com.zhousl.aether.data.pi.PiOAuthPrompt
 import com.zhousl.aether.data.pi.PiProviderAuthState
+import com.zhousl.aether.platform.PlatformServices
 import com.zhousl.aether.ui.theme.AetherOnPrimary
 import com.zhousl.aether.ui.theme.AetherOnSurface
 import com.zhousl.aether.ui.theme.AetherOnSurfaceVariant
@@ -113,6 +117,8 @@ private val InteractiveCredentialProviderIds = setOf(
 )
 private const val OAuthFlowBrowser = "browser"
 private const val OAuthFlowDeviceCode = "device_code"
+
+internal val LocalPlatformServices = staticCompositionLocalOf<PlatformServices?> { null }
 
 @Stable
 class ProviderFormState constructor(
@@ -429,11 +435,12 @@ class ProviderFormState constructor(
 @Composable
 fun rememberProviderFormState(
     existingConfig: LlmProviderConfig?,
-): ProviderFormState = rememberSaveable(
-    existingConfig?.id,
-    saver = providerFormStateSaver(existingConfig),
-) {
-    ProviderFormState.fromConfig(existingConfig)
+): ProviderFormState = key(existingConfig?.id) {
+    rememberSaveable(
+        saver = providerFormStateSaver(existingConfig),
+    ) {
+        ProviderFormState.fromConfig(existingConfig)
+    }
 }
 
 @Composable
@@ -448,14 +455,14 @@ fun ProviderConfigurationForm(
     onSubmitAuthPrompt: (String, String, Boolean) -> Unit = { _, _, _ -> },
     onClearAuthState: () -> Unit = {},
     modifier: Modifier = Modifier,
-    cardColor: Color = AetherSurfaceHigh,
+    cardColor: Color = AetherSurface,
 ) {
     val selectedDefinition = state.selectedDefinition
     val clipboardManager = LocalClipboardManager.current
     val relevantAuthState = authState.takeIf {
         it.providerId == selectedDefinition.id && it.authMethod == state.authMethod
     }
-    ProviderAuthStateEffects(state, relevantAuthState)
+    ProviderAuthStateEffects(state, relevantAuthState, onSubmitAuthPrompt)
     val providerIdAlreadyUsed = state.providerId.trim() in
         (existingProviderIds - setOf(state.originalProviderId))
     val providerIdError = when {
@@ -636,12 +643,36 @@ fun ProviderConfigurationForm(
 private fun ProviderAuthStateEffects(
     state: ProviderFormState,
     authState: PiProviderAuthState?,
+    onSubmitAuthPrompt: (String, String, Boolean) -> Unit,
 ) {
     val uriHandler = LocalUriHandler.current
+    val platformServices = LocalPlatformServices.current
+    var authenticationCallback by remember { mutableStateOf("") }
     LaunchedEffect(authState?.authorizationUrl) {
         authState?.authorizationUrl
             ?.takeIf(String::isNotBlank)
-            ?.let { url -> runCatching { uriHandler.openUri(url) } }
+            ?.let { url ->
+                runCatching {
+                    if (platformServices?.openAuthenticationUrl(
+                            url = url,
+                            onCallback = { authenticationCallback = it },
+                            onCancelled = {
+                                authState.prompt?.id?.takeIf(String::isNotBlank)?.let { promptId ->
+                                    onSubmitAuthPrompt(promptId, "", true)
+                                }
+                            },
+                        ) != true
+                    ) {
+                        uriHandler.openUri(url)
+                    }
+                }
+            }
+    }
+    LaunchedEffect(authenticationCallback, authState?.prompt?.id) {
+        val callback = authenticationCallback.takeIf(String::isNotBlank) ?: return@LaunchedEffect
+        val prompt = authState?.prompt?.takeIf { it.type == "manual_code" } ?: return@LaunchedEffect
+        authenticationCallback = ""
+        onSubmitAuthPrompt(prompt.id, callback, false)
     }
     LaunchedEffect(authState?.verificationUrl) {
         authState?.verificationUrl
@@ -688,7 +719,7 @@ fun ProviderAuthenticationSetup(
     onStartProviderLogin: (String, String, ProviderAuthMethod, String) -> Unit,
     onSubmitAuthPrompt: (String, String, Boolean) -> Unit,
     onClearAuthState: () -> Unit,
-    cardColor: Color = AetherSurfaceHigh,
+    cardColor: Color = AetherSurface,
     modifier: Modifier = Modifier,
 ) {
     val definition = state.selectedDefinition
@@ -696,7 +727,7 @@ fun ProviderAuthenticationSetup(
         it.providerId == definition.id && it.authMethod == state.authMethod
     }
     val clipboardManager = LocalClipboardManager.current
-    ProviderAuthStateEffects(state, relevantAuthState)
+    ProviderAuthStateEffects(state, relevantAuthState, onSubmitAuthPrompt)
 
     Column(
         modifier = modifier.fillMaxWidth(),
@@ -973,6 +1004,8 @@ fun AddProviderWizard(
     onClearAuthState: () -> Unit,
     onSave: (LlmProviderConfig) -> Unit,
     modifier: Modifier = Modifier,
+    saveLabel: String = stringResource(Res.string.common_save),
+    onStageChanged: (Int) -> Unit = {},
 ) {
     var stageName by rememberSaveable { mutableStateOf(AddProviderStage.Authentication.name) }
     var selectedAuthMethodName by rememberSaveable {
@@ -999,6 +1032,10 @@ fun AddProviderWizard(
         }
     }
     val isLoadingModels = state.isFetchingModelsLocally || isFetchingModels
+
+    LaunchedEffect(stage) {
+        onStageChanged(stage.ordinal)
+    }
 
     Column(
         modifier = modifier.fillMaxWidth(),
@@ -1106,7 +1143,6 @@ fun AddProviderWizard(
                     providerSearch = providerSearch,
                     onProviderSearchChange = { providerSearch = it },
                     providerChoices = matchingProviders,
-                    authMethod = selectedAuthMethod,
                     onProviderSelected = { provider ->
                         onClearAuthState()
                         state.applyProviderDefaults(provider)
@@ -1171,7 +1207,7 @@ fun AddProviderWizard(
                     style = MaterialTheme.typography.bodyMedium,
                     color = AetherOnSurfaceVariant,
                 )
-                ProviderFormCard(cardColor = AetherSurfaceHigh) {
+                ProviderFormCard(cardColor = AetherSurface) {
                     ProviderFormTextField(
                         label = stringResource(Res.string.provider_form_manual_model_ids),
                         value = state.modelId,
@@ -1202,7 +1238,7 @@ fun AddProviderWizard(
                     onClick = { showAdvanced = !showAdvanced },
                 )
                 if (showAdvanced) {
-                    ProviderFormCard(cardColor = AetherSurfaceHigh) {
+                    ProviderFormCard(cardColor = AetherSurface) {
                         ProviderFormTextField(
                             label = stringResource(Res.string.provider_form_provider_name),
                             value = state.name,
@@ -1257,7 +1293,7 @@ fun AddProviderWizard(
                         modifier = Modifier.weight(1f),
                     )
                     ProviderWizardPrimaryButton(
-                        label = stringResource(Res.string.common_save),
+                        label = saveLabel,
                         enabled = state.isValid(existingProviderIds),
                         onClick = { onSave(state.buildConfig()) },
                         modifier = Modifier.weight(1f),
@@ -1360,7 +1396,7 @@ private fun ProviderWizardSearchField(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(8.dp))
-            .background(AetherSurfaceHigh)
+            .background(AetherSurface)
             .padding(horizontal = 14.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -1530,6 +1566,7 @@ private fun normalizeModelIds(values: List<String>): List<String> =
         .map(String::trim)
         .filter(String::isNotEmpty)
         .distinct()
+        .sortedByPreferredModelName()
 
 @Composable
 private fun ProviderFormCard(

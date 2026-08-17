@@ -68,7 +68,7 @@ import com.zhousl.aether.data.pi.toPiProviderEnvironmentVariables
 import com.zhousl.aether.runtime.SharedPiBridgeClient
 import com.zhousl.aether.shared.resources.Res
 import com.zhousl.aether.shared.resources.*
-import com.zhousl.aether.ui.theme.AetherBackground
+import com.zhousl.aether.ui.theme.AetherSettingsBackground
 import com.zhousl.aether.ui.theme.AetherOnSurface
 import com.zhousl.aether.ui.theme.AetherOnSurfaceVariant
 import com.zhousl.aether.ui.theme.AetherPrimary
@@ -320,7 +320,7 @@ private fun SharedProviderCard(
 
     Row(
         modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp))
-            .background(AetherSurfaceHigh).padding(16.dp),
+            .background(AetherSurface).padding(16.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Checkbox(checked = config.isEnabled, onCheckedChange = onEnabledChange)
@@ -373,7 +373,7 @@ private fun SharedProviderCard(
             Icon(
                 imageVector = Icons.Rounded.Delete,
                 contentDescription = stringResource(Res.string.action_remove),
-                tint = MaterialTheme.colorScheme.error,
+                tint = Color(0xFFD25757),
             )
         }
     }
@@ -592,7 +592,7 @@ private fun SharedModelSelectionRow(
 ) {
     Row(
         modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp))
-            .background(if (selected) AetherBackground.copy(alpha = 0.9f) else Color.Transparent)
+            .background(if (selected) AetherSettingsBackground.copy(alpha = 0.9f) else Color.Transparent)
             .clickable(onClick = onClick).padding(horizontal = 18.dp, vertical = 18.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -643,13 +643,10 @@ private fun SharedProviderEditPage(
     var authState by remember(existingConfig?.id) { mutableStateOf(PiProviderAuthState()) }
     var authJob by remember(existingConfig?.id) { mutableStateOf<Job?>(null) }
     var fetchingModels by remember(existingConfig?.id) { mutableStateOf(false) }
-    val oauthWaitingMessage = stringResource(Res.string.provider_form_oauth_waiting)
-    val credentialsWaitingMessage = stringResource(Res.string.provider_form_credentials_waiting)
-    val oauthConnectedMessage = stringResource(Res.string.provider_form_oauth_connected)
-    val apiKeyConfiguredMessage = stringResource(Res.string.provider_form_api_key_configured)
-    val completeAuthorizationMessage = stringResource(Res.string.provider_form_complete_authorization_browser)
-    val enterDeviceCodeMessage = stringResource(Res.string.provider_form_enter_device_code_browser)
-    val unknownErrorMessage = stringResource(Res.string.common_unknown_error)
+    val oauthWaitingMessage = "Waiting for authorization."
+    val credentialsWaitingMessage = "Waiting for credentials."
+    val oauthConnectedMessage = "Connected with OAuth."
+    val apiKeyConfiguredMessage = "API key configured."
     val fetchErrorPlaceholder = "{fetch_error}"
     val fetchModelsFailedTemplate = stringResource(
         Res.string.message_fetch_models_failed,
@@ -664,13 +661,13 @@ private fun SharedProviderEditPage(
         fetchingModels = true
         scope.launch {
             try {
-                val result = modelCatalogClient.fetchModels(config, bridgeClient::listProviders)
+                val result = modelCatalogClient.fetchModels(config)
                 callback(result.models)
                 result.error?.let { error ->
                     onTransientMessage(
                         fetchModelsFailedTemplate.replace(
                             fetchErrorPlaceholder,
-                            error.trim().ifBlank { unknownErrorMessage },
+                            error.trim().ifBlank { "Unknown error." },
                         ),
                     )
                 }
@@ -716,12 +713,7 @@ private fun SharedProviderEditPage(
                         authState.providerId == normalizedProviderId &&
                         authState.authMethod == authMethod
                     ) {
-                        authState = authState.withSharedProviderBridgeEvent(
-                            event,
-                            payload,
-                            completeAuthorizationMessage,
-                            enterDeviceCodeMessage,
-                        )
+                        authState = authState.withSharedProviderBridgeEvent(event, payload)
                     }
                 }
             }.fold(
@@ -840,7 +832,7 @@ private fun SharedProviderPageScaffold(
     onTrailingAction: (() -> Unit)? = null,
     content: @Composable () -> Unit,
 ) {
-    Box(modifier = Modifier.fillMaxSize().background(AetherBackground)) {
+    Box(modifier = Modifier.fillMaxSize().background(AetherSettingsBackground)) {
         Column(
             modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())
                 .padding(
@@ -867,19 +859,17 @@ private fun SharedProviderPageScaffold(
 private fun PiProviderAuthState.withSharedProviderBridgeEvent(
     event: String,
     payload: JsonObject,
-    completeAuthorizationMessage: String,
-    enterDeviceCodeMessage: String,
 ): PiProviderAuthState = when (event) {
     "auth_url" -> copy(
         authorizationUrl = payload.sharedProviderString("url"),
         statusMessage = payload.sharedProviderString("instructions").ifBlank {
-            completeAuthorizationMessage
+            "Complete authorization in your browser."
         },
     )
     "auth_device_code" -> copy(
         deviceCode = payload.sharedProviderString("user_code"),
         verificationUrl = payload.sharedProviderString("verification_uri"),
-        statusMessage = enterDeviceCodeMessage,
+        statusMessage = "Enter the device code in your browser.",
     )
     "auth_prompt" -> copy(
         prompt = payload.toPiOAuthPrompt(),

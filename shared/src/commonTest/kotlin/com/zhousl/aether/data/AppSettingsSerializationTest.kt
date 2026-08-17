@@ -14,10 +14,6 @@ class AppSettingsSerializationTest {
             customHeaders = listOf(LlmCustomHeader("X-Test", "value")),
             reasoningEffort = "high",
             systemPrompt = "shared prompt",
-            tavilyApiKey = "tavily",
-            searchBackend = SearchBackend.Bing,
-            searxngBaseUrl = "https://searx.example/",
-            searxngApiKey = "searx-secret",
             keepTasksRunningInBackground = false,
             notifyOnTaskCompletion = false,
             agentWorkspaceMode = AgentWorkspaceMode.PerSession,
@@ -27,7 +23,10 @@ class AppSettingsSerializationTest {
             alpineEnvironmentVariables = listOf(AlpineEnvironmentVariable("A", "B")),
             language = AppLanguage.SimplifiedChinese,
             themeMode = AppThemeMode.Dark,
-            defaultSelectedSkillIds = listOf("example"),
+            defaultChatModelKey = "provider/chat-model",
+            defaultTitleModelKey = "provider/title-model",
+            defaultNamingModelKey = "provider/naming-model",
+            defaultCompactingModelKey = "provider/compacting-model",
             onboardingSeenVersion = CurrentOnboardingVersion,
             onboardingCompletedVersion = CurrentOnboardingVersion,
             privacyPolicyAccepted = true,
@@ -46,8 +45,16 @@ class AppSettingsSerializationTest {
     }
 
     @Test
+    fun acceptedPrivacyPolicyCannotBeOverwrittenByStaleSettings() {
+        assertEquals(true, privacyPolicyAccepted(persisted = true, requested = false))
+        assertEquals(true, privacyPolicyAccepted(persisted = false, requested = true))
+        assertEquals(false, privacyPolicyAccepted(persisted = false, requested = false))
+    }
+
+    @Test
     fun thinkingCatalogCacheRoundTripPreservesResolvedEmptyModels() {
         val cache = SharedThinkingCatalogCache(
+            source = ModelsDevThinkingCatalogSource,
             levelsByProviderModel = mapOf(
                 "openai/gpt-5" to listOf("off", "medium", "high"),
                 "anthropic/claude-haiku" to emptyList(),
@@ -58,5 +65,14 @@ class AppSettingsSerializationTest {
         )
 
         assertEquals(cache, parseSharedThinkingCatalogCache(serializeSharedThinkingCatalogCache(cache)))
+    }
+
+    @Test
+    fun legacyThinkingCatalogCacheHasNoModelsDevSource() {
+        val cache = parseSharedThinkingCatalogCache(
+            """{"levelsByProviderModel":{"openai/gpt-5":["high"]}}""",
+        )
+
+        assertEquals("", cache.source)
     }
 }

@@ -56,14 +56,11 @@ internal fun PersistedChatSession.toAndroidChatSessionJson(): JsonObject = build
     put("agentModeEnabled", false)
     put("chromeEnabled", chromeEnabled)
     put("selectedModelKey", selectedModelKey)
-    put("selectedSkillIds", buildJsonArray { selectedSkillIds.forEach { add(JsonPrimitive(it)) } })
     put("messages", buildJsonArray {
         messages.forEach { message ->
             message.toAndroidChatMessageJson().forEach(::add)
         }
     })
-    put("activeSkillsJson", encodeSharedActiveSkillContexts(activeSkills))
-    put("activeMcpServerIds", buildJsonArray { activeMcpServerIds.forEach { add(JsonPrimitive(it)) } })
 }
 
 private fun PersistedChatMessage.toAndroidChatMessageJson(): List<JsonObject> {
@@ -139,6 +136,10 @@ private fun PersistedChatMessage.toAndroidChatMessageJson(
         )
         put("reasoningTrace", trace.toAndroidReasoningTraceJson())
     }
+    val statusText = if (block?.type == PersistedAssistantResponseBlockType.Status) block.text else if (block == null) status else ""
+    val resolvedStatusDetail = if (block?.type == PersistedAssistantResponseBlockType.Status) block.statusDetail else if (block == null) statusDetail else ""
+    if (statusText.isNotBlank()) put("statusText", statusText)
+    if (resolvedStatusDetail.isNotBlank()) put("statusDetail", resolvedStatusDetail)
     if (!fromUser) {
         put(
             "responseGroupId",
@@ -151,6 +152,8 @@ private fun PersistedChatMessage.toAndroidChatMessageJson(
     if ((fromUser || isLastBlock) && providerPayloadJson.isNotBlank()) {
         put("providerPayloadJson", providerPayloadJson)
     }
+    if (isLastBlock && customType.isNotBlank()) put("customType", customType)
+    if (isLastBlock && customPayloadJson.isNotBlank()) put("customPayloadJson", customPayloadJson)
 
     val blockTools = when (block?.type) {
         PersistedAssistantResponseBlockType.Reasoning ->
@@ -248,6 +251,8 @@ private data class AndroidArchiveMessage(
     val thoughtDurationMillis: Long?,
     val reasoningTrace: PersistedReasoningTrace?,
     val tools: List<PersistedChatTool>,
+    val statusText: String,
+    val statusDetail: String,
     val attachments: List<PersistedChatAttachment>,
     val responseGroupId: String,
     val assistantActionsHidden: Boolean,
@@ -258,6 +263,8 @@ private data class AndroidArchiveMessage(
     val completedAtMillis: Long?,
     val tokenUsageSource: String,
     val providerPayloadJson: String,
+    val customType: String,
+    val customPayloadJson: String,
     val userBranches: List<List<PersistedChatMessage>>,
     val selectedUserBranchIndex: Int,
 )
@@ -274,9 +281,9 @@ private fun JsonObject.toPersistedChatSession(index: Int): PersistedChatSession 
         preview = string("preview"),
         messages = rawMessages.coalesceAndroidAssistantGroups(),
         hasCustomTitle = boolean("hasCustomTitle"),
-        selectedSkillIds = stringList("selectedSkillIds"),
-        activeSkills = decodeSharedActiveSkillContexts(string("activeSkillsJson")),
-        activeMcpServerIds = stringList("activeMcpServerIds"),
+        selectedSkillIds = emptyList(),
+        activeSkills = emptyList(),
+        activeMcpServerIds = emptyList(),
         chromeEnabled = boolean("chromeEnabled"),
         selectedModelKey = string("selectedModelKey"),
     )
@@ -318,6 +325,8 @@ private fun AndroidArchiveMessage.toPersistedChatMessage(): PersistedChatMessage
     firstTokenLatencyMillis = firstTokenLatencyMillis(),
     tokenUsageSource = tokenUsageSource,
     providerPayloadJson = providerPayloadJson,
+    customType = customType,
+    customPayloadJson = customPayloadJson,
     assistantActionsHidden = assistantActionsHidden,
     displayKind = displayKind,
     userBranches = userBranches,
@@ -347,12 +356,22 @@ private fun List<AndroidArchiveMessage>.toPersistedAssistantGroup(): PersistedCh
         firstTokenLatencyMillis = metrics.firstTokenLatencyMillis(),
         tokenUsageSource = metrics.tokenUsageSource,
         providerPayloadJson = metrics.providerPayloadJson,
+        customType = metrics.customType,
+        customPayloadJson = metrics.customPayloadJson,
         assistantActionsHidden = any(AndroidArchiveMessage::assistantActionsHidden),
         displayKind = first.displayKind,
     )
 }
 
 private fun AndroidArchiveMessage.toResponseBlocks(): List<PersistedAssistantResponseBlock> = when {
+    statusText.isNotBlank() -> listOf(
+        PersistedAssistantResponseBlock(
+            id = id,
+            type = PersistedAssistantResponseBlockType.Status,
+            text = statusText,
+            statusDetail = statusDetail,
+        ),
+    )
     reasoningTrace != null -> listOf(
         PersistedAssistantResponseBlock(
             id = reasoningTrace.id.ifBlank { id },
@@ -408,6 +427,8 @@ private fun JsonObject.toAndroidArchiveMessage(index: Int): AndroidArchiveMessag
         thoughtDurationMillis = long("thoughtDurationMillis"),
         reasoningTrace = (this["reasoningTrace"] as? JsonObject)?.toPersistedReasoningTrace(),
         tools = array("toolInvocations").orEmpty().mapNotNull { (it as? JsonObject)?.toPersistedChatTool() },
+        statusText = string("statusText"),
+        statusDetail = string("statusDetail"),
         attachments = array("attachments").orEmpty().mapIndexedNotNull { attachmentIndex, element ->
             (element as? JsonObject)?.toPersistedChatAttachment(attachmentIndex)
         },
@@ -421,6 +442,8 @@ private fun JsonObject.toAndroidArchiveMessage(index: Int): AndroidArchiveMessag
         completedAtMillis = usageObject?.long("completedAtMillis"),
         tokenUsageSource = usageObject?.string("tokenUsageSource").orEmpty().ifBlank { "unavailable" },
         providerPayloadJson = string("providerPayloadJson"),
+        customType = string("customType"),
+        customPayloadJson = string("customPayloadJson"),
         userBranches = rawBranches,
         selectedUserBranchIndex = selectedBranch,
     )

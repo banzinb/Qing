@@ -1,6 +1,7 @@
 package com.zhousl.aether.ui
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -29,7 +30,13 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.ArrowForwardIos
+import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.ArrowDropDown
 import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.Delete
+import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Link
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Visibility
@@ -43,6 +50,10 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -61,6 +72,7 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -86,7 +98,7 @@ import com.zhousl.aether.platform.PlatformServices
 import com.zhousl.aether.platform.platformAppVersion
 import com.zhousl.aether.shared.resources.Res
 import com.zhousl.aether.shared.resources.*
-import com.zhousl.aether.ui.theme.AetherBackground
+import com.zhousl.aether.ui.theme.AetherSettingsBackground
 import com.zhousl.aether.ui.theme.AetherOnSurface
 import com.zhousl.aether.ui.theme.AetherOnSurfaceVariant
 import com.zhousl.aether.ui.theme.AetherPrimary
@@ -98,6 +110,13 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import org.jetbrains.compose.resources.painterResource
 import org.jetbrains.compose.resources.stringResource
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.doubleOrNull
+import kotlinx.serialization.json.jsonPrimitive
 
 private fun Throwable.sharedUserFacingMessage(): String =
     message?.trim().takeUnless { it.isNullOrBlank() }
@@ -114,8 +133,8 @@ private suspend fun <T> runSharedSettingsCatching(block: suspend () -> T): Resul
 
 private val SharedStatisticsInputColor = Color(0xFF5D7CFF)
 private val SharedStatisticsOutputColor = Color(0xFF7B68EE)
-private val SharedStatisticsReasoningColor = Color(0xFF6E56CF)
-private val SharedStatisticsNeutralChartColor = Color(0xFF747C89)
+private val SharedStatisticsReasoningColor = Color(0xFFA9B8FF)
+private val SharedStatisticsNeutralChartColor = Color(0xFFDCE4FF)
 
 @Composable
 internal fun SharedPersonalizationSettingsDetail(
@@ -123,7 +142,7 @@ internal fun SharedPersonalizationSettingsDetail(
     onSave: (AppSettings) -> Unit,
     onBack: () -> Unit,
 ) {
-    var systemPrompt by remember(settings.systemPrompt) { mutableStateOf(settings.systemPrompt) }
+    var systemPrompt by rememberSaveable(settings.systemPrompt) { mutableStateOf(settings.systemPrompt) }
     ReportSharedSettingsUnsavedChanges(systemPrompt != settings.systemPrompt)
     fun persistAndBack() {
         val updated = settings.copy(systemPrompt = systemPrompt)
@@ -140,7 +159,10 @@ internal fun SharedPersonalizationSettingsDetail(
             SharedSettingsTextField(
                 label = stringResource(Res.string.settings_custom_instructions),
                 value = systemPrompt,
-                onValueChange = { systemPrompt = it },
+                onValueChange = {
+                    systemPrompt = it
+                    onSave(settings.copy(systemPrompt = it))
+                },
                 minLines = 8,
             )
         }
@@ -160,8 +182,8 @@ internal fun SharedWebToolsSettingsDetail(
     onSave: (AppSettings) -> Unit,
     onBack: () -> Unit,
 ) {
-    var apiKey by remember(settings.tavilyApiKey) { mutableStateOf(settings.tavilyApiKey) }
-    var baseUrl by remember(settings.tavilyBaseUrl) { mutableStateOf(settings.tavilyBaseUrl) }
+    var apiKey by rememberSaveable(settings.tavilyApiKey) { mutableStateOf(settings.tavilyApiKey) }
+    var baseUrl by rememberSaveable(settings.tavilyBaseUrl) { mutableStateOf(settings.tavilyBaseUrl) }
     ReportSharedSettingsUnsavedChanges(
         apiKey != settings.tavilyApiKey || normalizeTavilyBaseUrl(baseUrl) != settings.tavilyBaseUrl,
     )
@@ -183,7 +205,10 @@ internal fun SharedWebToolsSettingsDetail(
             SharedSettingsTextField(
                 label = stringResource(Res.string.settings_tavily_api_key),
                 value = apiKey,
-                onValueChange = { apiKey = it },
+                onValueChange = {
+                    apiKey = it
+                    onSave(settings.copy(tavilyApiKey = it, tavilyBaseUrl = normalizeTavilyBaseUrl(baseUrl)))
+                },
                 keyboardType = KeyboardType.Password,
                 secret = true,
             )
@@ -191,7 +216,10 @@ internal fun SharedWebToolsSettingsDetail(
             SharedSettingsTextField(
                 label = stringResource(Res.string.settings_tavily_base_url),
                 value = baseUrl,
-                onValueChange = { baseUrl = it },
+                onValueChange = {
+                    baseUrl = it
+                    onSave(settings.copy(tavilyApiKey = apiKey, tavilyBaseUrl = normalizeTavilyBaseUrl(it)))
+                },
                 keyboardType = KeyboardType.Uri,
             )
         }
@@ -212,13 +240,13 @@ internal fun SharedReliabilitySettingsDetail(
     onSave: (AppSettings) -> Unit,
     onBack: () -> Unit,
 ) {
-    var reconnectSeconds by remember(settings.llmInactivityReconnectTimeoutSeconds) {
+    var reconnectSeconds by rememberSaveable(settings.llmInactivityReconnectTimeoutSeconds) {
         mutableStateOf(settings.llmInactivityReconnectTimeoutSeconds.toString())
     }
-    var keepBackground by remember(settings.keepTasksRunningInBackground) {
+    var keepBackground by rememberSaveable(settings.keepTasksRunningInBackground) {
         mutableStateOf(settings.keepTasksRunningInBackground)
     }
-    var notify by remember(settings.notifyOnTaskCompletion) {
+    var notify by rememberSaveable(settings.notifyOnTaskCompletion) {
         mutableStateOf(settings.notifyOnTaskCompletion)
     }
     fun currentSettings(): AppSettings = settings.copy(
@@ -261,12 +289,14 @@ internal fun SharedReliabilitySettingsDetail(
                         onCheckedChange = { keepBackground = it },
                     )
                     Spacer(Modifier.height(4.dp))
-                    SharedSettingsToggle(
-                        title = stringResource(Res.string.settings_notify_background_tasks_finish),
-                        subtitle = stringResource(Res.string.settings_notify_background_tasks_finish_subtitle),
-                        checked = notify,
-                        onCheckedChange = { notify = it },
-                    )
+                    if (capabilities.localNotifications) {
+                        SharedSettingsToggle(
+                            title = stringResource(Res.string.settings_notify_background_tasks_finish),
+                            subtitle = stringResource(Res.string.settings_notify_background_tasks_finish_subtitle),
+                            checked = notify,
+                            onCheckedChange = { notify = it },
+                        )
+                    }
                 }
             }
             Spacer(Modifier.height(16.dp))
@@ -456,10 +486,10 @@ internal fun SharedDeveloperSettingsDetail(
     onBack: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
-    var autoClean by remember(settings.autoCleanOldCommandHistory) {
+    var autoClean by rememberSaveable(settings.autoCleanOldCommandHistory) {
         mutableStateOf(settings.autoCleanOldCommandHistory)
     }
-    var retention by remember(settings.oldCommandHistoryRetentionHours) {
+    var retention by rememberSaveable(settings.oldCommandHistoryRetentionHours) {
         mutableStateOf(settings.oldCommandHistoryRetentionHours.toString())
     }
     var showExportWarning by remember { mutableStateOf(false) }
@@ -883,7 +913,7 @@ private fun SharedSettingsDetailScaffold(
     onTrailingAction: () -> Unit = {},
     content: @Composable ColumnScope.() -> Unit,
 ) {
-    Box(modifier = Modifier.fillMaxSize().background(AetherBackground)) {
+    Box(modifier = Modifier.fillMaxSize().background(AetherSettingsBackground)) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -904,6 +934,711 @@ private fun SharedSettingsDetailScaffold(
     }
 }
 
+private fun settingsTrailingIcon(name: String?): ImageVector? {
+    if (name.isNullOrBlank()) return null
+    return when (name.lowercase()) {
+        "none", "hidden", "false" -> null
+        "add", "plus", "new" -> Icons.Rounded.Add
+        "check", "save", "done" -> Icons.Rounded.Check
+        "delete", "remove", "trash" -> Icons.Rounded.Delete
+        "refresh", "reload" -> Icons.Rounded.Refresh
+        "close", "clear" -> Icons.Rounded.Close
+        "edit" -> Icons.Rounded.Edit
+        else -> Icons.Rounded.Check
+    }
+}
+
+@Composable
+private fun SharedAetherExtensionItemCard(
+    setting: JsonObject,
+    page: com.zhousl.aether.data.SharedAetherExtensionSettingsPage,
+    controller: SharedAetherExtensionUiController?,
+    onCategorySelected: (String) -> Unit,
+) {
+    val id = "${page.id}:${setting.string("id")}"
+    val title = setting.string("title").ifBlank { setting.string("label") }
+    val subtitle = setting.string("subtitle").ifBlank { setting.string("tag") }
+    val pill = setting.string("pill").ifBlank { setting.string("badge") }
+    val editAction = setting.string("editAction")
+    val editCategory = setting.string("editCategory")
+    val editArgs = setting["editArgs"] as? JsonObject ?: JsonObject(emptyMap())
+    val deleteAction = setting.string("deleteAction")
+    val deleteArgs = setting["deleteArgs"] as? JsonObject ?: JsonObject(emptyMap())
+    val toggleAction = setting.string("toggleAction").ifBlank { "settings:${page.localId}:${setting.string("id")}" }
+    val hasToggle = setting.containsKey("checked") || setting.string("toggleAction").isNotBlank()
+    val initialExpanded = setting.boolean("expanded", false)
+    var expanded by rememberSaveable(id) { mutableStateOf(initialExpanded) }
+    var checked by remember(id, setting["checked"], setting["value"]) {
+        mutableStateOf(
+            setting["checked"]?.jsonPrimitive?.booleanOrNull
+                ?: setting["value"]?.jsonPrimitive?.booleanOrNull
+                ?: true
+        )
+    }
+    val actions = (setting["actions"] as? JsonArray).orEmpty().mapNotNull { it as? JsonObject }
+    val details = (setting["details"] as? JsonArray).orEmpty().mapNotNull { it as? JsonObject }
+    val resultText = setting.string("resultText").ifBlank { setting.string("result").ifBlank { setting.string("status") } }
+    val subSettings = (setting["settings"] as? JsonArray).orEmpty().mapNotNull { it as? JsonObject }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(AetherSurfaceHigh)
+            .animateContentSize()
+            .padding(16.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = AetherOnSurface,
+                )
+                if (subtitle.isNotBlank()) {
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = subtitle,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = AetherOnSurfaceVariant,
+                    )
+                }
+                if (pill.isNotBlank()) {
+                    Spacer(Modifier.height(8.dp))
+                    SharedActionPreviewPill(pill)
+                }
+            }
+            IconButton(onClick = { expanded = !expanded }, modifier = Modifier.size(36.dp)) {
+                Icon(
+                    if (expanded) Icons.Rounded.ArrowDropDown else Icons.AutoMirrored.Rounded.ArrowForwardIos,
+                    contentDescription = if (expanded) "Collapse" else "Expand",
+                    tint = AetherOnSurfaceVariant,
+                    modifier = Modifier.size(20.dp),
+                )
+            }
+            if (editAction.isNotBlank() || editCategory.isNotBlank()) {
+                IconButton(
+                    onClick = {
+                        if (editCategory.isNotBlank()) {
+                            onCategorySelected(editCategory)
+                        } else if (editAction.isNotBlank()) {
+                            controller?.onAction?.invoke(page.extensionId, editAction, editArgs)
+                        }
+                    },
+                    modifier = Modifier.size(36.dp),
+                ) {
+                    Icon(
+                        Icons.Rounded.Edit,
+                        contentDescription = "Edit",
+                        tint = AetherOnSurface,
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
+            }
+            if (deleteAction.isNotBlank()) {
+                IconButton(
+                    onClick = {
+                        controller?.onAction?.invoke(page.extensionId, deleteAction, deleteArgs)
+                    },
+                    modifier = Modifier.size(36.dp),
+                ) {
+                    Icon(
+                        Icons.Rounded.Delete,
+                        contentDescription = "Remove",
+                        tint = Color(0xFFD25757),
+                        modifier = Modifier.size(20.dp),
+                    )
+                }
+            }
+        }
+
+        if (hasToggle) {
+            Spacer(Modifier.height(12.dp))
+            SharedSettingsToggleRow(
+                checked = checked,
+                onCheckedChange = {
+                    checked = it
+                    controller?.onAction?.invoke(
+                        page.extensionId,
+                        toggleAction,
+                        JsonObject(
+                            mapOf(
+                                "setting" to JsonPrimitive(setting.string("id")),
+                                "value" to JsonPrimitive(it),
+                                "checked" to JsonPrimitive(it),
+                            )
+                        ),
+                    )
+                },
+            )
+        }
+
+        if (expanded) {
+            if (actions.isNotEmpty()) {
+                Spacer(Modifier.height(14.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    actions.forEach { actionItem ->
+                        val aLabel = actionItem.string("label")
+                        val aName = actionItem.string("action")
+                        val aArgs = actionItem["args"] as? JsonObject ?: JsonObject(emptyMap())
+                        val aCategory = actionItem.string("category")
+                        val aEnabled = actionItem["enabled"]?.jsonPrimitive?.booleanOrNull ?: true
+                        SharedSettingsSubtleActionButton(
+                            label = aLabel,
+                            onClick = {
+                                if (aCategory.isNotBlank()) {
+                                    onCategorySelected(aCategory)
+                                } else if (aName.isNotBlank()) {
+                                    controller?.onAction?.invoke(page.extensionId, aName, aArgs)
+                                }
+                            },
+                            enabled = aEnabled,
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                }
+            }
+
+            if (details.isNotEmpty()) {
+                Spacer(Modifier.height(14.dp))
+                details.forEach { detail ->
+                    val dLabel = detail.string("label")
+                    val dValue = detail.string("value")
+                    Column(Modifier.fillMaxWidth().padding(top = 8.dp)) {
+                        Text(dLabel, style = MaterialTheme.typography.labelSmall, color = AetherOnSurfaceVariant)
+                        Text(dValue, style = MaterialTheme.typography.bodySmall, color = AetherOnSurface)
+                    }
+                }
+            }
+
+            if (resultText.isNotBlank()) {
+                Spacer(Modifier.height(14.dp))
+                SettingsCardGroup {
+                    Text(
+                        text = resultText,
+                        modifier = Modifier.padding(16.dp),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = AetherOnSurfaceVariant,
+                    )
+                }
+            }
+
+            if (subSettings.isNotEmpty()) {
+                Spacer(Modifier.height(14.dp))
+                SettingsCardGroup {
+                    Column {
+                        subSettings.forEachIndexed { sIndex, sSetting ->
+                            SharedAetherExtensionControlRow(
+                                setting = sSetting,
+                                page = page,
+                                controller = controller,
+                                onCategorySelected = onCategorySelected,
+                            )
+                            val sType = sSetting.string("type").ifBlank { "text" }
+                            if (sIndex < subSettings.size - 1 && sType !in setOf("divider", "spacer")) {
+                                CardDivider()
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SharedAetherExtensionEmptyState(
+    setting: JsonObject,
+    page: com.zhousl.aether.data.SharedAetherExtensionSettingsPage,
+    controller: SharedAetherExtensionUiController?,
+    onCategorySelected: (String) -> Unit,
+) {
+    val title = setting.string("title").ifBlank { setting.string("label") }
+    val description = setting.string("description").ifBlank { setting.string("subtitle") }
+    val buttonLabel = setting.string("buttonLabel").ifBlank { "Add" }
+    val action = setting.string("action")
+    val args = setting["args"] as? JsonObject ?: JsonObject(emptyMap())
+    val category = setting.string("category")
+
+    SettingsCardGroup {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            if (title.isNotBlank()) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleMedium,
+                    color = AetherOnSurface,
+                )
+                Spacer(Modifier.height(8.dp))
+            }
+            if (description.isNotBlank()) {
+                Text(
+                    text = description,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = AetherOnSurfaceVariant,
+                )
+                Spacer(Modifier.height(16.dp))
+            }
+            if (buttonLabel.isNotBlank()) {
+                SharedSettingsActionButton(
+                    label = buttonLabel,
+                    onClick = {
+                        if (category.isNotBlank()) {
+                            onCategorySelected(category)
+                        } else if (action.isNotBlank()) {
+                            controller?.onAction?.invoke(page.extensionId, action, args)
+                        }
+                    },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SharedAetherExtensionControlRow(
+    setting: JsonObject,
+    page: com.zhousl.aether.data.SharedAetherExtensionSettingsPage,
+    controller: SharedAetherExtensionUiController?,
+    onCategorySelected: (String) -> Unit,
+) {
+    val uriHandler = LocalUriHandler.current
+    val id = "${page.id}:${setting.string("id")}"
+    val type = setting.string("type").ifBlank { "text" }
+    val label = setting.string("label").ifBlank { setting.string("title") }
+    val subtitle = setting.string("description").ifBlank { setting.string("subtitle") }
+
+    fun update(value: JsonPrimitive) {
+        controller?.onAction?.invoke(
+            page.extensionId,
+            "settings:${page.localId}:${setting.string("id")}",
+            JsonObject(mapOf("setting" to JsonPrimitive(setting.string("id")), "value" to value)),
+        )
+    }
+
+    when (type) {
+        "toggle" -> {
+            var checked by remember(id, setting["value"]) {
+                mutableStateOf(setting["value"]?.jsonPrimitive?.booleanOrNull ?: false)
+            }
+            Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp)) {
+                SharedSettingsToggle(label, subtitle, checked) {
+                    checked = it
+                    update(JsonPrimitive(it))
+                }
+            }
+        }
+        "select", "dropdown", "segmented", "tab", "tabs" -> {
+            val options = (setting["options"] as? JsonArray).orEmpty().mapNotNull { it as? JsonObject }
+            var selected by remember(id, setting.string("value")) { mutableStateOf(setting.string("value")) }
+            if (type == "segmented" || type == "tab" || type == "tabs") {
+                Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp)) {
+                    if (label.isNotBlank()) Text(label, style = MaterialTheme.typography.bodyMedium, color = AetherOnSurface)
+                    if (subtitle.isNotBlank()) Text(subtitle, style = MaterialTheme.typography.bodySmall, color = AetherOnSurfaceVariant)
+                    if (label.isNotBlank() || subtitle.isNotBlank()) Spacer(Modifier.height(8.dp))
+                    SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                        options.forEachIndexed { optionIndex, option ->
+                            val value = option.string("value")
+                            SegmentedButton(
+                                selected == value,
+                                {
+                                    selected = value
+                                    update(JsonPrimitive(value))
+                                },
+                                SegmentedButtonDefaults.itemShape(optionIndex, options.size),
+                            ) {
+                                Text(option.string("label").ifBlank { value })
+                            }
+                        }
+                    }
+                }
+            } else {
+                val selectedLabel = options
+                    .firstOrNull { it.string("value") == selected }
+                    ?.string("label")
+                    .orEmpty()
+                SharedSelectionDropdownField(
+                    label = label,
+                    supportingText = subtitle,
+                    selectedLabel = selectedLabel.ifBlank { selected },
+                    options = options.map { option ->
+                        val value = option.string("value")
+                        SharedSelectionOption(
+                            title = option.string("label").ifBlank { value },
+                            subtitle = option.string("description"),
+                            selected = selected == value,
+                            onClick = {
+                                selected = value
+                                update(JsonPrimitive(value))
+                            },
+                        )
+                    },
+                )
+            }
+        }
+        "choice", "radio" -> {
+            val selected = setting.boolean("selected", false) || setting["value"]?.jsonPrimitive?.booleanOrNull == true
+            SharedSettingsChoiceRow(
+                title = label,
+                subtitle = subtitle,
+                selected = selected,
+                onClick = {
+                    val action = setting.string("action").ifBlank { "settings:${page.localId}:${setting.string("id")}" }
+                    val args = setting["args"] as? JsonObject
+                        ?: JsonObject(mapOf("setting" to JsonPrimitive(setting.string("id")), "value" to JsonPrimitive(!selected)))
+                    controller?.onAction?.invoke(page.extensionId, action, args)
+                },
+            )
+        }
+        "slider" -> {
+            val minimum = setting["min"]?.jsonPrimitive?.doubleOrNull?.toFloat() ?: 0f
+            val maximum = (setting["max"]?.jsonPrimitive?.doubleOrNull?.toFloat() ?: 1f)
+                .coerceAtLeast(minimum + 0.0001f)
+            val step = setting["step"]?.jsonPrimitive?.doubleOrNull?.toFloat()
+                ?.takeIf { it > 0f } ?: 0.01f
+            val discreteSteps = (((maximum - minimum) / step).roundToInt() - 1).coerceAtLeast(0)
+            var value by remember(id, setting["value"]) {
+                mutableStateOf(
+                    (setting["value"]?.jsonPrimitive?.doubleOrNull?.toFloat() ?: minimum)
+                        .coerceIn(minimum, maximum)
+                )
+            }
+            Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp)) {
+                Text(label, style = MaterialTheme.typography.bodyMedium, color = AetherOnSurface)
+                if (subtitle.isNotBlank()) {
+                    Text(subtitle, style = MaterialTheme.typography.bodySmall, color = AetherOnSurfaceVariant)
+                }
+                Slider(
+                    value = value,
+                    onValueChange = { value = it },
+                    onValueChangeFinished = { update(JsonPrimitive(value)) },
+                    valueRange = minimum..maximum,
+                    steps = discreteSteps.takeIf { it in 1..20 } ?: 0,
+                )
+            }
+        }
+        "button" -> {
+            val category = setting.string("category")
+            SharedSettingsActionButton(
+                label = label,
+                onClick = {
+                    if (category.isNotBlank()) {
+                        onCategorySelected(category)
+                    } else {
+                        controller?.onAction?.invoke(
+                            page.extensionId,
+                            setting.string("action").ifBlank { "settings:${page.localId}:${setting.string("id")}" },
+                            setting["args"] as? JsonObject ?: JsonObject(emptyMap()),
+                        )
+                    }
+                },
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                enabled = setting["enabled"]?.jsonPrimitive?.booleanOrNull ?: true,
+            )
+        }
+        "link" -> {
+            val category = setting.string("category")
+            SettingsNavRow(
+                icon = Icons.Rounded.Link,
+                title = label,
+                subtitle = subtitle,
+                enabled = setting["enabled"]?.jsonPrimitive?.booleanOrNull ?: true,
+            ) {
+                if (category.isNotBlank()) {
+                    onCategorySelected(category)
+                } else {
+                    val url = setting.string("url")
+                    if (url.isNotBlank()) {
+                        runCatching { uriHandler.openUri(url) }
+                    } else {
+                        controller?.onAction?.invoke(
+                            page.extensionId,
+                            setting.string("action").ifBlank {
+                                "settings:${page.localId}:${setting.string("id")}"
+                            },
+                            setting["args"] as? JsonObject ?: JsonObject(emptyMap()),
+                        )
+                    }
+                }
+            }
+        }
+        "action-row", "chips" -> {
+            val actions = (setting["actions"] as? JsonArray).orEmpty().mapNotNull { it as? JsonObject }
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                actions.forEach { actionItem ->
+                    val aLabel = actionItem.string("label")
+                    val aName = actionItem.string("action")
+                    val aArgs = actionItem["args"] as? JsonObject ?: JsonObject(emptyMap())
+                    val aCategory = actionItem.string("category")
+                    val aEnabled = actionItem["enabled"]?.jsonPrimitive?.booleanOrNull ?: true
+                    SharedSettingsSubtleActionButton(
+                        label = aLabel,
+                        onClick = {
+                            if (aCategory.isNotBlank()) {
+                                onCategorySelected(aCategory)
+                            } else if (aName.isNotBlank()) {
+                                controller?.onAction?.invoke(page.extensionId, aName, aArgs)
+                            }
+                        },
+                        enabled = aEnabled,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+            }
+        }
+        "detail-line", "key-value" -> {
+            val value = setting.string("value").ifBlank { subtitle }
+            Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+                Text(label, style = MaterialTheme.typography.labelSmall, color = AetherOnSurfaceVariant)
+                Text(value, style = MaterialTheme.typography.bodySmall, color = AetherOnSurface)
+            }
+        }
+        "pill", "badge" -> {
+            Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+                SharedActionPreviewPill(label)
+            }
+        }
+        "result-card", "callout" -> {
+            val text = setting.string("text").ifBlank { setting.string("value").ifBlank { label } }
+            val titleText = setting.string("title")
+            Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp)) {
+                if (titleText.isNotBlank()) {
+                    Text(titleText, style = MaterialTheme.typography.labelMedium, color = AetherOnSurface)
+                    Spacer(Modifier.height(4.dp))
+                }
+                Text(text, style = MaterialTheme.typography.bodySmall, color = AetherOnSurfaceVariant)
+            }
+        }
+        "divider" -> CardDivider()
+        "spacer" -> Spacer(Modifier.height((setting["size"]?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 8).dp))
+        "label" -> Text(label, color = AetherOnSurfaceVariant, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
+        else -> {
+            var value by remember(id, setting.string("value")) { mutableStateOf(setting.string("value")) }
+            SharedSettingsTextField(
+                label = label,
+                value = value,
+                onValueChange = {
+                    value = it
+                    update(JsonPrimitive(it))
+                },
+                secret = type == "password" || setting["secret"]?.jsonPrimitive?.booleanOrNull == true,
+                minLines = if (type == "textarea" || setting["multiline"]?.jsonPrimitive?.booleanOrNull == true) 4 else 1,
+                keyboardType = if (type == "number") KeyboardType.Number else KeyboardType.Text,
+                placeholder = setting.string("placeholder").ifBlank { label },
+                supportingText = subtitle,
+            )
+        }
+    }
+}
+
+@Composable
+private fun SharedAetherExtensionSettingsSections(
+    sections: List<JsonObject>,
+    page: com.zhousl.aether.data.SharedAetherExtensionSettingsPage,
+    controller: SharedAetherExtensionUiController?,
+    onCategorySelected: (String) -> Unit = {},
+) {
+    sections.forEachIndexed { sectionIndex, section ->
+        val title = section.string("title")
+        val description = section.string("description")
+        if (sectionIndex > 0) Spacer(Modifier.height(16.dp))
+        if (title.isNotBlank() || description.isNotBlank()) {
+            if (title.isNotBlank()) {
+                Text(
+                    title,
+                    style = MaterialTheme.typography.labelLarge,
+                    color = AetherOnSurface,
+                    modifier = Modifier.padding(horizontal = 4.dp),
+                )
+            }
+            if (description.isNotBlank()) {
+                Text(
+                    description,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = AetherOnSurfaceVariant,
+                    modifier = Modifier.padding(
+                        horizontal = 4.dp,
+                        vertical = if (title.isNotBlank()) 4.dp else 0.dp,
+                    ),
+                )
+            }
+            Spacer(Modifier.height(8.dp))
+        }
+
+        val settingsList = (section["settings"] as? JsonArray).orEmpty().mapNotNull { it as? JsonObject }
+        var i = 0
+        while (i < settingsList.size) {
+            val setting = settingsList[i]
+            val type = setting.string("type").ifBlank { "text" }
+            if (type == "item-card" || type == "card") {
+                SharedAetherExtensionItemCard(
+                    setting = setting,
+                    page = page,
+                    controller = controller,
+                    onCategorySelected = onCategorySelected,
+                )
+                Spacer(Modifier.height(12.dp))
+                i++
+            } else if (type == "empty-state") {
+                SharedAetherExtensionEmptyState(
+                    setting = setting,
+                    page = page,
+                    controller = controller,
+                    onCategorySelected = onCategorySelected,
+                )
+                Spacer(Modifier.height(12.dp))
+                i++
+            } else {
+                val group = mutableListOf<JsonObject>()
+                while (i < settingsList.size) {
+                    val nextType = settingsList[i].string("type").ifBlank { "text" }
+                    if (nextType == "item-card" || nextType == "card" || nextType == "empty-state") break
+                    group.add(settingsList[i])
+                    i++
+                }
+                SettingsCardGroup {
+                    Column {
+                        group.forEachIndexed { index, itemSetting ->
+                            SharedAetherExtensionControlRow(
+                                setting = itemSetting,
+                                page = page,
+                                controller = controller,
+                                onCategorySelected = onCategorySelected,
+                            )
+                            val currentType = itemSetting.string("type").ifBlank { "text" }
+                            if (index < group.size - 1 && currentType !in setOf("divider", "spacer")) {
+                                CardDivider()
+                            }
+                        }
+                    }
+                }
+                Spacer(Modifier.height(12.dp))
+            }
+        }
+    }
+}
+
+@Composable
+internal fun SharedAetherExtensionSettingsDetail(
+    page: com.zhousl.aether.data.SharedAetherExtensionSettingsPage,
+    category: com.zhousl.aether.data.SharedAetherExtensionSettingsCategory? = null,
+    onCategorySelected: (String) -> Unit = {},
+    onBack: () -> Unit,
+) {
+    val controller = LocalSharedAetherExtensionUiController.current
+    val title = category?.title ?: page.title
+    val trailingIconStr = category?.trailingIcon?.ifBlank { null } ?: page.trailingIcon.ifBlank { null }
+    val trailingActionStr = category?.trailingAction?.ifBlank { null } ?: page.trailingAction.ifBlank { null }
+    val trailingCategoryStr = category?.trailingCategory?.ifBlank { null } ?: page.trailingCategory.ifBlank { null }
+    val trailingArgs = (category?.trailingArgs?.takeIf { it.isNotEmpty() } ?: page.trailingArgs)
+    val trailingIcon = settingsTrailingIcon(trailingIconStr)
+
+    SharedSettingsDetailScaffold(
+        title = title,
+        onBack = onBack,
+        trailingIcon = trailingIcon,
+        onTrailingAction = {
+            if (trailingCategoryStr != null && trailingCategoryStr.isNotBlank()) {
+                onCategorySelected(trailingCategoryStr)
+            } else if (trailingActionStr != null && trailingActionStr.isNotBlank()) {
+                controller?.onAction?.invoke(page.extensionId, trailingActionStr, trailingArgs)
+            } else {
+                onBack()
+            }
+        },
+    ) {
+        val subtitle = category?.subtitle ?: page.subtitle
+        if (subtitle.isNotBlank() && category != null) {
+            Text(
+                subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = AetherOnSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 4.dp),
+            )
+            Spacer(Modifier.height(12.dp))
+        }
+        SharedAetherExtensionSettingsSections(
+            sections = category?.sections ?: page.sections,
+            page = page,
+            controller = controller,
+            onCategorySelected = onCategorySelected,
+        )
+    }
+}
+
+@Composable
+internal fun SharedAetherExtensionSettingsCategoriesDetail(
+    page: com.zhousl.aether.data.SharedAetherExtensionSettingsPage,
+    onCategorySelected: (String) -> Unit,
+    onBack: () -> Unit,
+) {
+    val controller = LocalSharedAetherExtensionUiController.current
+    val trailingIcon = settingsTrailingIcon(page.trailingIcon.ifBlank { null })
+    SharedSettingsDetailScaffold(
+        title = page.title,
+        onBack = onBack,
+        trailingIcon = trailingIcon,
+        onTrailingAction = {
+            if (page.trailingCategory.isNotBlank()) {
+                onCategorySelected(page.trailingCategory)
+            } else if (page.trailingAction.isNotBlank()) {
+                controller?.onAction?.invoke(page.extensionId, page.trailingAction, page.trailingArgs)
+            } else {
+                onBack()
+            }
+        },
+    ) {
+        if (page.subtitle.isNotBlank()) {
+            Text(
+                page.subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = AetherOnSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 4.dp),
+            )
+            Spacer(Modifier.height(12.dp))
+        }
+        if (page.sections.isNotEmpty()) {
+            SharedAetherExtensionSettingsSections(
+                sections = page.sections,
+                page = page,
+                controller = controller,
+                onCategorySelected = onCategorySelected,
+            )
+            Spacer(Modifier.height(16.dp))
+        }
+        val visibleCategories = page.categories.filterNot { it.hidden }
+        if (visibleCategories.isNotEmpty() && page.sections.isEmpty()) {
+            SettingsCardGroup {
+                visibleCategories.forEachIndexed { index, category ->
+                    SettingsNavRow(icon = extensionIcon(category.icon), title = category.title, subtitle = category.subtitle) {
+                        onCategorySelected(category.id)
+                    }
+                    if (index < visibleCategories.lastIndex) CardDivider()
+                }
+            }
+        }
+    }
+}
+
+private fun JsonObject.string(name: String): String = this[name]?.jsonPrimitive?.contentOrNull.orEmpty()
+
+private fun JsonObject.boolean(name: String, fallback: Boolean = false): Boolean =
+    this[name]?.jsonPrimitive?.booleanOrNull ?: fallback
+
 @Composable
 private fun SharedSettingsTextField(
     label: String,
@@ -912,6 +1647,8 @@ private fun SharedSettingsTextField(
     keyboardType: KeyboardType = KeyboardType.Text,
     secret: Boolean = false,
     minLines: Int = 1,
+    placeholder: String = label,
+    supportingText: String = "",
 ) {
     var passwordVisible by rememberSaveable(label) { mutableStateOf(false) }
     Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp)) {
@@ -935,7 +1672,7 @@ private fun SharedSettingsTextField(
                     Box(Modifier.weight(1f)) {
                         if (value.isEmpty()) {
                             Text(
-                                label,
+                                placeholder,
                                 style = MaterialTheme.typography.bodyLarge,
                                 color = AetherOnSurfaceVariant.copy(alpha = 0.5f),
                             )
@@ -964,6 +1701,14 @@ private fun SharedSettingsTextField(
                 }
             },
         )
+        if (supportingText.isNotBlank()) {
+            Spacer(Modifier.height(6.dp))
+            Text(
+                supportingText,
+                style = MaterialTheme.typography.bodySmall,
+                color = AetherOnSurfaceVariant,
+            )
+        }
     }
 }
 

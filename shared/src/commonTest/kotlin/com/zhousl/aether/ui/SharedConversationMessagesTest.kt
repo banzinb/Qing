@@ -15,6 +15,27 @@ import kotlinx.serialization.json.put
 
 class SharedConversationMessagesTest {
     @Test
+    fun reconnectStatusCompletesInPlaceBeforeLaterResponseBlocks() {
+        val reconnecting = SharedChatMessage(
+            text = "",
+            fromUser = false,
+            responseBlocks = listOf(SharedAssistantResponseBlock.Text("before", "Before")),
+        ).withStreamingStatus("Reconnecting... 3/5", "timed out")
+        val completed = reconnecting.completePendingReconnect().copy(
+            responseBlocks = reconnecting.completePendingReconnect().responseBlocks +
+                SharedAssistantResponseBlock.ToolGroup(
+                    "after",
+                    listOf(SharedChatToolInvocation(id = "tool", name = "read", summary = "Reading")),
+                ),
+        )
+
+        val status = completed.responseBlocks[1] as SharedAssistantResponseBlock.Status
+        assertEquals("Reconnected 3/5", status.text)
+        assertEquals("timed out", status.detail)
+        assertTrue(completed.responseBlocks[2] is SharedAssistantResponseBlock.ToolGroup)
+    }
+
+    @Test
     fun pendingWorkVisibilityMatchesAndroidResponseBlockRules() {
         assertFalse(emptyList<SharedAssistantResponseBlock>().hasVisibleSharedPendingWork())
         assertFalse(
@@ -43,6 +64,139 @@ class SharedConversationMessagesTest {
                 ),
             ).hasVisibleSharedPendingWork(),
         )
+    }
+
+    @Test
+    fun browserToolsAreSeparatedFromRegularAssistantWork() {
+        val browser = SharedChatToolInvocation(
+            id = "browser-1",
+            name = "browser",
+            summary = "Opening page",
+            outputJson = """{"preview_path":"/workspace/.aether/browser-previews/browser-1.png","url":"https://example.com","title":"Example","width":390,"height":844,"stdout":"Opened page"}""",
+            isRunning = false,
+        )
+        val regular = SharedChatToolInvocation(id = "read-1", name = "read", summary = "Reading")
+        val message = SharedChatMessage(
+            text = "done",
+            fromUser = false,
+            tools = listOf(browser, regular),
+            responseBlocks = listOf(
+                SharedAssistantResponseBlock.ToolGroup("group", listOf(browser, regular)),
+            ),
+        )
+
+        assertEquals(listOf(browser), message.sharedBrowserTools())
+        val filtered = message.withoutSharedBrowserTools()
+        assertEquals(listOf(regular), filtered.tools)
+        assertEquals("", filtered.reasoningText)
+        assertEquals(listOf(regular), (filtered.responseBlocks.single() as SharedAssistantResponseBlock.ToolGroup).tools)
+        val state = browser.sharedStoredBrowserDisplayState()
+        assertEquals("/workspace/.aether/browser-previews/browser-1.png", state.previewPath)
+        assertEquals("Example", state.title)
+        assertEquals(390, state.width)
+    }
+
+    @Test
+    fun browserReplayKeepsEveryPersistedFrame() {
+        val first = SharedChatToolInvocation(
+            id = "browser-1",
+            name = "browser",
+            summary = "Opened first page",
+            outputJson = """{"ok":true,"preview_path":"/tmp/first.png","width":820,"height":1180}""",
+            isRunning = false,
+        )
+        val second = SharedChatToolInvocation(
+            id = "browser-2",
+            name = "browser",
+            summary = "Opened second page",
+            outputJson = """{"ok":true,"screenshot_base64":"cG5n","width":820,"height":1180}""",
+            isRunning = false,
+        )
+        val message = SharedChatMessage(
+            text = "",
+            fromUser = false,
+            tools = listOf(first, second),
+        )
+
+        val frames = message.sharedBrowserReplayFrames()
+        assertEquals(listOf(first, second), frames.map(SharedBrowserReplayFrame::tool))
+        assertEquals("cG5n", frames.last().displayState.screenshotBase64)
+    }
+
+    @Test
+    fun streamingReasoningSuppressesStandaloneThinkingFallback() {
+        assertFalse(
+            shouldShowSharedThinkingFallback(
+                SharedChatMessage(
+                    text = "",
+                    fromUser = false,
+                    reasoningText = "Inspecting the page",
+                    isStreaming = true,
+                ),
+            ),
+        )
+        assertTrue(
+            shouldShowSharedThinkingFallback(
+                SharedChatMessage(text = "", fromUser = false, isStreaming = true),
+            ),
+        )
+    }
+
+    @Test
+    fun initialThinkingStatusDoesNotDuplicateVisibleReasoningWork() {
+        val visibleReasoning = SharedChatMessage(
+            text = "",
+            fromUser = false,
+            status = "Thinking",
+            responseBlocks = listOf(
+                SharedAssistantResponseBlock.Reasoning(
+                    id = "reasoning",
+                    trace = SharedReasoningTrace(id = "trace", latestStatusText = "Reading file"),
+                ),
+            ),
+        )
+        assertFalse(shouldShowSharedGenerationStatus(visibleReasoning))
+        assertTrue(shouldShowSharedGenerationStatus(visibleReasoning.copy(status = "Reconnecting... 1/5")))
+    }
+
+    @Test
+    fun browserCardConsumesItsReasoningBlockWithoutHidingOtherWork() {
+        val browser = SharedChatToolInvocation(id = "browser", name = "browser", summary = "Opening")
+        val read = SharedChatToolInvocation(id = "read", name = "read", summary = "Reading")
+        val message = SharedChatMessage(
+            text = "",
+            fromUser = false,
+            responseBlocks = listOf(
+                SharedAssistantResponseBlock.Reasoning(
+                    id = "browser-reasoning",
+                    trace = SharedReasoningTrace(
+                        id = "browser-trace",
+                        latestStatusText = "Opening the page",
+                        toolInvocations = listOf(browser),
+                    ),
+                ),
+                SharedAssistantResponseBlock.Reasoning(
+                    id = "browser-follow-up",
+                    trace = SharedReasoningTrace(
+                        id = "browser-follow-up-trace",
+                        latestStatusText = "Inspecting the rendered page",
+                    ),
+                ),
+                SharedAssistantResponseBlock.Reasoning(
+                    id = "mixed-reasoning",
+                    trace = SharedReasoningTrace(
+                        id = "mixed-trace",
+                        latestStatusText = "Reading the result",
+                        toolInvocations = listOf(browser, read),
+                    ),
+                ),
+            ),
+        )
+
+        val filtered = message.withoutSharedBrowserTools()
+        assertEquals(1, filtered.responseBlocks.size)
+        val retained = assertIs<SharedAssistantResponseBlock.Reasoning>(filtered.responseBlocks.single())
+        assertEquals(listOf(read), retained.trace.toolInvocations)
     }
 
     @Test
@@ -81,11 +235,31 @@ class SharedConversationMessagesTest {
     }
 
     @Test
+    fun completedWorkDurationUsesMessageTurnBoundsInsteadOfFallbackDuration() {
+        assertEquals(
+            10_000L,
+            sharedCompletedWorkDurationMillis(
+                startedAtMillis = 1_700_000_090_000L,
+                completedAtMillis = 1_700_000_100_000L,
+                fallbackDurationMillis = 90_000L,
+            ),
+        )
+        assertEquals(
+            5_000L,
+            sharedCompletedWorkDurationMillis(
+                startedAtMillis = 0L,
+                completedAtMillis = null,
+                fallbackDurationMillis = 5_000L,
+            ),
+        )
+    }
+
+    @Test
     fun toolPresentationMatchesAndroidToolNames() {
         assertEquals(SharedToolPresentation.Generic, sharedToolPresentation("web_fetch"))
-        assertEquals(SharedToolPresentation.WebFetch, sharedToolPresentation("fetch_web_url"))
-        assertEquals(SharedToolPresentation.WebSearch, sharedToolPresentation("web_search"))
-        assertEquals(SharedToolPresentation.WebSearch, sharedToolPresentation("tavily_search"))
+        assertEquals(SharedToolPresentation.Generic, sharedToolPresentation("fetch_web_url"))
+        assertEquals(SharedToolPresentation.Generic, sharedToolPresentation("web_search"))
+        assertEquals(SharedToolPresentation.Generic, sharedToolPresentation("tavily_search"))
         assertEquals(SharedToolPresentation.Generic, sharedToolPresentation(" TAVILY_SEARCH "))
     }
 
@@ -276,61 +450,6 @@ class SharedConversationMessagesTest {
 
         assertEquals(16_002, usage.inputTokens)
         assertEquals(16_002, usage.totalTokens)
-    }
-
-    @Test
-    fun compactionInputUsesAndroidReasoningAndToolFields() {
-        val compactStatus = SharedChatMessage(
-            id = "compact-status",
-            text = "Context compacted",
-            fromUser = false,
-            displayKind = SharedMessageDisplayKind.CompactStatus,
-        )
-        val input = buildSharedCompactConversationInput(
-            listOf(
-                SharedChatMessage(id = "user", text = "Question", fromUser = true),
-                SharedChatMessage(
-                    id = "assistant",
-                    text = "Answer",
-                    fromUser = false,
-                    reasoningText = "raw reasoning must not be included",
-                    responseBlocks = listOf(
-                        SharedAssistantResponseBlock.Reasoning(
-                            id = "reasoning",
-                            trace = SharedReasoningTrace(
-                                id = "trace",
-                                chunks = listOf(
-                                    SharedReasoningSummaryChunk(
-                                        id = "chunk",
-                                        title = "Fallback title",
-                                        detail = "Retained reasoning summary",
-                                    ),
-                                ),
-                            ),
-                        ),
-                    ),
-                    tools = listOf(
-                        SharedChatToolInvocation(
-                            id = "tool",
-                            name = "read",
-                            summary = "presentation summary must not be included",
-                            output = "presentation output must not be included",
-                            argumentsJson = "{\"path\":\"/workspace/note.txt\"}",
-                            outputJson = "{\"text\":\"contents\"}",
-                        ),
-                    ),
-                ),
-                compactStatus,
-            ),
-        )
-
-        assertContains(input, "## 1. User\nQuestion")
-        assertContains(input, "Retained reasoning summary")
-        assertContains(input, "- read: {\"path\":\"/workspace/note.txt\"}")
-        assertContains(input, "output: {\"text\":\"contents\"}")
-        assertFalse(input.contains("raw reasoning must not be included"))
-        assertFalse(input.contains("presentation summary must not be included"))
-        assertFalse(input.contains("Context compacted"))
     }
 
     @Test
@@ -618,6 +737,56 @@ class SharedConversationMessagesTest {
     }
 
     @Test
+    fun visibleReasoningModelsRouteNativeToolsIntoAReasoningTimeline() {
+        val event = com.zhousl.aether.data.pi.SharedPiToolEvent(
+            id = "read-1",
+            name = "read",
+            argumentsJson = "{\"path\":\"/workspace/note.txt\"}",
+            isRunning = true,
+        )
+        val message = SharedChatMessage(text = "", fromUser = false)
+            .withAssistantToolEvent(event, routeIntoReasoning = true, nowMillis = 1_000, nowUptimeMillis = 1_000)
+        val reasoning = assertIs<SharedAssistantResponseBlock.Reasoning>(message.responseBlocks.single())
+        assertEquals("Reading file", reasoning.trace.latestStatusText)
+        assertEquals("read-1", reasoning.trace.toolInvocations.single().id)
+
+        val completed = message.withAssistantToolEvent(
+            event.copy(outputJson = "{\"stdout\":\"ok\"}", isRunning = false),
+            routeIntoReasoning = true,
+            nowMillis = 2_000,
+            nowUptimeMillis = 2_000,
+        )
+        val tool = assertIs<SharedAssistantResponseBlock.Reasoning>(completed.responseBlocks.single())
+            .trace.toolInvocations.single()
+        assertFalse(tool.isRunning)
+        assertEquals("Read file", sharedReasoningToolStatus(tool))
+        assertEquals("Read file", assertIs<SharedAssistantResponseBlock.Reasoning>(completed.responseBlocks.single()).trace.latestStatusText)
+    }
+
+    @Test
+    fun reasoningStatusRemainsTheLatestToolAfterSummaryCompletionRace() {
+        val message = SharedChatMessage(text = "", fromUser = false)
+            .appendAssistantReasoningDelta("inspect", nowMillis = 1_000)
+            .withStartedAssistantTool(
+                SharedPiHostToolCall("tool", "read", buildJsonObject { put("path", "/notes") }),
+                startedAtMillis = 2_000,
+                timelineOrder = 2_000,
+            )
+        val trace = message.activeSharedReasoningTrace()!!
+        val chunk = SharedReasoningSummaryChunk("chunk", rawText = "inspect", timelineOrder = 1_000)
+        val withChunk = message.withPendingReasoningSummary(
+            SharedReasoningSummarySubmission(trace.id, chunk)
+        )
+        val completed = withChunk.withCompletedReasoningSummary(
+            blockId = trace.id,
+            chunkId = chunk.id,
+            title = "Inspecting notes",
+            detail = "I need to inspect the notes.",
+        )
+        assertEquals("Reading file", completed.activeSharedReasoningTrace()!!.latestStatusText)
+    }
+
+    @Test
     fun reasoningSummaryTrackerUsesInitialThresholdThenTimedChunks() {
         val tracker = SharedReasoningTurnTracker()
         val initialText = (1..99).joinToString(" ") { "token$it" } + " \u597d"
@@ -631,7 +800,21 @@ class SharedConversationMessagesTest {
         assertNull(tracker.prepareSummary(extended, forceRemaining = false, nowMillis = 6_999))
         val timed = tracker.prepareSummary(extended, forceRemaining = false, nowMillis = 7_000)
         assertEquals("extra words", timed?.chunk?.rawText)
-        assertTrue((timed?.chunk?.timelineOrder ?: 0L) > (first?.chunk?.timelineOrder ?: 0L))
+        assertTrue((timed?.chunk?.timelineOrder ?: 0L) > first.chunk.timelineOrder)
+    }
+
+    @Test
+    fun reasoningSummaryTrackerCoalescesRequestsWhileOneIsRunning() {
+        val tracker = SharedReasoningTurnTracker()
+
+        assertTrue(tracker.beginSummary(forceRemaining = false))
+        assertFalse(tracker.beginSummary(forceRemaining = true))
+
+        val followUp = tracker.finishSummary()
+        assertTrue(followUp.requested)
+        assertTrue(followUp.forceRemaining)
+        assertTrue(tracker.beginSummary(forceRemaining = false))
+        assertFalse(tracker.finishSummary().requested)
     }
 
     @Test
@@ -710,6 +893,30 @@ class SharedConversationMessagesTest {
         ).toPersistedMessages().single().toSharedChatMessage()
 
         assertEquals("estimated", restored.tokenUsageSource)
+    }
+
+    @Test
+    fun reconnectTimelineStatusSurvivesPersistenceMapping() {
+        val restored = listOf(
+            SharedChatMessage(
+                id = "assistant",
+                text = "answer",
+                fromUser = false,
+                responseBlocks = listOf(
+                    SharedAssistantResponseBlock.Status(
+                        id = "retry",
+                        text = "Reconnected 2/5",
+                        detail = "connection reset",
+                    ),
+                    SharedAssistantResponseBlock.Text("answer", "answer"),
+                ),
+            ),
+        ).toPersistedMessages().single().toSharedChatMessage()
+
+        val status = assertIs<SharedAssistantResponseBlock.Status>(restored.responseBlocks[0])
+        assertEquals("Reconnected 2/5", status.text)
+        assertEquals("connection reset", status.detail)
+        assertIs<SharedAssistantResponseBlock.Text>(restored.responseBlocks[1])
     }
 
     @Test

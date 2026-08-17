@@ -23,11 +23,13 @@ import com.zhousl.aether.ui.MessageAuthor
 import com.zhousl.aether.ui.ReasoningSummaryChunk
 import com.zhousl.aether.ui.ReasoningTrace
 import com.zhousl.aether.ui.syncActiveBranches
+import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -41,11 +43,32 @@ import org.json.JSONObject
 
 private const val ReasoningInitialSummaryTokenThreshold = 100
 private const val ReasoningTimedSummaryIntervalMillis = 5_000L
+private const val AssistantCheckpointIntervalMillis = 1_000L
 private const val ReasoningSummaryMaxInputChars = 8_000
 private const val ReasoningSummaryTitleMaxChars = 120
 private const val ReasoningSummaryDetailMaxChars = 520
 private const val ReasoningSummarySystemPrompt =
     "You write concise user-visible progress summaries for assistant reasoning. Use a consistent first-person planning style, and never quote long private reasoning verbatim."
+
+private fun shellQuote(value: String): String = "'" + value.replace("'", "'\\''") + "'"
+
+internal fun completedReconnectStatus(status: String): String {
+    val match = Regex("^Reconnecting\\.\\.\\.\\s*(.*)$", RegexOption.IGNORE_CASE).matchEntire(status.trim())
+        ?: return status
+    return "Reconnected" + match.groupValues[1].takeIf(String::isNotBlank)?.let { " $it" }.orEmpty()
+}
+
+internal fun completePendingReconnectBlocks(
+    blocks: List<AssistantResponseBlock>,
+): List<AssistantResponseBlock> = blocks.map { block ->
+    if (block is AssistantResponseBlock.Status &&
+        block.text.startsWith("Reconnecting", ignoreCase = true)
+    ) {
+        block.copy(text = completedReconnectStatus(block.text))
+    } else {
+        block
+    }
+}
 
 enum class SessionFollowUpMode {
     Queue,
@@ -75,6 +98,7 @@ data class SessionExecutionState(
     val pendingStatusText: String = "",
     val pendingStatusDetail: String = "",
     val pendingInputs: List<PendingSessionInput> = emptyList(),
+    val activeResponseGroupId: String? = null,
     val activeTurnStartedAtMillis: Long? = null,
 )
 
@@ -113,6 +137,26 @@ private data class ReasoningSummary(
     val detail: String,
 )
 
+private data class AssistantResponseIdentity(
+    val responseGroupId: String,
+    val messageIdPrefix: String,
+    val createdAtMillis: Long,
+    val checkpointFromPosition: Int,
+) {
+    fun messageIdFor(blockId: String): String = "$messageIdPrefix-$blockId"
+}
+
+private data class ProviderRequestCheckpoint(
+    val pendingToolInvocations: List<ChatToolInvocation>,
+    val pendingResponseBlocks: List<AssistantResponseBlock>,
+    val pendingAssistantText: String,
+    val activeReasoningBlockId: String?,
+    val activeDirectReasoningSummaryChunkId: String?,
+    val reasoningFirstSummarySubmitted: Boolean,
+    val reasoningLastSubmittedCharIndex: Int,
+    val reasoningLastTimedSummaryAtMillis: Long,
+)
+
 class SessionExecutionManager(
     private val application: Application,
     private val scope: CoroutineScope,
@@ -134,6 +178,7 @@ class SessionExecutionManager(
     private val piKernelBridge: PiKernelBridge,
     private val piAgentRunner: PiAgentRunner,
 ) {
+    private val skillRuntimeMirror = SkillRuntimeMirror(runtimeRouter)
     private val currentSettings = MutableStateFlow(AppSettings())
     private val currentProviderConfigs = MutableStateFlow<List<LlmProviderConfig>>(emptyList())
     private val currentExtensionsState = MutableStateFlow(AgentExtensionsState())
@@ -208,6 +253,7 @@ class SessionExecutionManager(
                 pendingAssistantText = "",
                 pendingStatusText = "",
                 pendingStatusDetail = "",
+                activeResponseGroupId = null,
                 activeTurnStartedAtMillis = System.currentTimeMillis(),
             )
         }
@@ -259,9 +305,9 @@ class SessionExecutionManager(
         return true
     }
 
-    fun pauseSession(sessionId: String) {
-        val handle = executionHandles[sessionId] ?: return
-        if (handle.pauseRequested) return
+    fun pauseSession(sessionId: String): ChatSession? {
+        val handle = executionHandles[sessionId] ?: return null
+        if (handle.pauseRequested) return null
         handle.pauseRequested = true
         val snapshot = _executionStates.value[sessionId]
         val runningRunIds = snapshot?.pendingToolInvocations?.let(::extractActiveManagedRunIds).orEmpty()
@@ -269,6 +315,7 @@ class SessionExecutionManager(
             handle = handle,
             snapshot = snapshot ?: SessionExecutionState(sessionId = sessionId),
         )
+        deactivateAssistantCheckpoint(handle, handle.activeResponseIdentity)
         scope.launch(Dispatchers.IO) {
             runCatching { chatStateStore.flush() }
         }
@@ -284,6 +331,7 @@ class SessionExecutionManager(
                 pendingStatusText = "",
                 pendingStatusDetail = "",
                 pendingInputs = emptyList(),
+                activeResponseGroupId = null,
                 activeTurnStartedAtMillis = null,
             )
         }
@@ -297,6 +345,7 @@ class SessionExecutionManager(
                 }
             }
         }
+        return chatStateStore.state.value.sessions.firstOrNull { it.id == sessionId }
     }
 
     suspend fun startScheduledTask(task: ScheduledTask): Boolean {
@@ -408,6 +457,7 @@ class SessionExecutionManager(
                 )
             }
         } finally {
+            deactivateAssistantCheckpoint(handle, handle.activeResponseIdentity)
             clearPendingInputs(handle)
             if (executionHandles.remove(handle.sessionId, handle)) {
                 updateExecutionState(handle.sessionId) {
@@ -420,6 +470,7 @@ class SessionExecutionManager(
                         pendingStatusText = "",
                         pendingStatusDetail = "",
                         pendingInputs = emptyList(),
+                        activeResponseGroupId = null,
                         activeTurnStartedAtMillis = null,
                     )
                 }
@@ -447,6 +498,17 @@ class SessionExecutionManager(
     ): CompletionSummary {
         val turnStartedAtMillis = System.currentTimeMillis()
         val turnId = "turn-$turnStartedAtMillis"
+        val responseIdentity = activateAssistantResponse(handle)
+        updateExecutionState(handle.sessionId) { current ->
+            current.copy(
+                activeResponseGroupId = responseIdentity.responseGroupId,
+                pendingToolInvocations = emptyList(),
+                pendingResponseBlocks = emptyList(),
+                pendingAssistantText = "",
+                pendingStatusText = "",
+                pendingStatusDetail = "",
+            )
+        }
         var firstAssistantTokenAtMillis: Long? = null
         diagnosticLogger.event(
             category = "session",
@@ -460,11 +522,6 @@ class SessionExecutionManager(
                 "base_url" to DiagnosticRedactor.sanitizedBaseUrl(request.settings.baseUrl),
             ),
         )
-        val mcpClientManager = McpClientManager(
-            runtimeRouter = runtimeRouter,
-            settings = request.settings,
-            diagnosticLogger = diagnosticLogger,
-        )
         val selfManagementTool = AetherSelfManagementTool(
             settingsRepository = settingsRepository,
             extensionsRepository = extensionsRepository,
@@ -472,7 +529,6 @@ class SessionExecutionManager(
             bashTool = bashTool,
             rootSetupController = rootSetupController,
             agentModeController = agentModeController,
-            mcpClientManager = mcpClientManager,
             scheduledTaskManager = scheduledTaskManager,
             piKernelBridge = piKernelBridge,
             sessionId = handle.sessionId,
@@ -496,65 +552,38 @@ class SessionExecutionManager(
             val resolvedAvailableSkills = currentExtensionsState.value.installedSkills
                 .filter { it.isEnabled }
                 .sortedBy { it.name.lowercase() }
+            val mirroredSkillPaths = skillRuntimeMirror.sync(resolvedAvailableSkills)
             val explicitlySelectedSkills = resolveSelectedActiveSkills(
                 selectedSkillIds = request.selectedSkillIds,
             )
-            val implicitlySelectedSkills = skillManager.findImplicitlyRelevantSkills(
-                skills = resolvedAvailableSkills,
-                messages = request.requestMessages,
-                excludedSkillIds = explicitlySelectedSkills.map { it.skillId }.toSet(),
-            )
-            var resolvedSkillSelection = resolveTurnSkillSelection(
+            val resolvedSkillSelection = resolveTurnSkillSelection(
                 explicitActiveSkills = explicitlySelectedSkills,
-                implicitActiveSkills = implicitlySelectedSkills.mapNotNull { skill ->
-                    skillManager.buildActiveSkillContext(skill).getOrNull()
-                },
+                implicitActiveSkills = emptyList(),
             )
-            var resolvedActiveSkills = resolvedSkillSelection.activeSkills
-            var resolvedSelectedSkillIds = resolvedSkillSelection.selectedSkillIds
-            val resolvedMcpServers = resolveSelectedMcpServers(request.activeMcpServerIds)
-            val resolvedMcpServerIds = resolvedMcpServers.map { it.id }
+            val resolvedActiveSkills = resolvedSkillSelection.activeSkills
             updateSessionSelections(
                 sessionId = handle.sessionId,
-                selectedSkillIds = resolvedSelectedSkillIds,
-                activeSkills = resolvedActiveSkills,
-                activeMcpServerIds = resolvedMcpServerIds,
+                selectedSkillIds = emptyList(),
+                activeSkills = emptyList(),
+                activeMcpServerIds = emptyList(),
             )
 
             val workspaceDirectory = workspaceFileBridge.workspaceDirectory(
                 sessionId = handle.sessionId,
                 mode = request.settings.agentWorkspaceMode,
             )
+            val agentSessionMetadata = chatRepository.getAgentSessionMetadata(handle.sessionId)
+                ?.takeIf { metadata -> validateAgentSessionFile(metadata.piSessionId, metadata.jsonlPath) }
+            val activeRuntimeId = LocalRuntimeId.fromStorage(agentSessionMetadata?.runtime)
+                ?: runtimeRouter.runtimeFor(request.settings, null)?.id
+                ?: request.settings.defaultRuntimeId
+                ?: LocalRuntimeId.Alpine
             val runtimeWorkspaceDirectory = runtimeRouter.runtimeWorkspaceDirectory(
                 settings = request.settings,
                 termuxWorkspaceDirectory = workspaceDirectory,
             )
-            diagnosticLogger.event(
-                category = "mcp",
-                event = "sync_start",
-                sessionId = handle.sessionId,
-                turnId = turnId,
-                details = mapOf(
-                    "server_count" to resolvedMcpServers.size,
-                    "workspace_directory" to runtimeWorkspaceDirectory,
-                ),
-            )
-            mcpClientManager.syncServers(
-                servers = resolvedMcpServers,
-                workspaceDirectory = runtimeWorkspaceDirectory,
-                termuxWorkspaceDirectory = workspaceDirectory,
-            )
-            diagnosticLogger.event(
-                category = "mcp",
-                event = "sync_end",
-                sessionId = handle.sessionId,
-                turnId = turnId,
-                details = mapOf(
-                    "server_count" to resolvedMcpServers.size,
-                    "tool_binding_count" to mcpClientManager.toolBindings().size,
-                ),
-            )
             val reasoningTraceToolRoutingEnabled = request.settings.supportsVisibleReasoningTrace()
+            var providerRequestCheckpoint: ProviderRequestCheckpoint? = null
             val emitToolEvent: suspend (AgentToolEvent) -> Unit = { event ->
                 if (!handle.pauseRequested) {
                     handleToolEvent(
@@ -565,6 +594,18 @@ class SessionExecutionManager(
                 }
             }
 
+            diagnosticLogger.event(
+                category = "session",
+                event = "pi_agent_runner_start",
+                sessionId = handle.sessionId,
+                turnId = turnId,
+                details = mapOf(
+                    "runtime_id" to activeRuntimeId.storageValue,
+                    "workspace_directory" to runtimeWorkspaceDirectory,
+                    "session_file" to agentSessionMetadata?.jsonlPath.orEmpty(),
+                    "message_count" to request.requestMessages.size,
+                ),
+            )
             val result = piAgentRunner.runTurn(
                 settings = request.settings,
                 messages = buildRequestMessages(
@@ -573,17 +614,16 @@ class SessionExecutionManager(
                 ),
                 workspaceDirectory = runtimeWorkspaceDirectory,
                 termuxWorkspaceDirectory = workspaceDirectory,
-                availableSkills = resolvedAvailableSkills,
+                skillPaths = mirroredSkillPaths,
                 activeSkills = resolvedActiveSkills,
-                mcpToolBindings = mcpClientManager.toolBindings(),
-                mcpClientManager = mcpClientManager,
                 selfManagementTool = selfManagementTool,
                 agentModeEnabled = request.agentModeEnabled,
                 chromeEnabled = request.chromeEnabled,
-                providerConfigs = request.providerConfigs,
                 sessionId = handle.sessionId,
+                sessionFile = agentSessionMetadata?.jsonlPath.orEmpty(),
+                runtimeId = activeRuntimeId,
                 onToolEvent = emitToolEvent,
-                onToolProgress = if (request.settings.termuxLiveOutputEnabled) emitToolEvent else null,
+                onToolProgress = emitToolEvent,
                 onAssistantReasoningDelta = { delta ->
                     if (handle.pauseRequested) return@runTurn
                     if (delta.isEmpty()) return@runTurn
@@ -614,7 +654,7 @@ class SessionExecutionManager(
                     )
                     updateExecutionState(handle.sessionId) { current ->
                         val pendingResponseBlocks = appendAssistantResponseText(
-                            blocks = current.pendingResponseBlocks,
+                            blocks = completePendingReconnectBlocks(current.pendingResponseBlocks),
                             delta = delta,
                         ) { handle.nextPendingBlockId("pending-text") }
                         current.copy(
@@ -635,29 +675,66 @@ class SessionExecutionManager(
                         }
                     }
                 },
-                onStreamingStatus = { status ->
-                    if (handle.pauseRequested) return@runTurn
-                    updateExecutionState(handle.sessionId) { current ->
-                        current.copy(
-                            pendingStatusText = status?.text.orEmpty(),
-                            pendingStatusDetail = status?.detail.orEmpty(),
-                        )
+                onAssistantRequestStarted = {
+                    if (!handle.pauseRequested) {
+                        val current = _executionStates.value[handle.sessionId]
+                            ?: SessionExecutionState(sessionId = handle.sessionId)
+                        providerRequestCheckpoint = handle.providerRequestCheckpoint(current)
                     }
                 },
-                onSkillActivated = { activeSkill ->
+                onAssistantResponseReset = {
+                    if (!handle.pauseRequested) {
+                        providerRequestCheckpoint?.let { checkpoint ->
+                            handle.restoreProviderRequestCheckpoint(checkpoint)
+                            updateExecutionState(handle.sessionId) { current ->
+                                current.copy(
+                                    pendingToolInvocations = checkpoint.pendingToolInvocations,
+                                    pendingResponseBlocks = checkpoint.pendingResponseBlocks,
+                                    pendingAssistantText = checkpoint.pendingAssistantText,
+                                )
+                            }
+                        }
+                    }
+                },
+                onStreamingStatus = { status ->
                     if (handle.pauseRequested) return@runTurn
-                    resolvedSelectedSkillIds = (resolvedSelectedSkillIds + activeSkill.skillId).distinct()
-                    resolvedSkillSelection = resolvedSkillSelection.copy(
-                        selectedSkillIds = resolvedSelectedSkillIds,
-                        activeSkills = upsertActiveSkillContext(resolvedActiveSkills, activeSkill),
-                    )
-                    resolvedActiveSkills = resolvedSkillSelection.activeSkills
-                    updateSessionSelections(
-                        sessionId = handle.sessionId,
-                        selectedSkillIds = resolvedSelectedSkillIds,
-                        activeSkills = resolvedActiveSkills,
-                        activeMcpServerIds = resolvedMcpServerIds,
-                    )
+                    if (status?.text?.startsWith("Reconnecting", ignoreCase = true) == true) {
+                        completeActiveReasoning(
+                            handle = handle,
+                            trigger = ReasoningCompletionTrigger.BodyStarted,
+                        )
+                    }
+                    updateExecutionState(handle.sessionId) { current ->
+                        val text = status?.text.orEmpty()
+                        if (text.startsWith("Reconnecting", ignoreCase = true)) {
+                            val last = current.pendingResponseBlocks.lastOrNull()
+                            val blocks = if (last is AssistantResponseBlock.Status &&
+                                last.text.startsWith("Reconnecting", ignoreCase = true)
+                            ) {
+                                current.pendingResponseBlocks.dropLast(1) + last.copy(
+                                    text = text,
+                                    detail = status?.detail.orEmpty(),
+                                )
+                            } else {
+                                current.pendingResponseBlocks + AssistantResponseBlock.Status(
+                                    id = handle.nextPendingBlockId("pending-status"),
+                                    text = text,
+                                    detail = status?.detail.orEmpty(),
+                                )
+                            }
+                            current.copy(
+                                pendingResponseBlocks = blocks,
+                                pendingStatusText = "",
+                                pendingStatusDetail = "",
+                            )
+                        } else {
+                            current.copy(
+                                pendingResponseBlocks = completePendingReconnectBlocks(current.pendingResponseBlocks),
+                                pendingStatusText = text,
+                                pendingStatusDetail = status?.detail.orEmpty(),
+                            )
+                        }
+                    }
                 },
                 pollInjectedUserMessages = {
                     if (handle.pauseRequested) return@runTurn emptyList()
@@ -667,6 +744,16 @@ class SessionExecutionManager(
                     }
                     drained.map { buildSteerRequestMessage(it.message, request.settings) }
                 },
+            )
+            diagnosticLogger.event(
+                category = "session",
+                event = "pi_agent_runner_end",
+                sessionId = handle.sessionId,
+                turnId = turnId,
+                details = mapOf(
+                    "success" to result.isSuccess,
+                    "error" to (result.exceptionOrNull()?.message ?: ""),
+                ),
             )
             if (handle.pauseRequested) {
                 return finalizePausedTurn(
@@ -716,6 +803,11 @@ class SessionExecutionManager(
                         userMessageCount = request.requestMessages.count { it.author == MessageAuthor.User },
                         providerPayloadJson = turnResult.providerPayloadJson,
                         handle = handle,
+                    ).copy(
+                        piSessionId = turnResult.piSessionId,
+                        piSessionFile = turnResult.piSessionFile,
+                        piRuntime = turnResult.runtime,
+                        piEntryIds = turnResult.piEntryIds,
                     )
                 },
                 onFailure = { throwable ->
@@ -752,6 +844,19 @@ class SessionExecutionManager(
                 },
             )
             chatStateStore.flush()
+            if (completion.piSessionId.isNotBlank() && completion.piSessionFile.isNotBlank()) {
+                chatRepository.upsertAgentSessionMetadata(
+                    chatSessionId = handle.sessionId,
+                    piSessionId = completion.piSessionId,
+                    jsonlPath = completion.piSessionFile,
+                    runtime = completion.piRuntime,
+                )
+                chatRepository.upsertAgentMessageRefs(
+                    chatSessionId = handle.sessionId,
+                    aetherMessageIds = completion.appendedMessageIds,
+                    piEntryIds = completion.piEntryIds,
+                )
+            }
             _turnEvents.tryEmit(completion.toTurnEvent(handle.sessionId))
             diagnosticLogger.event(
                 category = "session",
@@ -800,20 +905,40 @@ class SessionExecutionManager(
             }
             completion
         } finally {
-            mcpClientManager.snapshots().forEach { snapshot ->
-                runCatching { mcpClientManager.disconnect(snapshot.config.id) }
-            }
             if (executionHandles[handle.sessionId] === handle) {
                 updateExecutionState(handle.sessionId) { current ->
                     current.copy(
                         pendingToolInvocations = emptyList(),
                         pendingResponseBlocks = emptyList(),
                         pendingAssistantText = "",
+                        activeResponseGroupId = null,
                         activeTurnStartedAtMillis = null,
                     )
                 }
             }
         }
+    }
+
+    private suspend fun validateAgentSessionFile(
+        expectedSessionId: String,
+        sessionFile: String,
+    ): Boolean {
+        if (expectedSessionId.isBlank() || sessionFile.isBlank()) return false
+        val alpine = runtimeRouter.runtimeById(LocalRuntimeId.Alpine)
+        val result = runCatching {
+            JSONObject(
+                alpine.executeCommand(
+                    command = "head -n 1 -- ${shellQuote(sessionFile)}",
+                    workingDirectory = alpine.homeDirectory,
+                    awaitTimeoutMillis = 15_000L,
+                )
+            )
+        }.getOrNull() ?: return false
+        if (!result.optBoolean("ok")) return false
+        val header = runCatching {
+            JSONObject(result.optString("stdout").lineSequence().firstOrNull().orEmpty())
+        }.getOrNull() ?: return false
+        return header.optString("type") == "session" && header.optString("id") == expectedSessionId
     }
 
     private fun buildQueuedTurnRequest(
@@ -890,16 +1015,6 @@ class SessionExecutionManager(
         }
     }
 
-    private fun resolveSelectedMcpServers(
-        selectedServerIds: List<String>,
-    ): List<McpServerConfig> {
-        if (selectedServerIds.isEmpty()) return emptyList()
-        val serversById = currentExtensionsState.value.mcpServers
-            .filter { it.isEnabled }
-            .associateBy { it.id }
-        return selectedServerIds.distinct().mapNotNull(serversById::get)
-    }
-
     private fun appendAgentMessage(
         sessionId: String,
         blocks: List<AssistantResponseBlock>,
@@ -913,6 +1028,8 @@ class SessionExecutionManager(
         inputMessageCount: Int = 0,
         userMessageCount: Int = 0,
         providerPayloadJson: String = "",
+        statusText: String = "",
+        statusDetail: String = "",
         handle: SessionExecutionHandle? = null,
         baseMessages: List<ChatMessage> = handle?.retainedMessagesSnapshot().orEmpty(),
     ): CompletionSummary {
@@ -922,10 +1039,14 @@ class SessionExecutionManager(
             .orEmpty()
 
         val normalizedBlocks = normalizeAssistantResponseBlocks(blocks)
+        val responseIdentity = handle?.activeResponseIdentity
         val appendedMessages = assistantMessagesForBlocks(
             normalizedBlocks = normalizedBlocks,
             thoughtDurationMillis = thoughtDurationMillis,
             assistantActionsHidden = false,
+            isIncomplete = false,
+            responseIdentity = responseIdentity,
+            messageCreatedAtMillis = turnCompletedAtMillis,
             usageStatistics = buildChatUsageStatistics(
                 tokenUsage = tokenUsage,
                 tokenUsageSource = tokenUsageSource,
@@ -934,8 +1055,11 @@ class SessionExecutionManager(
                 turnCompletedAtMillis = turnCompletedAtMillis,
             ),
             providerPayloadJson = providerPayloadJson,
+            statusText = statusText,
+            statusDetail = statusDetail,
         )
 
+        deactivateAssistantCheckpoint(handle, responseIdentity)
         chatStateStore.update { persisted ->
             val sessionIndex = persisted.sessions.indexOfFirst { it.id == sessionId }
             if (sessionIndex < 0) return@update persisted
@@ -943,8 +1067,11 @@ class SessionExecutionManager(
             val updatedSessions = persisted.sessions.toMutableList()
             val session = updatedSessions.removeAt(sessionIndex)
             val currentMessages = session.messages.ifEmpty { baseMessages }
+            val messagesWithoutCheckpoint = responseIdentity?.let { identity ->
+                currentMessages.filterNot { it.responseGroupId == identity.responseGroupId }
+            } ?: currentMessages
             val updatedSession = session.withDerivedMessages(
-                currentMessages + appendedMessages
+                messagesWithoutCheckpoint + appendedMessages
             )
             handle?.replaceRetainedMessages(updatedSession.messages)
             sessionTitle = updatedSession.title
@@ -967,6 +1094,7 @@ class SessionExecutionManager(
             tokenUsageSource = tokenUsageSource,
             inputMessageCount = inputMessageCount,
             userMessageCount = userMessageCount,
+            appendedMessageIds = appendedMessages.map(ChatMessage::id),
         )
     }
 
@@ -1021,15 +1149,16 @@ class SessionExecutionManager(
         }
         updateExecutionState(handle.sessionId) { current ->
             val targetReasoningBlockId = reasoningBlockId
+            val currentBlocks = completePendingReconnectBlocks(current.pendingResponseBlocks)
             val pendingToolInvocations = upsertToolInvocation(
                 current.pendingToolInvocations,
                 invocation,
             )
             val blocksWithReasoningTrace = if (
                 targetReasoningBlockId != null &&
-                current.pendingResponseBlocks.none { it is AssistantResponseBlock.Reasoning && it.id == targetReasoningBlockId }
+                currentBlocks.none { it is AssistantResponseBlock.Reasoning && it.id == targetReasoningBlockId }
             ) {
-                current.pendingResponseBlocks + AssistantResponseBlock.Reasoning(
+                currentBlocks + AssistantResponseBlock.Reasoning(
                     id = targetReasoningBlockId,
                     trace = ReasoningTrace(
                         id = targetReasoningBlockId,
@@ -1038,7 +1167,7 @@ class SessionExecutionManager(
                     ),
                 )
             } else {
-                current.pendingResponseBlocks
+                currentBlocks
             }
             val pendingResponseBlocks = upsertAssistantResponseToolInvocation(
                 blocks = blocksWithReasoningTrace,
@@ -1052,15 +1181,55 @@ class SessionExecutionManager(
         }
     }
 
+    private fun activateAssistantResponse(handle: SessionExecutionHandle): AssistantResponseIdentity {
+        val startedAtMillis = System.currentTimeMillis()
+        val turnId = "turn-$startedAtMillis-${UUID.randomUUID().toString().take(8)}"
+        return AssistantResponseIdentity(
+            responseGroupId = "agent-group-$turnId",
+            messageIdPrefix = "agent-$turnId",
+            createdAtMillis = startedAtMillis,
+            checkpointFromPosition = syncActiveBranches(handle.retainedMessagesSnapshot()).size,
+        ).also { identity ->
+            synchronized(handle.lock) {
+                handle.assistantCheckpointJob?.cancel()
+                handle.assistantCheckpointJob = null
+                handle.lastAssistantCheckpointUptimeMillis = null
+                handle.activeResponseIdentity = identity
+            }
+        }
+    }
+
+    private fun deactivateAssistantCheckpoint(
+        handle: SessionExecutionHandle?,
+        identity: AssistantResponseIdentity?,
+    ) {
+        if (handle == null || identity == null) return
+        synchronized(handle.lock) {
+            if (handle.activeResponseIdentity != identity) return
+            handle.activeResponseIdentity = null
+            handle.assistantCheckpointJob?.cancel()
+            handle.assistantCheckpointJob = null
+        }
+    }
+
     private fun assistantMessagesForBlocks(
         normalizedBlocks: List<AssistantResponseBlock>,
         thoughtDurationMillis: Long?,
         assistantActionsHidden: Boolean,
+        isIncomplete: Boolean = false,
+        responseIdentity: AssistantResponseIdentity? = null,
+        messageCreatedAtMillis: Long? = null,
         usageStatistics: ChatUsageStatistics? = null,
         providerPayloadJson: String = "",
+        statusText: String = "",
+        statusDetail: String = "",
     ): List<ChatMessage> {
-        val messageTimestamp = System.currentTimeMillis()
-        val responseGroupId = "agent-group-$messageTimestamp"
+        val messageTimestamp = if (isIncomplete) {
+            responseIdentity?.createdAtMillis ?: messageCreatedAtMillis ?: System.currentTimeMillis()
+        } else {
+            messageCreatedAtMillis ?: System.currentTimeMillis()
+        }
+        val responseGroupId = responseIdentity?.responseGroupId ?: "agent-group-$messageTimestamp"
         return normalizedBlocks.mapIndexedNotNull { index, block ->
             when (block) {
                 is AssistantResponseBlock.Text -> {
@@ -1068,12 +1237,13 @@ class SessionExecutionManager(
                         null
                     } else {
                         ChatMessage(
-                            id = "agent-${messageTimestamp + index}",
+                            id = responseIdentity?.messageIdFor(block.id) ?: "agent-${messageTimestamp + index}",
                             author = MessageAuthor.Agent,
                             text = block.text,
                             createdAtMillis = messageTimestamp + index,
                             responseGroupId = responseGroupId,
                             assistantActionsHidden = assistantActionsHidden,
+                            isIncomplete = isIncomplete,
                         )
                     }
                 }
@@ -1083,20 +1253,21 @@ class SessionExecutionManager(
                         null
                     } else {
                         ChatMessage(
-                            id = "agent-${messageTimestamp + index}",
+                            id = responseIdentity?.messageIdFor(block.id) ?: "agent-${messageTimestamp + index}",
                             author = MessageAuthor.Agent,
                             text = "",
                             createdAtMillis = messageTimestamp + index,
                             toolInvocations = block.toolInvocations,
                             responseGroupId = responseGroupId,
                             assistantActionsHidden = assistantActionsHidden,
+                            isIncomplete = isIncomplete,
                         )
                     }
                 }
 
                 is AssistantResponseBlock.Reasoning -> {
                     ChatMessage(
-                        id = "agent-${messageTimestamp + index}",
+                        id = responseIdentity?.messageIdFor(block.id) ?: "agent-${messageTimestamp + index}",
                         author = MessageAuthor.Agent,
                         text = "",
                         createdAtMillis = messageTimestamp + index,
@@ -1104,12 +1275,43 @@ class SessionExecutionManager(
                         reasoningTrace = block.trace,
                         responseGroupId = responseGroupId,
                         assistantActionsHidden = assistantActionsHidden,
+                        isIncomplete = isIncomplete,
+                    )
+                }
+
+                is AssistantResponseBlock.Status -> {
+                    if (block.text.isBlank()) null else ChatMessage(
+                        id = responseIdentity?.messageIdFor(block.id) ?: "agent-${messageTimestamp + index}",
+                        author = MessageAuthor.Agent,
+                        text = "",
+                        createdAtMillis = messageTimestamp + index,
+                        responseGroupId = responseGroupId,
+                        assistantActionsHidden = assistantActionsHidden,
+                        isIncomplete = isIncomplete,
+                        statusText = block.text,
+                        statusDetail = block.detail,
                     )
                 }
             }
         }.let { messages ->
             if (messages.isEmpty()) {
-                emptyList()
+                if (statusText.isBlank()) {
+                    emptyList()
+                } else {
+                    listOf(
+                        ChatMessage(
+                            id = responseIdentity?.messageIdFor("status") ?: "agent-$messageTimestamp",
+                            author = MessageAuthor.Agent,
+                            text = "",
+                            createdAtMillis = messageTimestamp,
+                            responseGroupId = responseGroupId,
+                            assistantActionsHidden = assistantActionsHidden,
+                            isIncomplete = isIncomplete,
+                            statusText = statusText,
+                            statusDetail = statusDetail,
+                        )
+                    )
+                }
             } else {
                 messages.toMutableList().apply {
                     if (none { it.reasoningTrace != null }) {
@@ -1120,6 +1322,8 @@ class SessionExecutionManager(
                                 thoughtDurationMillis = thoughtDurationMillis,
                                 usageStatistics = usageStatistics,
                                 providerPayloadJson = providerPayloadJson,
+                                statusText = statusText.ifBlank { get(lastIndex).statusText },
+                                statusDetail = statusDetail.ifBlank { get(lastIndex).statusDetail },
                             ),
                         )
                     } else {
@@ -1129,6 +1333,8 @@ class SessionExecutionManager(
                             get(lastIndex).copy(
                                 usageStatistics = usageStatistics,
                                 providerPayloadJson = providerPayloadJson,
+                                statusText = statusText.ifBlank { get(lastIndex).statusText },
+                                statusDetail = statusDetail.ifBlank { get(lastIndex).statusDetail },
                             ),
                         )
                     }
@@ -1197,7 +1403,7 @@ class SessionExecutionManager(
                 }
             }
         }
-        return if (blocks.isEmpty()) {
+        return if (blocks.isEmpty() && snapshot.pendingStatusText.isBlank()) {
             CompletionSummary(
                 sessionTitle = resolveSessionTitle(handle.sessionId),
                 summary = "",
@@ -1213,6 +1419,8 @@ class SessionExecutionManager(
                 blocks = blocks,
                 thoughtDurationMillis = thoughtDurationMillis,
                 outcome = SessionTurnOutcome.Neutral,
+                statusText = completedReconnectStatus(snapshot.pendingStatusText),
+                statusDetail = snapshot.pendingStatusDetail,
                 handle = handle,
             )
         }
@@ -1245,12 +1453,15 @@ class SessionExecutionManager(
                 }
             }
         }
+        val responseIdentity = handle.activeResponseIdentity
         val interruptedAssistantMessages = assistantMessagesForBlocks(
             normalizedBlocks = normalizeAssistantResponseBlocks(pendingBlocks),
             thoughtDurationMillis = null,
             assistantActionsHidden = true,
+            responseIdentity = responseIdentity,
         )
         val userMessages = drained.map { it.message }
+        deactivateAssistantCheckpoint(handle, responseIdentity)
         chatStateStore.update { persisted ->
             val sessionIndex = persisted.sessions.indexOfFirst { it.id == handle.sessionId }
             if (sessionIndex < 0) return@update persisted
@@ -1258,8 +1469,11 @@ class SessionExecutionManager(
             val updatedSessions = persisted.sessions.toMutableList()
             val session = updatedSessions.removeAt(sessionIndex)
             val currentMessages = session.messages.ifEmpty { handle.retainedMessagesSnapshot() }
+            val messagesWithoutCheckpoint = responseIdentity?.let { identity ->
+                currentMessages.filterNot { it.responseGroupId == identity.responseGroupId }
+            } ?: currentMessages
             val updatedSession = session.withDerivedMessages(
-                syncActiveBranches(currentMessages + interruptedAssistantMessages + userMessages)
+                syncActiveBranches(messagesWithoutCheckpoint + interruptedAssistantMessages + userMessages)
             )
             handle.replaceRetainedMessages(updatedSession.messages)
             updatedSessions.add(
@@ -1276,6 +1490,10 @@ class SessionExecutionManager(
                 pendingStatusText = "",
                 pendingStatusDetail = "",
             )
+        }
+        val continuedResponseIdentity = activateAssistantResponse(handle)
+        updateExecutionState(handle.sessionId) { current ->
+            current.copy(activeResponseGroupId = continuedResponseIdentity.responseGroupId)
         }
     }
 
@@ -1373,12 +1591,77 @@ class SessionExecutionManager(
                 put(sessionId, transform(current))
             }
         }
+        requestAssistantCheckpoint(sessionId)
         if (
             currentSettings.value.keepTasksRunningInBackground &&
             _executionStates.value.values.any { it.isRunning }
         ) {
             ensureForegroundServiceRunning()
         }
+    }
+
+    private fun requestAssistantCheckpoint(sessionId: String) {
+        val handle = executionHandles[sessionId] ?: return
+        val identity = handle.activeResponseIdentity ?: return
+        val blocks = _executionStates.value[sessionId]?.pendingResponseBlocks.orEmpty()
+        if (blocks.isEmpty()) return
+
+        val nowUptimeMillis = SystemClock.uptimeMillis()
+        var persistNow = false
+        synchronized(handle.lock) {
+            if (handle.activeResponseIdentity != identity) return
+            val remainingMillis = handle.lastAssistantCheckpointUptimeMillis?.let { lastCheckpointUptimeMillis ->
+                AssistantCheckpointIntervalMillis - (nowUptimeMillis - lastCheckpointUptimeMillis)
+            } ?: 0L
+            if (remainingMillis <= 0L) {
+                handle.lastAssistantCheckpointUptimeMillis = nowUptimeMillis
+                handle.assistantCheckpointJob?.cancel()
+                handle.assistantCheckpointJob = null
+                persistNow = true
+            } else if (handle.assistantCheckpointJob?.isActive != true) {
+                handle.assistantCheckpointJob = scope.launch {
+                    delay(remainingMillis)
+                    persistAssistantCheckpoint(handle, identity)
+                }
+            }
+        }
+        if (persistNow) {
+            persistAssistantCheckpoint(handle, identity)
+        }
+    }
+
+    private fun persistAssistantCheckpoint(
+        handle: SessionExecutionHandle,
+        identity: AssistantResponseIdentity,
+    ) {
+        val blocks = _executionStates.value[handle.sessionId]?.pendingResponseBlocks.orEmpty()
+        if (blocks.isEmpty() || handle.activeResponseIdentity != identity) return
+        synchronized(handle.lock) {
+            if (handle.activeResponseIdentity != identity) return
+            handle.lastAssistantCheckpointUptimeMillis = SystemClock.uptimeMillis()
+            handle.assistantCheckpointJob = null
+        }
+        val checkpointMessages = assistantMessagesForBlocks(
+            normalizedBlocks = normalizeAssistantResponseBlocks(blocks),
+            thoughtDurationMillis = null,
+            assistantActionsHidden = false,
+            isIncomplete = true,
+            responseIdentity = identity,
+        )
+        if (checkpointMessages.isEmpty()) return
+
+        chatStateStore.updateAssistantCheckpoint(
+            checkpoint = AssistantResponseCheckpoint(
+                target = AssistantResponseCheckpointTarget(
+                    sessionId = handle.sessionId,
+                    responseGroupId = identity.responseGroupId,
+                ),
+                fromPosition = identity.checkpointFromPosition,
+                messages = checkpointMessages,
+            ),
+            // Ignore checkpoints that race with response completion.
+            shouldPersist = { handle.activeResponseIdentity == identity },
+        )
     }
 
     private fun ensureForegroundServiceRunning() {
@@ -1417,18 +1700,52 @@ class SessionExecutionManager(
     private fun buildRequestMessages(
         messages: List<ChatMessage>,
         settings: AppSettings,
-    ): List<LlmMessage> =
-        messages.afterLatestCompactedContext()
-            .filter { it.displayKind != MessageDisplayKind.CompactStatus }
-            .map { message -> buildRequestMessage(message, settings) }
+    ): List<LlmMessage> = messages
+        .filter { it.displayKind != MessageDisplayKind.CompactStatus }
+        .flatMap { message -> buildRequestMessagesForChatMessage(message, settings) }
 
-    private fun List<ChatMessage>.afterLatestCompactedContext(): List<ChatMessage> {
-        val compactContextIndex = indexOfLast { it.displayKind == MessageDisplayKind.HiddenContext }
-        return if (compactContextIndex >= 0) {
-            drop(compactContextIndex)
-        } else {
-            this
+    private fun buildRequestMessagesForChatMessage(
+        message: ChatMessage,
+        settings: AppSettings,
+    ): List<LlmMessage> {
+        if (message.author != MessageAuthor.Agent || message.toolInvocations.isEmpty()) {
+            return listOf(buildRequestMessage(message, settings))
         }
+        val assistant = buildRequestMessage(message, settings)
+        val existingPayload = assistant.providerPayload
+        val providerPayload = existingPayload ?: JSONObject().apply {
+            put("piAssistantMessage", JSONObject().apply {
+                put("role", "assistant")
+                put("api", "aether")
+                put("provider", settings.piProviderId.ifBlank { "aether" })
+                put("model", settings.modelId.ifBlank { "unknown" })
+                put("content", JSONArray().apply {
+                    if (message.text.isNotBlank()) {
+                        put(JSONObject().put("type", "text").put("text", message.text))
+                    }
+                    message.toolInvocations.forEach { invocation ->
+                        put(JSONObject().apply {
+                            put("type", "toolCall")
+                            put("id", invocation.id)
+                            put("name", invocation.toolName)
+                            put("arguments", parseJsonObject(invocation.argumentsJson) ?: JSONObject())
+                        })
+                    }
+                })
+                put("stopReason", "toolUse")
+                put("timestamp", message.createdAtMillis ?: System.currentTimeMillis())
+            })
+        }
+        val assistantWithPayload = assistant.copy(providerPayload = providerPayload)
+        val results = message.toolInvocations.map { invocation ->
+            LlmMessage(
+                role = "toolResult",
+                contentParts = listOf(LlmTextPart(invocation.outputJson)),
+                toolCallId = invocation.id,
+                toolName = invocation.toolName,
+            )
+        }
+        return listOf(assistantWithPayload) + results
     }
 
     private fun buildRequestMessage(
@@ -1502,9 +1819,9 @@ class SessionExecutionManager(
         val canInlineImage = canInlineWorkspaceImageAttachment(attachment, settings)
         val accessHint = if (isWorkspaceImageAttachment(attachment)) {
             if (canInlineImage) {
-                "This image was copied into the workspace and is also inserted into this model request when local bytes are available. Use analyze_image on this path for a focused second pass if needed."
+                "This image was copied into the workspace and is also inserted into this model request when local bytes are available. Use the native read tool on this path when you need to inspect it."
             } else {
-                "This image was copied into the workspace. Call analyze_image on this exact path before answering questions about the image; this model endpoint does not reliably read images in tool-enabled agent requests."
+                "This image was copied into the workspace. Call the native read tool on this exact path before answering questions about the image."
             }
         } else {
             "Inspect this file through read, grep, find, ls, or bash inside the workspace instead of assuming its contents."
@@ -1561,33 +1878,13 @@ class SessionExecutionManager(
     private fun formatReasoningToolStatus(invocation: ChatToolInvocation): String {
         val arguments = parseJsonObject(invocation.argumentsJson)
         return when (invocation.toolName.lowercase()) {
-            "fetch_web_url" -> formatReasoningToolAction(
-                isRunning = invocation.isRunning,
-                runningVerb = "Fetching",
-                completedVerb = "Fetched",
-                subject = arguments?.optString("url").orEmpty(),
-                fallback = "web page",
-            )
-
-            "web_search", "tavily_search" -> formatReasoningToolAction(
-                isRunning = invocation.isRunning,
-                runningVerb = "Searching",
-                completedVerb = "Searched",
-                subject = arguments?.optString("query").orEmpty(),
-                fallback = "the web",
-            )
-
             "bash" -> if (invocation.isRunning) "Executing bash command" else "Executed bash command"
-            "fetch_bash_output" -> if (invocation.isRunning) "Fetching bash output" else "Fetched bash output"
-            "kill_bash" -> if (invocation.isRunning) "Stopping bash command" else "Stopped bash command"
-            "sleep" -> if (invocation.isRunning) "Waiting" else "Waited"
             "read" -> if (invocation.isRunning) "Reading file" else "Read file"
             "edit" -> if (invocation.isRunning) "Editing file" else "Edited file"
             "write" -> if (invocation.isRunning) "Writing file" else "Wrote file"
             "grep" -> if (invocation.isRunning) "Searching files" else "Searched files"
             "find" -> if (invocation.isRunning) "Finding files" else "Found files"
             "ls" -> if (invocation.isRunning) "Listing files" else "Listed files"
-            "analyze_image" -> if (invocation.isRunning) "Analyzing image" else "Analyzed image"
             "aether_config_get" -> formatReasoningToolAction(
                 isRunning = invocation.isRunning,
                 runningVerb = "Reading",
@@ -1779,7 +2076,7 @@ class SessionExecutionManager(
         val now = System.currentTimeMillis()
         var activeBlockId = handle.activeReasoningBlockId
         updateExecutionState(handle.sessionId) { current ->
-            val blocks = current.pendingResponseBlocks.toMutableList()
+            val blocks = completePendingReconnectBlocks(current.pendingResponseBlocks).toMutableList()
             val activeIndex = activeBlockId?.let { id ->
                 blocks.indexOfFirst { it is AssistantResponseBlock.Reasoning && it.id == id }
             } ?: -1
@@ -2316,6 +2613,8 @@ class SessionExecutionManager(
                     }
                     add(block)
                 }
+
+                is AssistantResponseBlock.Status -> if (block.text.isNotBlank()) add(block)
             }
         }
     }
@@ -2326,6 +2625,7 @@ class SessionExecutionManager(
                 is AssistantResponseBlock.ToolGroup -> block.toolInvocations
                 is AssistantResponseBlock.Text -> emptyList()
                 is AssistantResponseBlock.Reasoning -> block.trace.toolInvocations
+                is AssistantResponseBlock.Status -> emptyList()
             }
         }.distinctBy { it.id }
 
@@ -2343,6 +2643,9 @@ class SessionExecutionManager(
                 )
                 is AssistantResponseBlock.ToolGroup -> block.copy(
                     toolInvocations = finalizeInterruptedToolInvocations(block.toolInvocations),
+                )
+                is AssistantResponseBlock.Status -> block.copy(
+                    text = completedReconnectStatus(block.text),
                 )
             }
         }
@@ -2363,6 +2666,7 @@ class SessionExecutionManager(
         }?.let { chunk ->
             chunk.detail.ifBlank { chunk.title }
         } ?: "Thought for ${formatReasoningDurationLabel(block.trace)}"
+        is AssistantResponseBlock.Status -> block.text
     }
 
     private fun finalizeInterruptedToolInvocations(
@@ -2527,6 +2831,11 @@ class SessionExecutionManager(
         val tokenUsageSource: String = "unavailable",
         val inputMessageCount: Int = 0,
         val userMessageCount: Int = 0,
+        val appendedMessageIds: List<String> = emptyList(),
+        val piSessionId: String = "",
+        val piSessionFile: String = "",
+        val piRuntime: String = "",
+        val piEntryIds: List<String> = emptyList(),
     ) {
         fun toTurnEvent(sessionId: String): SessionTurnEvent = SessionTurnEvent(
             sessionId = sessionId,
@@ -2557,6 +2866,10 @@ class SessionExecutionManager(
         var reasoningFirstSummarySubmitted: Boolean = false
         var reasoningLastSubmittedCharIndex: Int = 0
         var reasoningLastTimedSummaryAtMillis: Long = 0L
+        @Volatile
+        var activeResponseIdentity: AssistantResponseIdentity? = null
+        var lastAssistantCheckpointUptimeMillis: Long? = null
+        var assistantCheckpointJob: Job? = null
 
         @Volatile
         var pauseRequested: Boolean = false
@@ -2602,6 +2915,30 @@ class SessionExecutionManager(
             reasoningFirstSummarySubmitted = false
             reasoningLastSubmittedCharIndex = 0
             reasoningLastTimedSummaryAtMillis = 0L
+        }
+
+        fun providerRequestCheckpoint(state: SessionExecutionState): ProviderRequestCheckpoint =
+            synchronized(lock) {
+                ProviderRequestCheckpoint(
+                    pendingToolInvocations = state.pendingToolInvocations,
+                    pendingResponseBlocks = state.pendingResponseBlocks,
+                    pendingAssistantText = state.pendingAssistantText,
+                    activeReasoningBlockId = activeReasoningBlockId,
+                    activeDirectReasoningSummaryChunkId = activeDirectReasoningSummaryChunkId,
+                    reasoningFirstSummarySubmitted = reasoningFirstSummarySubmitted,
+                    reasoningLastSubmittedCharIndex = reasoningLastSubmittedCharIndex,
+                    reasoningLastTimedSummaryAtMillis = reasoningLastTimedSummaryAtMillis,
+                )
+            }
+
+        fun restoreProviderRequestCheckpoint(checkpoint: ProviderRequestCheckpoint) {
+            synchronized(lock) {
+                activeReasoningBlockId = checkpoint.activeReasoningBlockId
+                activeDirectReasoningSummaryChunkId = checkpoint.activeDirectReasoningSummaryChunkId
+                reasoningFirstSummarySubmitted = checkpoint.reasoningFirstSummarySubmitted
+                reasoningLastSubmittedCharIndex = checkpoint.reasoningLastSubmittedCharIndex
+                reasoningLastTimedSummaryAtMillis = checkpoint.reasoningLastTimedSummaryAtMillis
+            }
         }
 
         fun retainedMessagesSnapshot(): List<ChatMessage> = synchronized(lock) {

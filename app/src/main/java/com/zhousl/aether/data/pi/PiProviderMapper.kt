@@ -12,7 +12,7 @@ import java.util.Locale
 
 private const val DefaultContextWindow = 128_000
 private const val DefaultMaxTokens = 16_384
-private const val DefaultMaxRetries = 2
+private const val DefaultMaxRetries = 5
 private const val DefaultMaxRetryDelayMillis = 60_000
 
 data class PiModelConfig(
@@ -77,6 +77,11 @@ data class PiCompletionResult(
     val stopReason: String = "",
     val errorMessage: String = "",
     val updatedOauthCredentialJson: String = "",
+    val sessionId: String = "",
+    val sessionFile: String = "",
+    val sessionLeafId: String = "",
+    val runtime: String = "",
+    val cwd: String = "",
 )
 
 fun AppSettings.toPiModelConfig(): PiModelConfig {
@@ -110,7 +115,7 @@ fun AppSettings.toPiModelConfig(): PiModelConfig {
         },
         customHeaders = customHeaders.toPiHeaderMap() +
             ("User-Agent" to normalizeLlmUserAgent(userAgent)),
-        reasoning = false,
+        reasoning = toPiThinkingLevel() != "off",
         timeoutMillis = llmInactivityReconnectTimeoutSeconds
             .coerceIn(30, 3_600) * 1_000,
         authMethod = effectiveAuthMethod,
@@ -154,6 +159,11 @@ fun JSONObject.toPiCompletionResult(): PiCompletionResult =
         stopReason = optString("stop_reason"),
         errorMessage = optString("error_message"),
         updatedOauthCredentialJson = optJSONObject("oauth_credential")?.toString().orEmpty(),
+        sessionId = optString("session_id"),
+        sessionFile = optString("session_file"),
+        sessionLeafId = optString("session_leaf_id"),
+        runtime = optString("runtime"),
+        cwd = optString("cwd"),
     )
 
 fun PiCompletionResult.toProviderPayloadJson(): String = JSONObject().apply {
@@ -164,6 +174,11 @@ fun PiCompletionResult.toProviderPayloadJson(): String = JSONObject().apply {
     put("model", model)
     put("responseId", responseId)
     put("stopReason", stopReason)
+    if (sessionId.isNotBlank()) put("piSessionId", sessionId)
+    if (sessionFile.isNotBlank()) put("piSessionFile", sessionFile)
+    if (sessionLeafId.isNotBlank()) put("piSessionLeafId", sessionLeafId)
+    if (runtime.isNotBlank()) put("piRuntime", runtime)
+    if (cwd.isNotBlank()) put("piCwd", cwd)
     usage?.let { tokenUsage ->
         put(
             "usage",

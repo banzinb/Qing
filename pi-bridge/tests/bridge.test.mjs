@@ -1,18 +1,27 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { afterEach, test } from "node:test";
+import {
+  createBashToolDefinition,
+  createEditToolDefinition,
+  createFindToolDefinition,
+  createGrepToolDefinition,
+  createLsToolDefinition,
+  createReadToolDefinition,
+  createWriteToolDefinition,
+} from "@earendil-works/pi-coding-agent";
 
 const activeClients = new Set();
 
 class BridgeClient {
-  constructor(environment = {}) {
-    this.child = spawn(process.execPath, ["dist/bridge.mjs"], {
-      cwd: process.cwd(),
+  constructor(environment = {}, bridgePath = "dist/bridge.mjs", cwd = process.cwd()) {
+    this.child = spawn(process.execPath, [bridgePath], {
+      cwd,
       stdio: ["pipe", "pipe", "pipe"],
       env: { ...process.env, ...environment },
     });
@@ -21,6 +30,7 @@ class BridgeClient {
     this.eventWaiters = [];
     this.stderr = "";
     createInterface({ input: this.child.stdout }).on("line", (line) => {
+      if (!line.trim()) return;
       let frame;
       try {
         frame = JSON.parse(line);
@@ -125,6 +135,38 @@ afterEach(async () => {
   await Promise.all([...activeClients].map((client) => client.close()));
 });
 
+test("lists Pi-discovered project skills without Aether managed copies", async () => {
+  const root = await mkdtemp(join(tmpdir(), "aether-skills-"));
+  const workspace = join(root, "workspace");
+  const agentDir = join(root, "agent");
+  const projectSkill = join(workspace, ".agents", "skills", "review");
+  const managedSkill = join(workspace, ".aether", "skills", "managed");
+  await mkdir(projectSkill, { recursive: true });
+  await mkdir(managedSkill, { recursive: true });
+  await mkdir(agentDir, { recursive: true });
+  await writeFile(
+    join(projectSkill, "SKILL.md"),
+    "---\nname: review\ndescription: Reviews code changes\n---\n",
+  );
+  await writeFile(
+    join(managedSkill, "SKILL.md"),
+    "---\nname: managed\ndescription: Already managed by Aether\n---\n",
+  );
+  const client = new BridgeClient({ HOME: root });
+  try {
+    const payload = await client.request("skills-1", "list_discovered_skills", {
+      workspace_directory: workspace,
+      agent_directory: agentDir,
+      workspace_trusted: true,
+    });
+    assert.deepEqual(payload.skills.map((skill) => skill.name), ["review"]);
+    assert.equal(payload.skills[0].file_path, join(projectSkill, "SKILL.md"));
+  } finally {
+    await client.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("lists Pi extension packages from an isolated agent directory", async () => {
   const home = await mkdtemp(join(tmpdir(), "aether-pi-packages-"));
   const client = new BridgeClient({ HOME: home, USERPROFILE: home });
@@ -137,6 +179,54 @@ test("lists Pi extension packages from an isolated agent directory", async () =>
       }),
       /npm: source/,
     );
+  } finally {
+    await client.close();
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+test("removes extension packages without reloading their code", async () => {
+  const home = await mkdtemp(join(tmpdir(), "aether-remove-package-"));
+  const agentDirectory = join(home, ".pi", "agent");
+  const packageDirectory = join(
+    agentDirectory,
+    "npm",
+    "node_modules",
+    "aether-remove-test",
+  );
+  await mkdir(packageDirectory, { recursive: true });
+  await writeFile(
+    join(agentDirectory, "settings.json"),
+    JSON.stringify({ packages: ["npm:aether-remove-test"] }),
+    "utf8",
+  );
+  await writeFile(
+    join(packageDirectory, "package.json"),
+    JSON.stringify({
+      name: "aether-remove-test",
+      version: "1.0.0",
+      aether: { extensions: ["./broken.ts"] },
+    }),
+    "utf8",
+  );
+  await writeFile(
+    join(packageDirectory, "broken.ts"),
+    "export default (aether) => aether.registerSettings({ id: 'old', title: 'Old', sections: [] });\n",
+    "utf8",
+  );
+
+  const client = new BridgeClient({
+    HOME: home,
+    USERPROFILE: home,
+    PI_OFFLINE: "1",
+  });
+  try {
+    const result = await client.request("package-remove", "remove_extension_package", {
+      source: "npm:aether-remove-test",
+    });
+    assert.equal(result.removed, true);
+    assert.equal(Object.hasOwn(result, "reload"), false);
+    assert.deepEqual(result.packages, []);
   } finally {
     await client.close();
     await rm(home, { recursive: true, force: true });
@@ -211,6 +301,8 @@ test("loads Aether UI extensions, renders native trees, runs actions, and interc
     `
 import { defineAetherExtension, ui } from "@aether/extension-api";
 
+let removeFetchToolTitle = () => {};
+
 export default defineAetherExtension((aether) => {
   aether.registerAction("increment", async () => {
     const count = aether.storage.get("count", 0) + 1;
@@ -235,11 +327,33 @@ export default defineAetherExtension((aether) => {
       ui.core(),
     ]),
   });
-  aether.registerPage({
-    id: "demo",
-    title: "Demo",
-    icon: "code",
-    render: () => ui.text("Aether page"),
+  aether.registerAction("settings:preferences:enabled", ({ value }) => {
+    aether.storage.set("settings:preferences:enabled", value === true);
+    return { customSettingsAction: true };
+  });
+  aether.registerSettings({
+    id: "preferences",
+    title: "Preferences",
+    sections: [{
+      title: "General",
+      settings: [{ id: "enabled", label: "Enabled", type: "toggle", default: true }],
+    }],
+  });
+  aether.registerSettings({
+    id: "secondary",
+    title: "Secondary",
+    order: 1,
+    sections: [{
+      settings: [{ id: "enabled", label: "Enabled", type: "toggle", default: true }],
+    }],
+  });
+  aether.registerComposerMenuItem({ id: "run", title: "Run demo", action: "run" });
+  aether.registerMessageType({ type: "demo", render: ({ message }) => ui.text(String(message.text ?? "")) });
+  aether.registerToolTitle("web_search", "Searching the web", "Searched the web", 200);
+  removeFetchToolTitle = aether.registerToolTitle("fetch_content", "Fetching content", "Fetched content");
+  aether.registerAction("remove-fetch-title", () => {
+    removeFetchToolTitle();
+    return { removed: true };
   });
   aether.registerAction("list-skills", async () =>
     aether.services.invoke("skills", "list"));
@@ -264,8 +378,55 @@ export default defineAetherExtension((aether) => {
     assert.equal(loaded.snapshot.components[0].target, "chat.composer.actionTray");
     assert.equal(loaded.snapshot.components[0].mode, "wrap");
     assert.equal(loaded.snapshot.components[0].tree.children[1].type, "core");
-    assert.equal(loaded.snapshot.pages[0].title, "Demo");
+    assert.equal(loaded.snapshot.pages, undefined);
+    assert.equal(loaded.snapshot.settings[0].title, "Preferences");
+    assert.equal(loaded.snapshot.settings[0].sections[0].settings[0].id, "enabled");
+    assert.equal(loaded.snapshot.settings[1].title, "Secondary");
+    assert.equal(loaded.snapshot.composer_menu_items[0].title, "Run demo");
+    assert.equal(loaded.snapshot.message_types[0].type, "demo");
+    assert.deepEqual(
+      loaded.snapshot.tool_titles.map(({ tool_name, running_title, completed_title, priority }) => ({
+        tool_name,
+        running_title,
+        completed_title,
+        priority,
+      })),
+      [
+        { tool_name: "fetch_content", running_title: "Fetching content", completed_title: "Fetched content", priority: 100 },
+        { tool_name: "web_search", running_title: "Searching the web", completed_title: "Searched the web", priority: 200 },
+      ],
+    );
     assert.deepEqual(loaded.snapshot.event_names, ["before_send", "operation:chat.new"]);
+
+    const settingsResult = await client.request(
+      "aether-settings-action",
+      "invoke_aether_extension_action",
+      {
+        extension_id: loaded.snapshot.extensions[0].id,
+        action: "settings:preferences:enabled",
+        args: { value: false },
+        context: {},
+      },
+    );
+    assert.equal(settingsResult.result.customSettingsAction, true);
+    assert.equal(settingsResult.snapshot.settings[0].sections[0].settings[0].value, false);
+    assert.equal(settingsResult.snapshot.settings[1].sections[0].settings[0].value, true);
+
+    const removedTitle = await client.request(
+      "aether-remove-title-action",
+      "invoke_aether_extension_action",
+      {
+        extension_id: loaded.snapshot.extensions[0].id,
+        action: "remove-fetch-title",
+        args: {},
+        context: {},
+      },
+    );
+    assert.equal(removedTitle.result.removed, true);
+    assert.deepEqual(
+      removedTitle.snapshot.tool_titles.map(({ tool_name }) => tool_name),
+      ["web_search"],
+    );
 
     const disabled = await client.request("aether-disabled", "reload_aether_extensions", {
       disabled_extension_paths: [extensionDirectory],
@@ -273,7 +434,7 @@ export default defineAetherExtension((aether) => {
     });
     assert.deepEqual(disabled.snapshot.extensions, []);
     assert.deepEqual(disabled.snapshot.surfaces, []);
-    assert.deepEqual(disabled.snapshot.pages, []);
+    assert.deepEqual(disabled.snapshot.tool_titles, []);
 
     await client.request("aether-reenabled", "reload_aether_extensions", {
       disabled_extension_paths: [],
@@ -660,14 +821,142 @@ async function respondToHostTool(client, frame, id) {
   });
 }
 
+const RESPONSES_TEST_TURN_COUNT = 3;
+const RESPONSES_TEST_PROMPT = "x".repeat(60_000);
+
+function openAIResponseEvents(responseNumber) {
+  const text = `answer-${responseNumber}`;
+  const messageId = `msg_${responseNumber}`;
+  return [
+    {
+      type: "response.output_item.added",
+      item: {
+        type: "message",
+        id: messageId,
+        role: "assistant",
+        status: "in_progress",
+        content: [],
+      },
+    },
+    { type: "response.content_part.added", part: { type: "output_text", text: "" } },
+    { type: "response.output_text.delta", delta: text },
+    {
+      type: "response.output_item.done",
+      item: {
+        type: "message",
+        id: messageId,
+        role: "assistant",
+        status: "completed",
+        content: [{ type: "output_text", text }],
+      },
+    },
+    {
+      type: "response.completed",
+      response: {
+        id: `resp_${responseNumber}`,
+        status: "completed",
+        usage: {
+          input_tokens: 5,
+          output_tokens: 3,
+          input_tokens_details: { cached_tokens: 0 },
+          output_tokens_details: { reasoning_tokens: 0 },
+        },
+      },
+    },
+  ];
+}
+
+async function createOpenAIResponsesServer() {
+  const requests = [];
+  let responseCount = 0;
+  const server = createServer((request, response) => {
+    const chunks = [];
+    request.on("data", (chunk) => chunks.push(chunk));
+    request.on("end", () => {
+      const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+      requests.push({ url: request.url, body });
+      responseCount += 1;
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      for (const event of openAIResponseEvents(responseCount)) {
+        response.write(`data: ${JSON.stringify(event)}\n\n`);
+      }
+      response.end("data: [DONE]\n\n");
+    });
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  assert.ok(address && typeof address === "object");
+  return {
+    requests,
+    baseUrl: `http://127.0.0.1:${address.port}/v1`,
+    close: () => new Promise((resolve) => server.close(resolve)),
+  };
+}
+
+function openAIFetchRedirectEnvironment(targetBaseUrl) {
+  const preloadSource = `
+const targetOrigin = process.env.AETHER_TEST_OPENAI_REDIRECT_ORIGIN;
+if (!targetOrigin) throw new Error("AETHER_TEST_OPENAI_REDIRECT_ORIGIN is required.");
+const originalFetch = globalThis.fetch;
+globalThis.fetch = (input, init) => {
+  const rawUrl = typeof input === "string" || input instanceof URL ? String(input) : input.url;
+  const url = new URL(rawUrl);
+  if (url.hostname !== "api.openai.com") return originalFetch(input, init);
+  return originalFetch(new URL(url.pathname + url.search, targetOrigin), init);
+};
+`;
+  const preloadSpecifier = `data:text/javascript,${encodeURIComponent(preloadSource)}`;
+  return {
+    AETHER_TEST_OPENAI_REDIRECT_ORIGIN: new URL(targetBaseUrl).origin,
+    NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --import=${preloadSpecifier}`.trim(),
+  };
+}
+
+function openAIResponsesModelConfig(baseUrl, overrides = {}) {
+  return {
+    provider_type: "builtin",
+    provider_config_id: "responses-test",
+    pi_provider_id: "openai",
+    pi_api: "builtin",
+    model_id: "gpt-5.6-sol",
+    base_url: baseUrl,
+    api_key: "secret-key",
+    reasoning: true,
+    context_window: 128_000,
+    max_tokens: 16_384,
+    max_retries: 0,
+    ...overrides,
+  };
+}
+
+async function runResponsesTurns(client, sessionId, modelConfig, sessionDirectory) {
+  for (let turn = 1; turn <= RESPONSES_TEST_TURN_COUNT; turn += 1) {
+    await client.request(
+      `${sessionId}-turn-${turn}`,
+      "run_turn",
+      {
+        ...turnPayload(
+          sessionId,
+          [userMessage(`turn ${turn}: ${RESPONSES_TEST_PROMPT}`)],
+          modelConfig,
+        ),
+        workspace_directory: sessionDirectory,
+        session_directory: sessionDirectory,
+        max_retries: 0,
+      },
+      20_000,
+    );
+  }
+}
+
 test("reports pinned bridge and Pi versions", async () => {
   const client = new BridgeClient();
   const ping = await client.request("ping-1", "ping");
 
   assert.equal(ping.bridge_version, "2.0.0-alpha.0");
-  assert.equal(ping.pi_ai_version, "0.83.0");
-  assert.equal(ping.pi_agent_core_version, "0.83.0");
-  assert.equal(ping.pi_coding_agent_version, "0.83.0");
+  assert.equal(ping.pi_ai_version, "0.84.1");
+  assert.equal(ping.pi_agent_core_version, "0.84.1");
+  assert.equal(ping.pi_coding_agent_version, "0.84.1");
   assert.match(ping.node_version, /^v\d+\./);
 });
 
@@ -737,6 +1026,45 @@ export default function (pi: ExtensionAPI) {
   assert.ok(listed.tools.some((tool) => tool.name === "extension_echo"));
 });
 
+test("loads TypeBox extensions from the standalone bridge bundle", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "aether-standalone-bridge-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const bridgePath = join(root, "bridge.mjs");
+  const workspace = join(root, "workspace");
+  const extensionDirectory = join(workspace, ".pi", "extensions");
+  await mkdir(extensionDirectory, { recursive: true });
+  await copyFile(join(process.cwd(), "dist", "bridge.mjs"), bridgePath);
+  await writeFile(
+    join(extensionDirectory, "standalone.ts"),
+    `
+import { Type } from "typebox";
+export default (pi) => pi.registerTool({
+  name: "standalone_tool",
+  label: "Standalone Tool",
+  description: "Loaded without a neighboring node_modules directory.",
+  parameters: Type.Object({}),
+  async execute() { return { content: [{ type: "text", text: "ok" }], details: {} }; },
+});
+`,
+    "utf8",
+  );
+
+  const client = new BridgeClient({}, bridgePath, root);
+  try {
+    await client.request("standalone-turn", "run_turn", {
+      ...turnPayload("session-standalone", [userMessage("start")]),
+      workspace_directory: workspace,
+    });
+    const listed = await client.request("standalone-list", "list_extensions", {
+      session_id: "session-standalone",
+    });
+    assert.deepEqual(listed.errors, []);
+    assert.ok(listed.tools.some((tool) => tool.name === "standalone_tool"));
+  } finally {
+    await client.close();
+  }
+});
+
 test("reloads Pi extensions atomically for an existing harness session", async (t) => {
   const workspace = await mkdtemp(join(tmpdir(), "aether-pi-reload-"));
   t.after(() => rm(workspace, { recursive: true, force: true }));
@@ -795,6 +1123,46 @@ export default function (pi: ExtensionAPI) {
   assert.equal(invoked.invoked, true);
 });
 
+test("recreates a reused session when a new Pi extension becomes discoverable", async (t) => {
+  const workspace = await mkdtemp(join(tmpdir(), "aether-pi-extension-discovery-"));
+  t.after(() => rm(workspace, { recursive: true, force: true }));
+  const extensionDirectory = join(workspace, ".pi", "extensions");
+  await mkdir(extensionDirectory, { recursive: true });
+
+  const client = new BridgeClient();
+  try {
+    await client.request("discovery-before", "run_turn", {
+      ...turnPayload("session-discovery", [userMessage("start")]),
+      workspace_directory: workspace,
+    });
+    await writeFile(
+      join(extensionDirectory, "discovered.ts"),
+      `
+import { Type } from "typebox";
+export default (pi) => pi.registerTool({
+  name: "discovered_tool",
+  label: "Discovered Tool",
+  description: "A tool added after the session was created.",
+  parameters: Type.Object({}),
+  async execute() { return { content: [{ type: "text", text: "ok" }], details: {} }; },
+});
+`,
+      "utf8",
+    );
+    const rerun = await client.request("discovery-after", "run_turn", {
+      ...turnPayload("session-discovery", [userMessage("refresh")]),
+      workspace_directory: workspace,
+    });
+    assert.equal(rerun.session_reused, false);
+    const listed = await client.request("discovery-list", "list_extensions", {
+      session_id: "session-discovery",
+    });
+    assert.ok(listed.tools.some((tool) => tool.name === "discovered_tool"));
+  } finally {
+    await client.close();
+  }
+});
+
 test("runs text turns and reuses the persisted Pi assistant session", async () => {
   const client = new BridgeClient();
   const config = fauxConfig({ faux_response: "first answer" });
@@ -831,41 +1199,7 @@ test("runs text turns and reuses the persisted Pi assistant session", async () =
   assert.equal(second.assistant_text, "first answer");
 });
 
-test("rebuilds a harness when any earlier persisted history changes", async () => {
-  const client = new BridgeClient();
-  const config = fauxConfig({ faux_response: "history answer" });
-  const first = await client.request(
-    "history-1",
-    "run_turn",
-    turnPayload("session-history-signature", [userMessage("ORIGINAL HISTORY")], config),
-  );
-
-  const second = await client.request(
-    "history-2",
-    "run_turn",
-    turnPayload(
-      "session-history-signature",
-      [
-        userMessage("REPLACED HISTORY"),
-        {
-          role: "assistant",
-          content: [{ type: "text", text: first.assistant_text }],
-          provider_payload: {
-            piAssistantMessage: first.assistant_message,
-            provider: first.provider,
-            model: first.model,
-          },
-        },
-        userMessage("continue"),
-      ],
-      config,
-    ),
-  );
-
-  assert.equal(second.session_reused, false);
-});
-
-test("closes harness sessions explicitly", async () => {
+test("closes AgentSession instances explicitly", async () => {
   const client = new BridgeClient();
   await client.request(
     "close-create",
@@ -886,219 +1220,156 @@ test("closes harness sessions explicitly", async () => {
   );
 });
 
-test("evicts least-recently-used idle harness sessions", async () => {
-  const client = new BridgeClient({ AETHER_PI_MAX_HARNESS_SESSIONS: "2" });
-  await client.request("lru-a", "run_turn", turnPayload("session-lru-a", [userMessage("a")]));
-  await new Promise((resolve) => setTimeout(resolve, 5));
-  await client.request("lru-b", "run_turn", turnPayload("session-lru-b", [userMessage("b")]));
-  await new Promise((resolve) => setTimeout(resolve, 5));
-  await client.request("lru-c", "run_turn", turnPayload("session-lru-c", [userMessage("c")]));
-
-  await assert.rejects(
-    client.request("lru-a-follow-up", "follow_up", {
-      session_id: "session-lru-a",
-      message: userMessage("again"),
-    }),
-    /Unknown Pi session/,
-  );
-});
-
-test("expires idle harness sessions after the configured TTL", async () => {
-  const client = new BridgeClient({ AETHER_PI_HARNESS_SESSION_TTL_MS: "20" });
-  await client.request("ttl-a", "run_turn", turnPayload("session-ttl-a", [userMessage("a")]));
-  await new Promise((resolve) => setTimeout(resolve, 40));
-  await client.request("ttl-b", "run_turn", turnPayload("session-ttl-b", [userMessage("b")]));
-
-  await assert.rejects(
-    client.request("ttl-a-follow-up", "follow_up", {
-      session_id: "session-ttl-a",
-      message: userMessage("again"),
-    }),
-    /Unknown Pi session/,
-  );
-});
-
-test("rebuilds a persisted harness when the host tool set changes", async () => {
-  const client = new BridgeClient();
-  const config = fauxConfig({ faux_response: "first answer" });
+test("rehydrates a persisted AgentSession before navigation", async (t) => {
+  const home = await mkdtemp(join(tmpdir(), "aether-session-rehydrate-"));
+  t.after(() => rm(home, { recursive: true, force: true }));
+  const client = new BridgeClient({ HOME: home, USERPROFILE: home });
+  const config = fauxConfig();
   const first = await client.request(
-    "tool-signature-1",
+    "rehydrate-create",
     "run_turn",
-    turnPayload("session-tool-signature", [userMessage("hello")], config),
+    turnPayload("session-rehydrate", [userMessage("hello")], config),
   );
+  await client.request("rehydrate-close", "close_session", {
+    session_id: "session-rehydrate",
+  });
 
-  const second = await client.request(
-    "tool-signature-2",
-    "run_turn",
-    turnPayload(
-      "session-tool-signature",
-      [
-        userMessage("hello"),
-        {
-          role: "assistant",
-          content: [{ type: "text", text: first.assistant_text }],
-          provider_payload: {
-            piAssistantMessage: first.assistant_message,
-            provider: first.provider,
-            model: first.model,
-          },
-        },
-        userMessage("continue with a new tool"),
-      ],
-      config,
-      [hostTool("agent_display", "sequential")],
-    ),
-  );
+  const navigation = await client.request("rehydrate-navigate", "navigate_session", {
+    session_id: "session-rehydrate",
+    entry_id: first.session_leaf_id,
+    model_config: config,
+    workspace_directory: process.cwd(),
+    workspace_trusted: true,
+  });
 
-  assert.equal(second.session_reused, false);
+  assert.equal(navigation.session_id, "session-rehydrate");
+  assert.equal(navigation.session_leaf_id, first.session_leaf_id);
 });
 
-test("routes harness tool calls through the host and resumes with the result", async () => {
-  const client = new BridgeClient();
-  const config = fauxConfig({
-    faux_response: "tool finished",
-    faux_tool_calls: [{ id: "call-1", name: "read", arguments: { path: "README.md" } }],
+test("imports validated Pi JSONL into a relocated session file", async (t) => {
+  const home = await mkdtemp(join(tmpdir(), "aether-jsonl-import-"));
+  t.after(() => rm(home, { recursive: true, force: true }));
+  const client = new BridgeClient({ HOME: home, USERPROFILE: home });
+  await client.request("jsonl-create", "run_turn", turnPayload("session-jsonl", [userMessage("hello")]));
+  const exported = await client.request("jsonl-export", "export_session_jsonl", {
+    session_id: "session-jsonl",
   });
-  const run = client.request(
-    "tool-turn",
-    "run_turn",
-    turnPayload(
-      "session-tool",
-      [userMessage("read the file")],
-      config,
-      [
-        {
-          name: "read",
-          description: "Read a file.",
-          parameters: {
-            type: "object",
-            properties: { path: { type: "string" } },
-            required: ["path"],
-            additionalProperties: false,
-          },
-          execution_mode: "parallel",
-        },
-      ],
-    ),
-  );
-  const hostRequest = await client.waitForEvent(
-    (frame) => frame.id === "tool-turn" && frame.event === "host_tool_request",
-  );
-  assert.equal(hostRequest.payload.tool_name, "read");
-  const hostResult = await client.request("host-result", "host_tool_result", {
-    session_id: "session-tool",
-    tool_request_id: hostRequest.payload.tool_request_id,
-    tool_call_id: hostRequest.payload.tool_call_id,
-    tool_name: "read",
-    arguments_json: hostRequest.payload.arguments_json,
-    output_json: JSON.stringify({ ok: true, stdout: "contents" }),
-    raw_output_json: JSON.stringify({ ok: true, stdout: "contents" }),
-    is_error: false,
-    content: [{ type: "text", text: JSON.stringify({ ok: true, stdout: "contents" }) }],
+  const jsonl = await readFile(exported.exported_path, "utf8");
+  await client.request("jsonl-close", "close_session", {
+    session_id: "session-jsonl",
+    session_file: exported.exported_path,
+    delete_file: true,
   });
-  assert.equal(hostResult.accepted, true);
-  const result = await run;
-  assert.equal(result.assistant_text, "tool finished");
-  assert.ok(
-    client.events.some(
-      (frame) => frame.id === "tool-turn" && frame.event === "tool_call_end",
-    ),
-  );
-});
-
-test("runs parallel host tools concurrently", async () => {
-  const client = new BridgeClient();
-  const config = fauxConfig({
-    faux_response: "parallel finished",
-    faux_tool_calls: [
-      { id: "parallel-a", name: "parallel_a", arguments: { value: "a" } },
-      { id: "parallel-b", name: "parallel_b", arguments: { value: "b" } },
-    ],
+  const imported = await client.request("jsonl-import", "import_session_jsonl", {
+    session_id: "session-jsonl",
+    jsonl,
   });
-  const run = client.request(
-    "parallel-turn",
-    "run_turn",
-    turnPayload(
-      "session-parallel",
-      [userMessage("run both")],
-      config,
-      [hostTool("parallel_a"), hostTool("parallel_b")],
-    ),
-  );
-
-  const [first, second] = await Promise.all([
-    client.waitForEvent(
-      (frame) =>
-        frame.id === "parallel-turn" &&
-        frame.event === "host_tool_request" &&
-        frame.payload.tool_name === "parallel_a",
-    ),
-    client.waitForEvent(
-      (frame) =>
-        frame.id === "parallel-turn" &&
-        frame.event === "host_tool_request" &&
-        frame.payload.tool_name === "parallel_b",
-    ),
-  ]);
-  assert.equal(first.payload.execution_mode, "parallel");
-  assert.equal(second.payload.execution_mode, "parallel");
-  await Promise.all([
-    respondToHostTool(client, first, "parallel-result-a"),
-    respondToHostTool(client, second, "parallel-result-b"),
-  ]);
-
-  const result = await run;
-  assert.equal(result.assistant_text, "parallel finished");
-});
-
-test("runs sequential host tools one at a time", async () => {
-  const client = new BridgeClient();
-  const config = fauxConfig({
-    faux_response: "sequential finished",
-    faux_tool_calls: [
-      { id: "sequential-a", name: "sequential_a", arguments: { value: "a" } },
-      { id: "sequential-b", name: "sequential_b", arguments: { value: "b" } },
-    ],
-  });
-  const run = client.request(
-    "sequential-turn",
-    "run_turn",
-    turnPayload(
-      "session-sequential",
-      [userMessage("run in order")],
-      config,
-      [hostTool("sequential_a", "sequential"), hostTool("sequential_b", "sequential")],
-    ),
-  );
-
-  const first = await client.waitForEvent(
-    (frame) =>
-      frame.id === "sequential-turn" &&
-      frame.event === "host_tool_request" &&
-      frame.payload.tool_name === "sequential_a",
-  );
-  assert.equal(first.payload.execution_mode, "sequential");
+  assert.equal(imported.imported, true);
+  assert.match(imported.session_file, /_session-jsonl\.jsonl$/);
   await assert.rejects(
-    client.waitForEvent(
-      (frame) =>
-        frame.id === "sequential-turn" &&
-        frame.event === "host_tool_request" &&
-        frame.payload.tool_name === "sequential_b",
-      150,
-    ),
-    /Timed out waiting for Pi event/,
+    client.request("jsonl-invalid", "import_session_jsonl", {
+      session_id: "other-session",
+      jsonl,
+    }),
+    /header\/session id mismatch/,
   );
-  await respondToHostTool(client, first, "sequential-result-a");
-  const second = await client.waitForEvent(
-    (frame) =>
-      frame.id === "sequential-turn" &&
-      frame.event === "host_tool_request" &&
-      frame.payload.tool_name === "sequential_b",
-  );
-  await respondToHostTool(client, second, "sequential-result-b");
+});
 
-  const result = await run;
-  assert.equal(result.assistant_text, "sequential finished");
+test("uses Pi Coding Agent native tool schemas and platform runtime sets", async (t) => {
+  const home = await mkdtemp(join(tmpdir(), "aether-native-tools-"));
+  const workspace = join(home, "alpine-workspace");
+  const termuxWorkspace = join(home, "termux-workspace");
+  await Promise.all([mkdir(workspace), mkdir(termuxWorkspace)]);
+  t.after(() => rm(home, { recursive: true, force: true }));
+  const client = new BridgeClient({ HOME: home, USERPROFILE: home });
+
+  const cases = [
+    ["android-alpine", "android", "alpine", ["read", "bash", "edit", "write", "grep", "find", "ls"]],
+    ["android-termux", "android", "termux", ["read", "bash", "edit", "write"]],
+    ["ios-alpine", "ios", "alpine", ["read", "bash", "edit", "write", "grep", "find", "ls"]],
+  ];
+  for (const [sessionId, platform, runtime, expectedTools] of cases) {
+    await client.request(`${sessionId}-turn`, "run_turn", {
+      ...turnPayload(sessionId, [userMessage("hello")]),
+      platform,
+      runtime,
+      workspace_directory: workspace,
+      termux_workspace_directory: termuxWorkspace,
+    });
+    const state = await client.request(`${sessionId}-state`, "get_session_state", {
+      session_id: sessionId,
+    });
+    assert.deepEqual(state.active_tools, expectedTools);
+  }
+
+  const state = await client.request("android-alpine-schemas", "get_session_state", {
+    session_id: "android-alpine",
+  });
+  const actualByName = Object.fromEntries(state.tools.map((tool) => [tool.name, tool.parameters]));
+  const expectedDefinitions = [
+    createReadToolDefinition(workspace),
+    createBashToolDefinition(workspace),
+    createEditToolDefinition(workspace),
+    createWriteToolDefinition(workspace),
+    createGrepToolDefinition(workspace),
+    createFindToolDefinition(workspace),
+    createLsToolDefinition(workspace),
+  ];
+  for (const definition of expectedDefinitions) {
+    assert.deepEqual(actualByName[definition.name], definition.parameters);
+  }
+  assert.equal(actualByName.read.properties.offset.description.includes("1-indexed"), true);
+  assert.equal("working_directory" in actualByName.bash.properties, false);
+  assert.equal("environment" in actualByName.bash.properties, false);
+});
+
+test("allows only Aether-owned host tools and exposes the platform browser", async (t) => {
+  const home = await mkdtemp(join(tmpdir(), "aether-host-tools-"));
+  t.after(() => rm(home, { recursive: true, force: true }));
+  const client = new BridgeClient({ HOME: home, USERPROFILE: home });
+  const sharedNames = [
+    "aether_config_get",
+    "aether_config_set",
+    "aether_skill_manage",
+    "aether_extension_manage",
+    "aether_developer_manage",
+  ];
+  const removedNames = [
+    "analyze_image",
+    "activate_skill",
+    "read_skill_resource",
+    "fetch_web_url",
+    "tavily_search",
+    "mcp_call_tool",
+    "aether_mcp_manage",
+  ];
+  const requested = ["browser", ...sharedNames, ...removedNames].map((name) => hostTool(name));
+
+  await client.request("android-host-turn", "run_turn", {
+    ...turnPayload("android-host", [userMessage("hello")], fauxConfig(), requested),
+    platform: "android",
+    chrome_enabled: true,
+  });
+  const android = await client.request("android-host-state", "get_session_state", {
+    session_id: "android-host",
+  });
+  assert.equal(android.active_tools.includes("browser"), true);
+  assert.equal(android.active_tools.includes("chrome"), false);
+  assert.deepEqual(sharedNames.filter((name) => android.active_tools.includes(name)), sharedNames);
+  assert.deepEqual(removedNames.filter((name) => android.active_tools.includes(name)), []);
+
+  await client.request("ios-host-turn", "run_turn", {
+    ...turnPayload("ios-host", [userMessage("hello")], fauxConfig(), requested),
+    platform: "ios",
+    chrome_enabled: true,
+  });
+  const ios = await client.request("ios-host-state", "get_session_state", {
+    session_id: "ios-host",
+  });
+  assert.equal(ios.active_tools.includes("browser"), true);
+  assert.equal(ios.active_tools.includes("chrome"), false);
+  assert.deepEqual(sharedNames.filter((name) => ios.active_tools.includes(name)), sharedNames);
+  assert.deepEqual(removedNames.filter((name) => ios.active_tools.includes(name)), []);
 });
 
 test("accepts steer and follow-up messages on a live persistent harness", async () => {
@@ -1162,6 +1433,125 @@ test("aborts an active harness by session id", async () => {
   }
   assert.equal(abortResult?.aborted, true);
   void run.catch(() => {});
+});
+
+test("reconnects a failed provider stream without restarting the harness turn", async (t) => {
+  let requestCount = 0;
+  const server = createServer((request, response) => {
+    request.resume();
+    request.on("end", () => {
+      requestCount += 1;
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      const content = requestCount === 1 ? "STALE" : "RECOVERED";
+      response.write(
+        `data: ${JSON.stringify({
+          id: `chatcmpl-retry-${requestCount}`,
+          object: "chat.completion.chunk",
+          created: 1,
+          model: "retry-model",
+          choices: [
+            {
+              index: 0,
+              delta: { role: "assistant", content },
+              finish_reason: null,
+            },
+          ],
+        })}\n\n`,
+      );
+      if (requestCount === 1) {
+        response.end();
+        return;
+      }
+      response.write(
+        `data: ${JSON.stringify({
+          id: `chatcmpl-retry-${requestCount}`,
+          object: "chat.completion.chunk",
+          created: 1,
+          model: "retry-model",
+          choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+        })}\n\n`,
+      );
+      response.end("data: [DONE]\n\n");
+    });
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  const address = server.address();
+  assert.ok(address && typeof address === "object");
+
+  const client = new BridgeClient();
+  const result = await client.request(
+    "provider-reconnect",
+    "run_turn",
+    turnPayload(
+      "session-provider-reconnect",
+      [userMessage("retry this request")],
+      {
+        provider_type: "openai_compatible",
+        provider_config_id: "provider-reconnect",
+        pi_provider_id: "aether-retry-test",
+        pi_api: "openai-completions",
+        model_id: "retry-model",
+        base_url: `http://127.0.0.1:${address.port}/v1`,
+        api_key: "secret-key",
+        reasoning: false,
+        max_retries: 2,
+        max_retry_delay_ms: 1,
+      },
+    ),
+  );
+
+  assert.equal(requestCount, 2);
+  assert.equal(result.assistant_text, "RECOVERED", JSON.stringify(result));
+  assert.deepEqual(
+    client.events
+      .filter(
+        (frame) =>
+          frame.id === "provider-reconnect" &&
+          ["assistant_text_delta", "assistant_stream_reset", "assistant_retry"].includes(
+            frame.event,
+          ),
+      )
+      .map((frame) => frame.event),
+    ["assistant_text_delta", "assistant_stream_reset", "assistant_retry", "assistant_text_delta"],
+  );
+});
+
+test("reports Pi AgentSession retry errors", async () => {
+  const unavailable = createServer();
+  await new Promise((resolve) => unavailable.listen(0, "127.0.0.1", resolve));
+  const address = unavailable.address();
+  assert.ok(address && typeof address === "object");
+  await new Promise((resolve) => unavailable.close(resolve));
+
+  const client = new BridgeClient();
+  const run = client.request(
+    "provider-network-detail",
+    "run_turn",
+    turnPayload(
+      "session-provider-network-detail",
+      [userMessage("show the network failure")],
+      {
+        provider_type: "openai_compatible",
+        provider_config_id: "provider-network-detail",
+        pi_provider_id: "aether-network-detail-test",
+        pi_api: "openai-completions",
+        model_id: "network-detail-model",
+        base_url: `http://127.0.0.1:${address.port}/v1`,
+        api_key: "secret-key",
+        reasoning: false,
+        max_retries: 1,
+        max_retry_delay_ms: 1,
+      },
+    ),
+  );
+  const retry = await client.waitForEvent(
+    (frame) => frame.id === "provider-network-detail" && frame.event === "assistant_retry",
+  );
+  await run;
+
+  assert.equal(typeof retry.payload.error_message, "string");
+  assert.notEqual(retry.payload.error_message.trim(), "");
 });
 
 test("maps a custom OpenAI-compatible provider through Pi", async (t) => {
@@ -1243,7 +1633,7 @@ test("maps a custom OpenAI-compatible provider through Pi", async (t) => {
   assert.equal(receivedRequest.body.model, "custom-model");
 });
 
-test("uses the OpenAI native protocol for custom base URL models outside the built-in catalog", async (t) => {
+test("accepts arbitrary manual model IDs for a built-in provider", async (t) => {
   let receivedRequest;
   const server = createServer((request, response) => {
     const chunks = [];
@@ -1271,15 +1661,16 @@ test("uses the OpenAI native protocol for custom base URL models outside the bui
       provider_config_id: "custom-openai-native",
       pi_provider_id: "openai",
       pi_api: "builtin",
-      model_id: "third-party-model",
+      model_id: "sfsefehfjksdnf",
       base_url: `http://127.0.0.1:${address.port}/v1`,
       api_key: "secret-key",
       custom_headers: { "X-Aether-Test": "present" },
-      reasoning: false,
+      reasoning: true,
       max_retries: 0,
     },
     system_prompt: "Reply briefly.",
     messages: [userMessage("hello")],
+    reasoning: "high",
     stream: false,
   });
 
@@ -1287,27 +1678,87 @@ test("uses the OpenAI native protocol for custom base URL models outside the bui
   assert.equal(receivedRequest.url, "/v1/responses");
   assert.equal(receivedRequest.authorization, "Bearer secret-key");
   assert.equal(receivedRequest.customHeader, "present");
-  assert.equal(receivedRequest.body.model, "third-party-model");
+  assert.equal(receivedRequest.body.model, "sfsefehfjksdnf");
+  assert.equal(receivedRequest.body.reasoning.effort, "high");
 });
 
-test("rejects unknown built-in models when the provider uses its default base URL", async () => {
-  const client = new BridgeClient();
-  await assert.rejects(
-    client.request("unknown-default-openai", "complete_once", {
-      model_config: {
-        provider_type: "builtin",
-        provider_config_id: "unknown-default-openai",
-        pi_provider_id: "openai",
-        pi_api: "builtin",
-        model_id: "third-party-model",
-        base_url: "https://api.openai.com/v1",
-        api_key: "secret-key",
-      },
-      messages: [userMessage("hello")],
-      stream: false,
-    }),
-    /Unknown model third-party-model/,
+test("omits explicit cache mode for custom OpenAI Responses endpoints", async (t) => {
+  const home = await mkdtemp(join(tmpdir(), "aether-custom-responses-"));
+  const api = await createOpenAIResponsesServer();
+  const client = new BridgeClient({ HOME: home, USERPROFILE: home });
+  t.after(async () => {
+    await client.close();
+    await api.close();
+    await rm(home, { recursive: true, force: true });
+  });
+
+  const sessionId = "custom-responses-compaction";
+  await runResponsesTurns(
+    client,
+    sessionId,
+    openAIResponsesModelConfig(api.baseUrl),
+    home,
   );
+  const compacted = await client.request(
+    "custom-responses-compact",
+    "compact_session",
+    { session_id: sessionId },
+    20_000,
+  );
+
+  assert.ok(compacted.compaction);
+  assert.equal(api.requests.length, RESPONSES_TEST_TURN_COUNT + 1);
+  for (const request of api.requests) {
+    assert.equal(request.url, "/v1/responses");
+    assert.equal(
+      Object.prototype.hasOwnProperty.call(request.body, "prompt_cache_options"),
+      false,
+    );
+  }
+});
+
+test("preserves explicit cache mode for the official OpenAI Responses endpoint", async (t) => {
+  const home = await mkdtemp(join(tmpdir(), "aether-official-responses-"));
+  const api = await createOpenAIResponsesServer();
+  const client = new BridgeClient({
+    HOME: home,
+    USERPROFILE: home,
+    ...openAIFetchRedirectEnvironment(api.baseUrl),
+  });
+  t.after(async () => {
+    await client.close();
+    await api.close();
+    await rm(home, { recursive: true, force: true });
+  });
+
+  const sessionId = "official-responses-compaction";
+  await runResponsesTurns(
+    client,
+    sessionId,
+    openAIResponsesModelConfig("https://API.OPENAI.COM:443/v1/", {
+      provider_config_id: sessionId,
+    }),
+    home,
+  );
+  const compacted = await client.request(
+    "official-responses-compact",
+    "compact_session",
+    { session_id: sessionId },
+    20_000,
+  );
+
+  assert.ok(compacted.compaction);
+  assert.equal(api.requests.length, RESPONSES_TEST_TURN_COUNT + 1);
+  for (const request of api.requests) {
+    assert.equal(request.url, "/v1/responses");
+  }
+  for (const request of api.requests.slice(0, -1)) {
+    assert.equal(
+      Object.prototype.hasOwnProperty.call(request.body, "prompt_cache_options"),
+      false,
+    );
+  }
+  assert.deepEqual(api.requests.at(-1).body.prompt_cache_options, { mode: "explicit" });
 });
 
 test("lists every built-in Pi provider and its model catalog", async () => {
@@ -1315,8 +1766,8 @@ test("lists every built-in Pi provider and its model catalog", async () => {
   const catalog = await client.request("providers", "list_providers");
   const providers = catalog.providers;
 
-  assert.equal(providers.length, 35);
-  assert.equal(new Set(providers.map((provider) => provider.id)).size, 35);
+  assert.equal(providers.length, 39);
+  assert.equal(new Set(providers.map((provider) => provider.id)).size, 39);
   assert.ok(providers.every((provider) => provider.models.length > 0));
   assert.ok(providers.every((provider) => provider.models.every((model) => model.id)));
 
@@ -1324,7 +1775,14 @@ test("lists every built-in Pi provider and its model catalog", async () => {
     .filter((provider) => provider.auth.oauth)
     .map((provider) => provider.id)
     .sort();
-  assert.deepEqual(oauthProviders, ["anthropic", "github-copilot", "openai-codex"]);
+  assert.deepEqual(oauthProviders, [
+    "anthropic",
+    "github-copilot",
+    "kimi-coding",
+    "openai-codex",
+    "openrouter",
+    "xai",
+  ]);
 });
 
 test("validates Pi OAuth protocol requests without legacy provider fallbacks", async () => {
@@ -1385,7 +1843,7 @@ test("bundles every Pi OAuth flow into the standalone bridge", async () => {
   }
 });
 
-test("keeps Codex browser OAuth on the manual redirect flow", async () => {
+test("keeps Codex browser OAuth ready for an intercepted loopback redirect", async () => {
   const client = new BridgeClient();
   const login = client.request(
     "oauth-codex-manual",
@@ -1407,15 +1865,11 @@ test("keeps Codex browser OAuth on the manual redirect flow", async () => {
       frame.event === "auth_prompt" &&
       frame.payload.prompt_type === "manual_code",
   );
-  assert.match(authUrl.payload.instructions, /copy the full URL back into Aether/i);
+  assert.match(authUrl.payload.instructions, /authentication window/i);
   assert.equal(manualPrompt.payload.placeholder, "http://localhost:...");
 
   const state = new URL(authUrl.payload.url).searchParams.get("state");
-  await assert.rejects(
-    fetch(`http://127.0.0.1:1455/auth/callback?code=test-code&state=${state}`, {
-      signal: AbortSignal.timeout(500),
-    }),
-  );
+  assert.equal(new URL(authUrl.payload.url).searchParams.get("redirect_uri"), "http://localhost:1455/auth/callback");
 
   const cancelled = await client.request("oauth-codex-cancel", "auth_prompt_result", {
     prompt_id: manualPrompt.payload.prompt_id,
@@ -1476,14 +1930,26 @@ test("uses Pi provider-specific API key login prompts", async () => {
     CLOUDFLARE_GATEWAY_ID: "gateway-id",
   });
 
-  await assert.rejects(
-    client.request("api-key-bedrock", "login_provider", {
-      provider_id: "amazon-bedrock",
-      provider_config_id: `test-${"amazon-bedrock"}`,
-      auth_method: "api_key",
-    }),
-    /ambient credentials/,
+  const bedrockLogin = client.request("api-key-bedrock", "login_provider", {
+    provider_id: "amazon-bedrock",
+    provider_config_id: `test-${"amazon-bedrock"}`,
+    auth_method: "api_key",
+  });
+  const bedrockPrompt = await client.waitForEvent(
+    (frame) =>
+      frame.id === "api-key-bedrock" &&
+      frame.event === "auth_prompt" &&
+      frame.payload.prompt_type === "select",
   );
+  assert.deepEqual(
+    bedrockPrompt.payload.options.map((option) => option.id),
+    ["bearer-token", "aws-profile", "credential-chain"],
+  );
+  await client.request("api-key-bedrock-cancel", "auth_prompt_result", {
+    prompt_id: bedrockPrompt.payload.prompt_id,
+    cancelled: true,
+  });
+  await assert.rejects(bedrockLogin, /cancel/i);
 });
 
 test("rejects non-OpenAI custom Pi APIs", async () => {

@@ -130,12 +130,12 @@ import com.zhousl.aether.data.normalizeLlmInactivityReconnectTimeoutSeconds
 import com.zhousl.aether.data.quickActionLabel
 import com.zhousl.aether.data.resolveAutomaticModelKey
 import com.zhousl.aether.termux.TermuxSetupState
-import com.zhousl.aether.ui.theme.AetherBackground
 import com.zhousl.aether.ui.theme.AetherOnSurface
 import com.zhousl.aether.ui.theme.AetherOnPrimary
 import com.zhousl.aether.ui.theme.AetherOnSurfaceVariant
 import com.zhousl.aether.ui.theme.AetherPrimary
 import com.zhousl.aether.ui.theme.AetherScrim
+import com.zhousl.aether.ui.theme.AetherSettingsBackground
 import com.zhousl.aether.ui.theme.AetherSurface
 import com.zhousl.aether.ui.theme.AetherSurfaceHigh
 import kotlinx.coroutines.delay
@@ -177,6 +177,8 @@ internal fun ChatGptTextField(
     minLines: Int = 1,
     keyboardOptions: KeyboardOptions = KeyboardOptions.Default,
     isSecret: Boolean = false,
+    placeholder: String = label,
+    supportingText: String = "",
     onValueChange: (TextFieldValue) -> Unit,
 ) {
     var passwordVisible by rememberSaveable(label) { mutableStateOf(false) }
@@ -213,7 +215,7 @@ internal fun ChatGptTextField(
                     Box(modifier = Modifier.weight(1f)) {
                         if (value.text.isEmpty()) {
                             Text(
-                                text = label,
+                                text = placeholder,
                                 style = MaterialTheme.typography.bodyLarge,
                                 color = AetherOnSurfaceVariant.copy(alpha = 0.5f),
                             )
@@ -246,6 +248,14 @@ internal fun ChatGptTextField(
                 }
             },
         )
+        if (supportingText.isNotBlank()) {
+            Spacer(Modifier.height(6.dp))
+            Text(
+                text = supportingText,
+                style = MaterialTheme.typography.bodySmall,
+                color = AetherOnSurfaceVariant,
+            )
+        }
     }
 }
 
@@ -270,18 +280,20 @@ internal fun SelectionDropdownField(
             style = MaterialTheme.typography.titleMedium,
             color = AetherOnSurface,
         )
-        Spacer(Modifier.height(6.dp))
-        Text(
-            text = supportingText,
-            style = MaterialTheme.typography.bodySmall,
-            color = AetherOnSurfaceVariant,
-        )
+        if (supportingText.isNotBlank()) {
+            Spacer(Modifier.height(6.dp))
+            Text(
+                text = supportingText,
+                style = MaterialTheme.typography.bodySmall,
+                color = AetherOnSurfaceVariant,
+            )
+        }
         Spacer(Modifier.height(14.dp))
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(16.dp))
-                .background(AetherBackground)
+                .background(AetherSettingsBackground)
                 .clickable { expanded = true }
                 .padding(horizontal = 14.dp, vertical = 12.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -314,11 +326,13 @@ internal fun SelectionDropdownField(
                     ) {
                         Column {
                             Text(option.title, color = AetherOnSurface)
-                            Text(
-                                text = option.subtitle,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = AetherOnSurfaceVariant,
-                            )
+                            if (option.subtitle.isNotBlank()) {
+                                Text(
+                                    text = option.subtitle,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = AetherOnSurfaceVariant,
+                                )
+                            }
                         }
                     }
                 }
@@ -360,7 +374,7 @@ internal fun ThemeModeToggle(
     val trackColor = if (isDark) {
         MaterialTheme.colorScheme.primaryContainer
     } else {
-        AetherBackground
+        AetherSettingsBackground
     }
     val thumbColor = if (isDark) {
         MaterialTheme.colorScheme.primary
@@ -406,10 +420,12 @@ internal fun SettingsActionButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
+    isLoading: Boolean = false,
+    icon: ImageVector? = null,
 ) {
     Button(
         onClick = onClick,
-        enabled = enabled,
+        enabled = enabled && !isLoading,
         modifier = modifier,
         shape = RoundedCornerShape(14.dp),
         colors = ButtonDefaults.buttonColors(
@@ -417,12 +433,19 @@ internal fun SettingsActionButton(
             contentColor = AetherOnPrimary,
         ),
     ) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelLarge,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
+        if (isLoading) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(18.dp),
+                strokeWidth = 2.dp,
+                color = AetherOnPrimary,
+            )
+            Spacer(Modifier.width(8.dp))
+        }
+        if (icon != null) {
+            Icon(imageVector = icon, contentDescription = null, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(8.dp))
+        }
+        Text(text = label, style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 
@@ -432,6 +455,7 @@ internal fun SettingsSubtleActionButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
+    icon: ImageVector? = null,
 ) {
     Button(
         onClick = onClick,
@@ -445,6 +469,10 @@ internal fun SettingsSubtleActionButton(
             disabledContentColor = AetherOnSurfaceVariant,
         ),
     ) {
+        if (icon != null) {
+            Icon(imageVector = icon, contentDescription = null, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(8.dp))
+        }
         Text(
             text = label,
             style = MaterialTheme.typography.labelLarge,
@@ -491,7 +519,7 @@ internal fun ActionPreviewPill(
     Row(
         modifier = Modifier
             .clip(RoundedCornerShape(999.dp))
-            .background(AetherBackground)
+            .background(AetherSettingsBackground)
             .padding(horizontal = 10.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -560,7 +588,7 @@ internal fun SettingsChoiceRow(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(14.dp))
-            .background(if (selected) selectedBackground else AetherBackground)
+            .background(if (selected) selectedBackground else AetherSettingsBackground)
             .clickable(onClick = onClick)
             .padding(horizontal = 14.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,

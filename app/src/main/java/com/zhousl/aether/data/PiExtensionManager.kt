@@ -304,6 +304,18 @@ class PiExtensionManager(
 ) {
     private val appContext = context.applicationContext
 
+    suspend fun listImported(): Result<List<InstalledPiExtension>> = withContext(Dispatchers.IO) {
+        runCatching {
+            val disabledIds = stateRepository.disabledExtensionIds.first()
+            listImportedExtensions()
+                .map { extension ->
+                    extension.copy(isEnabled = extension.id !in disabledIds)
+                }
+                .distinctBy(InstalledPiExtension::id)
+                .sortedBy { it.name.lowercase(Locale.US) }
+        }
+    }
+
     suspend fun fetchCatalog(): Result<List<PiExtensionCatalogEntry>> = withContext(Dispatchers.IO) {
         runCatching {
             val request = Request.Builder()
@@ -448,7 +460,9 @@ class PiExtensionManager(
                     require(response.optBoolean("removed")) {
                         "No installed Pi extension matched ${extension.source}."
                     }
-                    requireExtensionReloadSucceeded(response.optJSONObject("reload"))
+                    requireExtensionReloadSucceeded(
+                        piKernelBridge.reloadAllExtensions(stateRepository.loadOptions())
+                    )
                 }
 
                 PiExtensionInstallKind.Imported -> {
@@ -513,10 +527,10 @@ class PiExtensionManager(
         }
     }
 
-    private suspend fun listImportedExtensions(): List<InstalledPiExtension> {
+    private fun listImportedExtensions(): List<InstalledPiExtension> {
         val roots = listOf(
-            "aether" to alpineRuntime.ensureGuestDirectory(AetherExtensionGuestDirectory),
-            "pi" to alpineRuntime.ensureGuestDirectory(PiUserExtensionGuestDirectory),
+            "aether" to alpineRuntime.resolveManagedGuestPath(AetherExtensionGuestDirectory),
+            "pi" to alpineRuntime.resolveManagedGuestPath(PiUserExtensionGuestDirectory),
         )
         return roots.flatMap { (scope, root) ->
             root.listFiles()

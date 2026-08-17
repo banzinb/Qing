@@ -27,11 +27,151 @@ export interface AetherSurfaceDefinition {
   tree?: AetherView;
 }
 
-export interface AetherPageDefinition extends AetherSurfaceDefinition {
+export type AetherSettingType =
+  | "text"
+  | "password"
+  | "textarea"
+  | "number"
+  | "toggle"
+  | "select"
+  | "dropdown"
+  | "segmented"
+  | "tab"
+  | "tabs"
+  | "slider"
+  | "button"
+  | "link"
+  | "label"
+  | "divider"
+  | "spacer"
+  | "item-card"
+  | "card"
+  | "empty-state"
+  | "choice"
+  | "radio"
+  | "action-row"
+  | "chips"
+  | "detail-line"
+  | "key-value"
+  | "pill"
+  | "badge"
+  | "result-card"
+  | "callout";
+
+export interface AetherSettingOption {
+  value: string;
+  label: string;
+}
+
+export interface AetherSettingActionItem {
+  label: string;
+  action: string;
+  args?: AetherJsonObject;
+  category?: string;
+  tone?: "primary" | "neutral" | "danger";
+  enabled?: boolean;
+}
+
+export interface AetherSettingDetailItem {
+  label: string;
+  value: string;
+}
+
+export interface AetherSettingDefinition {
+  id: string;
+  label?: string;
+  title?: string;
+  description?: string;
+  subtitle?: string;
+  tag?: string;
+  pill?: string;
+  badge?: string;
+  type?: AetherSettingType;
+  default?: string | number | boolean;
+  placeholder?: string;
+  options?: AetherSettingOption[];
+  min?: number;
+  max?: number;
+  step?: number;
+  action?: string;
+  args?: AetherJsonObject;
+  category?: string;
+  url?: string;
+  icon?: string;
+  tone?: "primary" | "neutral" | "danger";
+  enabled?: boolean;
+  checked?: boolean;
+  selected?: boolean;
+  toggleAction?: string;
+  editAction?: string;
+  editCategory?: string;
+  editArgs?: AetherJsonObject;
+  deleteAction?: string;
+  deleteArgs?: AetherJsonObject;
+  expanded?: boolean;
+  actions?: AetherSettingActionItem[];
+  details?: AetherSettingDetailItem[];
+  resultText?: string;
+  result?: string;
+  buttonLabel?: string;
+  multiline?: boolean;
+  secret?: boolean;
+  settings?: AetherSettingDefinition[];
+}
+
+export interface AetherSettingsSection {
+  id?: string;
+  title?: string;
+  description?: string;
+  settings: AetherSettingDefinition[];
+}
+
+export interface AetherSettingsDefinition {
   id: string;
   title: string;
   subtitle?: string;
   icon?: string;
+  order?: number;
+  trailingIcon?: string;
+  trailingAction?: string;
+  trailingCategory?: string;
+  trailingArgs?: AetherJsonObject;
+  sections?: AetherSettingsSection[];
+  categories?: AetherSettingsCategory[];
+}
+
+export interface AetherSettingsCategory {
+  id: string;
+  title: string;
+  subtitle?: string;
+  icon?: string;
+  order?: number;
+  trailingIcon?: string;
+  trailingAction?: string;
+  trailingCategory?: string;
+  trailingArgs?: AetherJsonObject;
+  hidden?: boolean;
+  sections: AetherSettingsSection[];
+}
+
+export interface AetherComposerMenuItemDefinition {
+  id: string;
+  title: string;
+  subtitle?: string;
+  icon?: string;
+  order?: number;
+  action?: string;
+  args?: AetherJsonObject;
+  selected?: boolean;
+}
+
+export interface AetherMessageTypeDefinition {
+  type: string;
+  title?: string;
+  icon?: string;
+  render:
+    | AetherView
+    | ((context: AetherRenderContext & { message: AetherJsonObject }) => AetherView | Promise<AetherView>);
 }
 
 export type AetherComponentMode =
@@ -145,6 +285,9 @@ export interface AetherExtensionAPI {
     clear(): void;
     snapshot(): AetherJsonObject;
   };
+  readonly messages: {
+    append(type: string, payload?: AetherJsonObject, text?: string): Promise<AetherJsonObject>;
+  };
   registerSurface(
     slot: string,
     definition:
@@ -163,7 +306,17 @@ export interface AetherExtensionAPI {
         context: AetherRenderContext,
       ) => AetherView | Promise<AetherView>),
   ): () => void;
-  registerPage(definition: AetherPageDefinition): () => void;
+  registerSettings(definition: AetherSettingsDefinition): () => void;
+  registerComposerMenuItem(definition: AetherComposerMenuItemDefinition): () => void;
+  registerComposerMenu(definition: AetherComposerMenuItemDefinition): () => void;
+  registerMessageType(definition: AetherMessageTypeDefinition): () => void;
+  registerCustomMessage(definition: AetherMessageTypeDefinition): () => void;
+  registerToolTitle(
+    toolName: string,
+    runningTitle: string,
+    completedTitle: string,
+    priority?: number,
+  ): () => void;
   registerAction(
     id: string,
     handler: (

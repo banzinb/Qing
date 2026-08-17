@@ -12,6 +12,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.Transient
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.decodeFromString
 
@@ -50,6 +51,10 @@ enum class AppLanguage(
     SimplifiedChinese(
         storageValue = "zh-CN",
         languageTag = "zh-CN",
+    ),
+    Persian(
+        storageValue = "fa",
+        languageTag = "fa",
     );
 
     companion object {
@@ -175,11 +180,8 @@ data class AppSettings(
     val customHeaders: List<LlmCustomHeader> = emptyList(),
     val reasoningEffort: String = DefaultReasoningEffort,
     val systemPrompt: String = platformDefaultSystemPrompt(),
-    val tavilyApiKey: String = "",
-    val tavilyBaseUrl: String = DefaultTavilyBaseUrl,
-    val searchBackend: SearchBackend = SearchBackend.Auto,
-    val searxngBaseUrl: String = "",
-    val searxngApiKey: String = "",
+    @Transient val tavilyApiKey: String = "",
+    @Transient val tavilyBaseUrl: String = DefaultTavilyBaseUrl,
     val llmInactivityReconnectTimeoutSeconds: Int = DefaultLlmInactivityReconnectTimeoutSeconds,
     val keepTasksRunningInBackground: Boolean = true,
     val notifyOnTaskCompletion: Boolean = true,
@@ -188,7 +190,6 @@ data class AppSettings(
     val oldCommandHistoryRetentionHours: Int = DefaultOldCommandHistoryRetentionHours,
     val termuxSetupCompleted: Boolean = false,
     val termuxSetupNoticeDismissed: Boolean = false,
-    val termuxLiveOutputEnabled: Boolean = true,
     val termuxEnvironmentVariables: List<TermuxEnvironmentVariable> = emptyList(),
     val enabledRuntimeIds: Set<LocalRuntimeId> = emptySet(),
     val defaultRuntimeId: LocalRuntimeId? = null,
@@ -204,7 +205,7 @@ data class AppSettings(
     val defaultTitleModelKey: String = "",
     val defaultNamingModelKey: String = "",
     val defaultCompactingModelKey: String = "",
-    val defaultSelectedSkillIds: List<String> = emptyList(),
+    @Transient val defaultSelectedSkillIds: List<String> = emptyList(),
     val onboardingSeenVersion: Int = 0,
     val onboardingCompletedVersion: Int = 0,
     val privacyPolicyAccepted: Boolean = false,
@@ -267,12 +268,14 @@ fun parseAppSettings(value: String, fallback: AppSettings = AppSettings()): AppS
         AppSettingsJson.decodeFromString<AppSettings>(value)
     }.getOrDefault(fallback)
 
-fun defaultAppLanguage(): AppLanguage = if (
-    platformLanguageTag().startsWith("zh", ignoreCase = true)
-) {
-    AppLanguage.SimplifiedChinese
-} else {
-    AppLanguage.English
+fun defaultAppLanguage(): AppLanguage {
+    return appLanguageForTag(platformLanguageTag())
+}
+
+fun appLanguageForTag(languageTag: String): AppLanguage = when {
+    languageTag.startsWith("zh", ignoreCase = true) -> AppLanguage.SimplifiedChinese
+    languageTag.startsWith("fa", ignoreCase = true) -> AppLanguage.Persian
+    else -> AppLanguage.English
 }
 
 
@@ -596,10 +599,28 @@ fun buildModelOptionKey(
 ): String = "$providerConfigId::$modelId"
 
 fun LlmProviderConfig.availableModels(): List<String> = normalizeStringList(cachedModels + manualModelIds)
+    .sortedByPreferredModelName()
 
 fun LlmProviderConfig.enabledModels(): List<String> {
     val availableModels = availableModels().toHashSet()
     return normalizeStringList(enabledModelIds.filter(availableModels::contains))
+        .sortedByPreferredModelName()
+}
+
+fun List<String>.sortedByPreferredModelName(): List<String> = sortedWith(
+    compareBy<String> { modelNamePriority(it) }
+        .thenBy { it.lowercase() }
+        .thenBy { it },
+)
+
+private fun modelNamePriority(modelId: String): Int {
+    val name = modelId.substringAfterLast('/').trim().lowercase()
+    return when {
+        name.startsWith("gpt-") -> 0
+        name.startsWith("claude-") -> 1
+        name.startsWith("gemini-") -> 2
+        else -> 3
+    }
 }
 
 data class ProviderModelOption(
@@ -672,14 +693,12 @@ fun List<LlmProviderConfig>.availableModelOptions(
             )
         }
     }.sortedWith(
-        compareBy<ProviderModelOption> { it.modelProviderPrefixSortKey() }
-            .thenBy { it.providerId }
+        compareBy<ProviderModelOption> { modelNamePriority(it.modelId) }
+            .thenBy { it.modelId.lowercase() }
+            .thenBy { it.providerId.lowercase() }
             .thenBy { it.modelId }
     )
 }
-
-private fun ProviderModelOption.modelProviderPrefixSortKey(): String =
-    modelId.substringBefore('/').trim().ifBlank { modelId }
 
 fun AppSettings.withModelOption(option: ProviderModelOption): AppSettings = copy(
     piProviderId = option.piProviderId,

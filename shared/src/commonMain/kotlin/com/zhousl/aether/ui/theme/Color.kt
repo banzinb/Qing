@@ -9,6 +9,10 @@ import com.zhousl.aether.data.AppAccent
 data class AetherPalette(
     val background: Color,
     val backgroundGradientTop: Color,
+    val settingsBackground: Color,
+    val sidebarBackground: Color,
+    val sidebarControl: Color,
+    val settingsIcon: Color,
     val surface: Color,
     val surfaceHigh: Color,
     val surfaceHigher: Color,
@@ -31,61 +35,59 @@ data class AetherPalette(
     val scrim: Color,
 )
 
-data class QingNeutralPalette(
-    val background: Color,
-    val backgroundGradientTop: Color,
-    val surface: Color,
-    val surfaceHigh: Color,
-    val surfaceHigher: Color,
-    val surfaceVariant: Color,
-    val outline: Color,
-    val outlineSoft: Color,
-    val onSurface: Color,
-    val onSurfaceVariant: Color,
-    val error: Color,
-    val messageBubble: Color,
-    val scrim: Color,
-)
-
-data class QingAccentColors(
-    val primary: Color,
-    val onPrimary: Color,
-    val primaryContainer: Color,
-    val onPrimaryContainer: Color,
-    val secondary: Color,
-    val onSecondary: Color,
-    val secondaryContainer: Color,
-    val onSecondaryContainer: Color,
-    val tertiary: Color,
-)
-
-private val LightQingNeutral = QingNeutralPalette(
-    background = Color(0xFFFAFAFA),
-    backgroundGradientTop = Color(0xFFF5F5F7),
+val LightAetherPalette = AetherPalette(
+    background = Color(0xFFFFFFFF),
+    backgroundGradientTop = Color(0xFFFFFFFF),
+    settingsBackground = Color(0xFFF2F2F7),
+    sidebarBackground = Color(0xFFF9F9F9),
+    sidebarControl = Color(0xFFF3F3F2),
+    settingsIcon = Color(0xFF000000),
     surface = Color(0xFFFFFFFF),
-    surfaceHigh = Color(0xFFF2F2F4),
-    surfaceHigher = Color(0xFFE8E8EA),
-    surfaceVariant = Color(0xFFEFEFF2),
-    outline = Color(0xFFE3E3E8),
-    outlineSoft = Color(0xFFECECEF),
-    onSurface = Color(0xFF1D1D1F),
-    onSurfaceVariant = Color(0xFF6E6E73),
+    surfaceHigh = Color(0xFFF3F3F2),
+    surfaceHigher = Color(0xFFECECEC),
+    surfaceVariant = Color(0xFFE5E5E5),
+    outline = Color(0xFFD9D9D9),
+    outlineSoft = Color(0xFFE7E7E7),
+    onSurface = Color(0xFF202123),
+    onSurfaceVariant = Color(0xFF6B6B6B),
+    primary = Color(0xFFAD7BF9),
+    onPrimary = Color(0xFFFFFFFF),
+    primaryContainer = Color(0xFFF1E5FF),
+    onPrimaryContainer = Color(0xFF4D2F8E),
+    secondary = Color(0xFF4A7B6B),
+    onSecondary = Color(0xFFFFFFFF),
+    secondaryContainer = Color(0xFFDDF1E8),
+    onSecondaryContainer = Color(0xFF1E4A3B),
+    tertiary = Color(0xFF9A7DF8),
     error = Color(0xFFB43E3E),
     messageBubble = Color(0xFFF2F2F4),
     scrim = Color(0x22000000),
 )
 
-private val DarkQingNeutral = QingNeutralPalette(
-    background = Color(0xFF0B0B0D),
-    backgroundGradientTop = Color(0xFF000000),
-    surface = Color(0xFF1C1C1E),
-    surfaceHigh = Color(0xFF232326),
-    surfaceHigher = Color(0xFF2C2C2E),
-    surfaceVariant = Color(0xFF2A2A2D),
-    outline = Color(0xFF3A3A3C),
-    outlineSoft = Color(0xFF323234),
-    onSurface = Color(0xFFF5F5F7),
-    onSurfaceVariant = Color(0xFF98989D),
+val DarkAetherPalette = AetherPalette(
+    background = Color(0xFF151619),
+    backgroundGradientTop = Color(0xFF1B1D22),
+    settingsBackground = Color(0xFF151619),
+    sidebarBackground = Color(0xFF1C1F23),
+    sidebarControl = Color(0xFF24282D),
+    settingsIcon = Color(0xFFF3F1EC),
+    surface = Color(0xFF1C1F23),
+    surfaceHigh = Color(0xFF24282D),
+    surfaceHigher = Color(0xFF2C3036),
+    surfaceVariant = Color(0xFF343941),
+    outline = Color(0xFF4A5059),
+    outlineSoft = Color(0xFF3D424A),
+    onSurface = Color(0xFFF3F1EC),
+    onSurfaceVariant = Color(0xFFB9B4AA),
+    primary = Color(0xFFC0AEFF),
+    onPrimary = Color(0xFF251448),
+    primaryContainer = Color(0xFF3A275F),
+    onPrimaryContainer = Color(0xFFF0E9FF),
+    secondary = Color(0xFF89C8AF),
+    onSecondary = Color(0xFF143126),
+    secondaryContainer = Color(0xFF24483A),
+    onSecondaryContainer = Color(0xFFDDF6EA),
+    tertiary = Color(0xFFD1C2FF),
     error = Color(0xFFFF8E8E),
     messageBubble = Color(0xFF232326),
     scrim = Color(0x66000000),
@@ -267,6 +269,18 @@ val AetherBackground: Color
 
 val AetherBackgroundGradientTop: Color
     get() = currentPalette.backgroundGradientTop
+
+val AetherSettingsBackground: Color
+    get() = currentPalette.settingsBackground
+
+val AetherSidebarBackground: Color
+    get() = currentPalette.sidebarBackground
+
+val AetherSidebarControl: Color
+    get() = currentPalette.sidebarControl
+
+val AetherSettingsIcon: Color
+    get() = currentPalette.settingsIcon
 
 val AetherSurface: Color
     get() = currentPalette.surface

@@ -24,6 +24,7 @@ import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 
@@ -58,6 +59,10 @@ data class SharedPiTurnResult(
     val usageAvailable: Boolean = false,
     val providerPayloadJson: String = "",
     val updatedOauthCredentialJson: String = "",
+    val piSessionId: String = "",
+    val piSessionFile: String = "",
+    val piRuntime: String = "",
+    val piEntryIds: List<String> = emptyList(),
 )
 
 data class SharedPiUsage(
@@ -79,6 +84,15 @@ data class SharedPiStreamingStatus(
     val detail: String = "",
 )
 
+data class SharedPiToolEvent(
+    val id: String,
+    val name: String,
+    val argumentsJson: String,
+    val outputJson: String? = null,
+    val isRunning: Boolean,
+    val isError: Boolean = false,
+)
+
 class SharedPiChatClient(
     private val bridge: SharedPiBridgeClient,
     private val hostToolExecutor: SharedHostToolExecutor? = null,
@@ -95,7 +109,7 @@ class SharedPiChatClient(
         val response = bridge.request(
             type = "complete_once",
             payload = buildJsonObject {
-                put("model_config", config.toSharedPiModelConfig(timeoutMillis))
+                put("model_config", config.toSharedPiModelConfig(timeoutMillis, reasoning != "off"))
                 put("system_prompt", systemPrompt.ifBlank { platformDefaultSystemPrompt() })
                 put("messages", messages.toPiMessages())
                 put("stream", false)
@@ -125,17 +139,23 @@ class SharedPiChatClient(
         messages: List<SharedPiChatMessage>,
         sessionId: String,
         workspaceDirectory: String = "/workspace",
+        skillPaths: List<String> = emptyList(),
+        skillCommand: String = "",
         systemPrompt: String = platformDefaultSystemPrompt(),
         reasoning: String = "off",
         timeoutMillis: Int = 360_000,
         onAssistantTextDelta: suspend (String) -> Unit = {},
         onAssistantReasoningDelta: suspend (String) -> Unit = {},
         onAssistantReasoningSummaryDelta: suspend (String) -> Unit = {},
+        onAssistantRequestStarted: suspend () -> Unit = {},
+        onAssistantResponseReset: suspend () -> Unit = {},
+        onToolEvent: suspend (SharedPiToolEvent) -> Unit = {},
         onHostToolStarted: suspend (SharedPiHostToolCall) -> Unit = {},
         onHostToolFinished: suspend (SharedPiHostToolCall, SharedHostToolResult) -> Unit = { _, _ -> },
         onStreamingStatus: suspend (SharedPiStreamingStatus?) -> Unit = {},
         pollInjectedUserMessages: suspend () -> List<SharedPiChatMessage> = { emptyList() },
     ): SharedPiTurnResult {
+        val appendedPiEntryIds = mutableListOf<String>()
         val extensionLoadOptions = bridge.extensionLoadOptions()
         val resolvedSessionId = sessionId.ifBlank { "aether-session-${platformRandomUuid()}" }
         val hostToolDefinitions = when (val executor = hostToolExecutor) {
@@ -143,11 +163,20 @@ class SharedPiChatClient(
             else -> executor?.definitions ?: JsonArray(emptyList())
         }
         val payload = buildJsonObject {
-            put("model_config", config.toSharedPiModelConfig(timeoutMillis))
+            put("model_config", config.toSharedPiModelConfig(timeoutMillis, reasoning != "off"))
             put("session_id", resolvedSessionId)
             put("system_prompt", systemPrompt.ifBlank { platformDefaultSystemPrompt() })
-            put("messages", messages.toPiMessages())
+            put("messages", messages.withSkillCommand(skillCommand).toPiMessages())
             put("workspace_directory", workspaceDirectory)
+            put("termux_workspace_directory", workspaceDirectory)
+            put("runtime", "alpine")
+            put("platform", "ios")
+            // Aether owns this workspace; allow Pi to discover project Skills.
+            put("workspace_trusted", true)
+            put("chrome_enabled", false)
+            put("skill_paths", buildJsonArray {
+                skillPaths.distinct().forEach { add(JsonPrimitive(it)) }
+            })
             put("reasoning", reasoning)
             extensionLoadOptions.toPayload().forEach { (key, value) -> put(key, value) }
             put("host_tools", hostToolDefinitions)
@@ -168,6 +197,33 @@ class SharedPiChatClient(
                         onAssistantReasoningSummaryDelta(delta)
                     }
                 }
+                "assistant_request_start" -> onAssistantRequestStarted()
+                "assistant_stream_reset" -> onAssistantResponseReset()
+                "tool_call_start" -> onToolEvent(eventPayload.toSharedPiToolEvent(isRunning = true))
+                "tool_call_delta" -> onToolEvent(eventPayload.toSharedPiToolEvent(isRunning = true))
+                "tool_call_end" -> onToolEvent(eventPayload.toSharedPiToolEvent(isRunning = false))
+                "session_entry_appended" -> {
+                    val entryId = (eventPayload["entry"] as? JsonObject)?.string("id").orEmpty()
+                    if (entryId.isNotBlank()) appendedPiEntryIds += entryId
+                }
+                "assistant_retry" -> onStreamingStatus(
+                    SharedPiStreamingStatus(
+                        text = "Reconnecting... ${eventPayload.int("attempt")}/${eventPayload.int("max_attempts")}",
+                        detail = buildString {
+                            append(eventPayload.string("error_message"))
+                            val delayMillis = eventPayload.int("delay_ms")
+                            if (delayMillis > 0) {
+                                if (isNotEmpty()) append('\n')
+                                append("Retrying in ")
+                                if (delayMillis % 1_000 == 0) {
+                                    append(delayMillis / 1_000).append('s')
+                                } else {
+                                    append(delayMillis).append("ms")
+                                }
+                            }
+                        },
+                    )
+                )
                 "assistant_error" -> onStreamingStatus(
                     SharedPiStreamingStatus(
                         text = "Agent engine error",
@@ -234,11 +290,12 @@ class SharedPiChatClient(
         } finally {
             onStreamingStatus(null)
         }
-        return response.toSharedPiTurnResult(config)
+        return response.toSharedPiTurnResult(config, appendedPiEntryIds)
     }
 
     private suspend fun JsonObject.toSharedPiTurnResult(
         config: LlmProviderConfig,
+        piEntryIds: List<String> = emptyList(),
     ): SharedPiTurnResult {
         val usage = this["usage"] as? JsonObject ?: JsonObject(emptyMap())
         val updatedOauthCredentialJson = (this["oauth_credential"] as? JsonObject)
@@ -264,6 +321,10 @@ class SharedPiChatClient(
             usageAvailable = usage.isNotEmpty(),
             providerPayloadJson = toSharedProviderPayloadJson(),
             updatedOauthCredentialJson = updatedOauthCredentialJson,
+            piSessionId = string("session_id"),
+            piSessionFile = string("session_file"),
+            piRuntime = string("runtime"),
+            piEntryIds = piEntryIds.distinct(),
         )
     }
 
@@ -285,7 +346,14 @@ class SharedPiChatClient(
             arguments + (SharedHostToolSessionIdArgument to JsonPrimitive(request.string("session_id"))),
         )
         val result = executor.execute(toolName, executorArguments)
-        onFinished(call, result)
+        val parsedOutput = runCatching { Json.parseToJsonElement(result.outputJson).jsonObject }.getOrNull()
+        val screenshotBase64 = parsedOutput?.string("screenshot_base64").orEmpty()
+        val screenshotMimeType = parsedOutput?.string("screenshot_mime_type").orEmpty().ifBlank { "image/png" }
+        val visibleOutput = parsedOutput
+            ?.let { JsonObject(it - "screenshot_base64") }
+            ?.toString()
+            ?: result.outputJson
+        onFinished(call, result.copy(outputJson = visibleOutput))
         bridge.request(
             type = "host_tool_result",
             payload = buildJsonObject {
@@ -294,12 +362,36 @@ class SharedPiChatClient(
                 put("tool_call_id", request.string("tool_call_id"))
                 put("tool_name", toolName)
                 put("arguments_json", request.string("arguments_json"))
-                put("output_json", result.outputJson)
+                put("output_json", visibleOutput)
                 put("is_error", result.isError)
+                if (screenshotBase64.isNotBlank()) {
+                    put("content", buildJsonArray {
+                        add(buildJsonObject {
+                            put("type", "text")
+                            put("text", visibleOutput)
+                        })
+                        add(buildJsonObject {
+                            put("type", "image")
+                            put("mime_type", screenshotMimeType)
+                            put("data", screenshotBase64)
+                        })
+                    })
+                }
             },
             timeoutMillis = 15_000,
             abortOnCancellation = false,
         )
+    }
+}
+
+private fun List<SharedPiChatMessage>.withSkillCommand(name: String): List<SharedPiChatMessage> {
+    val normalized = name.trim()
+    if (normalized.isBlank()) return this
+    val index = indexOfLast { it.role == "user" }
+    if (index < 0) return this
+    val current = get(index)
+    return toMutableList().apply {
+        this[index] = current.copy(text = "/skill:$normalized ${current.text}")
     }
 }
 
@@ -309,7 +401,10 @@ data class SharedPiHostToolCall(
     val arguments: JsonObject,
 )
 
-fun LlmProviderConfig.toSharedPiModelConfig(timeoutMillis: Int = 360_000): JsonObject {
+fun LlmProviderConfig.toSharedPiModelConfig(
+    timeoutMillis: Int = 360_000,
+    reasoningEnabled: Boolean = false,
+): JsonObject {
     val definition = PiProviderCatalog.resolve(piProviderId)
     val effectiveAuthMethod = if (
         authMethod == ProviderAuthMethod.ApiKey &&
@@ -339,11 +434,11 @@ fun LlmProviderConfig.toSharedPiModelConfig(timeoutMillis: Int = 360_000): JsonO
             }
             put("User-Agent", normalizeLlmUserAgent(userAgent))
         })
-        put("reasoning", false)
+        put("reasoning", reasoningEnabled)
         put("context_window", 128_000)
         put("max_tokens", 16_384)
         put("timeout_ms", timeoutMillis.coerceIn(30_000, 3_600_000))
-        put("max_retries", 2)
+        put("max_retries", 5)
         put("max_retry_delay_ms", 60_000)
         put("auth_method", effectiveAuthMethod.storageValue)
         if (oauthCredentialJson.isNotBlank()) {
@@ -434,6 +529,44 @@ private fun JsonObject.string(name: String): String =
 
 private fun JsonObject.long(name: String): Long =
     get(name)?.jsonPrimitive?.contentOrNull?.toLongOrNull() ?: 0
+
+private fun JsonObject.int(name: String): Int =
+    get(name)?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 0
+
+internal fun JsonObject.toSharedPiToolEvent(isRunning: Boolean): SharedPiToolEvent =
+    SharedPiToolEvent(
+        id = string("id").ifBlank { "pi-tool-${int("content_index")}" },
+        name = string("name").ifBlank { "tool_call" },
+        argumentsJson = sharedToolEventJson(
+            explicitKey = "arguments_json",
+            valueKey = "arguments",
+            fallbackKey = "delta",
+        ) ?: "{}",
+        outputJson = sharedToolEventJson(
+            explicitKey = "output_json",
+            valueKey = "output",
+        ),
+        isRunning = isRunning,
+        isError = get("is_error")?.jsonPrimitive?.booleanOrNull == true,
+    )
+
+private fun JsonObject.sharedToolEventJson(
+    explicitKey: String,
+    valueKey: String,
+    fallbackKey: String = "",
+): String? {
+    string(explicitKey).takeIf(String::isNotBlank)?.let { return it }
+    get(valueKey)?.let { value ->
+        return if (value is JsonPrimitive && value.isString) {
+            value.contentOrNull?.takeIf(String::isNotBlank)
+        } else {
+            value.toString()
+        }
+    }
+    return fallbackKey.takeIf(String::isNotBlank)
+        ?.let(::string)
+        ?.takeIf(String::isNotBlank)
+}
 
 internal fun JsonObject.sharedHostToolSessionId(): String =
     get(SharedHostToolSessionIdArgument)?.jsonPrimitive?.contentOrNull.orEmpty()

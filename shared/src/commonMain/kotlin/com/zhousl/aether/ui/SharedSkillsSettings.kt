@@ -85,10 +85,11 @@ import com.zhousl.aether.shared.resources.settings_skill_source_folder
 import com.zhousl.aether.shared.resources.settings_skills_description
 import com.zhousl.aether.shared.resources.message_install_skill_failed
 import com.zhousl.aether.shared.resources.message_installed_skill
-import com.zhousl.aether.ui.theme.AetherBackground
+import com.zhousl.aether.ui.theme.AetherSettingsBackground
 import com.zhousl.aether.ui.theme.AetherOnSurface
 import com.zhousl.aether.ui.theme.AetherOnSurfaceVariant
 import com.zhousl.aether.ui.theme.AetherPrimary
+import com.zhousl.aether.ui.theme.AetherSurface
 import com.zhousl.aether.ui.theme.AetherSurfaceHigh
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
@@ -105,6 +106,7 @@ internal fun SharedSkillsSettingsDetail(
     platformServices: PlatformServices,
     installedSkills: List<SharedInstalledSkill>,
     onSkillsChanged: (List<SharedInstalledSkill>) -> Unit,
+    onReloadSessions: suspend () -> Unit,
     onTransientMessage: (String) -> Unit,
     onBack: () -> Unit,
 ) {
@@ -145,6 +147,7 @@ internal fun SharedSkillsSettingsDetail(
                 val changed = operation()
                 if (changed) {
                     onSkillsChanged(skillManager.list())
+                    onReloadSessions()
                     afterSuccess()
                 }
             } catch (failure: CancellationException) {
@@ -166,6 +169,7 @@ internal fun SharedSkillsSettingsDetail(
             try {
                 val installed = operation()
                 onSkillsChanged(skillManager.list())
+                onReloadSessions()
                 onTransientMessage(
                     installedMessageTemplate.replace(installedNamePlaceholder, installed.name),
                 )
@@ -260,7 +264,7 @@ private fun SharedSkillsListPage(
     onAdd: () -> Unit,
     onBack: () -> Unit,
 ) {
-    Box(Modifier.fillMaxSize().background(AetherBackground)) {
+    Box(Modifier.fillMaxSize().background(AetherSettingsBackground)) {
         Column(
             modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())
                 .padding(top = sharedSettingsContentTopPadding(), start = 20.dp, end = 20.dp)
@@ -328,7 +332,7 @@ private fun SharedSkillCard(
     var expanded by rememberSaveable(skill.id) { mutableStateOf(false) }
     Column(
         modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp))
-            .background(AetherSurfaceHigh).animateContentSize().padding(16.dp),
+            .background(AetherSurface).animateContentSize().padding(16.dp),
     ) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
@@ -369,7 +373,7 @@ private fun SharedSkillCard(
                 Icon(
                     Icons.Rounded.Delete,
                     contentDescription = stringResource(Res.string.action_remove),
-                    tint = MaterialTheme.colorScheme.error,
+                    tint = Color(0xFFD25757),
                     modifier = Modifier.size(20.dp),
                 )
             }
@@ -410,7 +414,7 @@ private fun SharedAddSkillPage(
     var remoteUrl by rememberSaveable { mutableStateOf("") }
     val tabs = listOf(stringResource(Res.string.settings_skill_source_folder), "Zip", "URL")
 
-    Box(Modifier.fillMaxSize().background(AetherBackground)) {
+    Box(Modifier.fillMaxSize().background(AetherSettingsBackground)) {
         Column(
             modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())
                 .padding(top = sharedSettingsContentTopPadding(), start = 20.dp, end = 20.dp)

@@ -1,11 +1,11 @@
 package com.zhousl.aether.ui
 
 import android.content.Context
+import com.zhousl.aether.AetherApplication
 import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.SystemClock
 import android.widget.Toast
-import com.zhousl.aether.platform.LocalReduceMotion
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.expandVertically
@@ -39,6 +39,7 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
@@ -138,6 +139,7 @@ import com.zhousl.aether.ui.theme.AetherPrimary
 import com.zhousl.aether.ui.theme.AetherScrim
 import com.zhousl.aether.ui.theme.AetherSecondary
 import com.zhousl.aether.ui.theme.AetherSurface
+import com.zhousl.aether.platform.LocalReduceMotion
 import com.zhousl.aether.ui.theme.AetherSurfaceHigh
 import com.zhousl.aether.ui.theme.AetherTertiary
 
@@ -519,7 +521,8 @@ private fun UserMessageBlock(
         horizontalAlignment = Alignment.End,
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Box {
+        BoxWithConstraints {
+            val userBubbleMaxWidth = (maxWidth * 0.72f).coerceIn(300.dp, 520.dp)
             Column(
                 horizontalAlignment = Alignment.End,
                 verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -528,6 +531,7 @@ private fun UserMessageBlock(
                 if (message.text.isNotBlank()) {
                     UserTextBubble(
                         text = message.text,
+                        maxWidth = userBubbleMaxWidth,
                         onLongPress = { menuExpanded = true },
                     )
                 }
@@ -797,11 +801,12 @@ private fun UserAttachments(
 @OptIn(ExperimentalFoundationApi::class)
 private fun UserTextBubble(
     text: String,
+    maxWidth: Dp,
     onLongPress: () -> Unit,
 ) {
     Box(
         modifier = Modifier
-            .widthIn(max = 300.dp)
+            .widthIn(max = maxWidth)
             .shadow(10.dp, RoundedCornerShape(24.dp), ambientColor = AetherScrim, spotColor = AetherScrim)
             .clip(RoundedCornerShape(24.dp))
             .background(AetherMessageBubble)
@@ -843,8 +848,9 @@ private fun AssistantMessageBlock(
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         val context = LocalContext.current
-        val agentModeFrames = remember(context, message.toolInvocations) {
-            buildAgentModeReplayFrames(context, message.toolInvocations)
+        val replayToolInvocations = message.replayToolInvocations()
+        val agentModeFrames = remember(context, replayToolInvocations) {
+            buildAgentModeReplayFrames(context, replayToolInvocations)
         }
 
         val workContent: @Composable () -> Unit = {
@@ -860,8 +866,10 @@ private fun AssistantMessageBlock(
         if (shouldFoldWorkBeforeFinalText) {
             AgentWorkSummaryDisclosure(
                 title = formatWorkedSummaryTitle(
-                    message.thoughtDurationMillis
-                        ?: workDurationMillisForMessages(listOf(message), endAtMillis = message.createdAtMillis),
+                    workDurationMillisForMessages(
+                        messages = listOf(message),
+                        endAtMillis = message.createdAtMillis,
+                    ),
                 ),
                 stateKey = "message-work-${message.id}",
                 content = workContent,
@@ -882,7 +890,7 @@ private fun AssistantMessageBlock(
                 )
             }
         }
-        if (message.reasoningTrace == null && agentModeFrames.isNotEmpty()) {
+        if (agentModeFrames.isNotEmpty()) {
             AgentModeReplayPanel(
                 frames = agentModeFrames,
                 stateKey = "agent-mode-replay-${message.id}",
@@ -907,6 +915,13 @@ private fun AssistantMessageBlock(
                 workspaceDirectory = workspaceDirectory,
                 allowRootImageRead = allowRootImageRead,
                 onLinkClick = onOpenLink,
+            )
+        }
+        if (message.statusText.isNotBlank()) {
+            ReconnectingStatusCard(
+                text = message.statusText,
+                detail = message.statusDetail,
+                modifier = Modifier.padding(top = 6.dp),
             )
         }
         if (showActions) {
@@ -945,7 +960,7 @@ private fun AssistantMessageWorkContent(
             )
         }
     }
-    if (message.reasoningTrace == null && agentModeFrames.isNotEmpty()) {
+    if (agentModeFrames.isNotEmpty()) {
         AgentModeReplayPanel(
             frames = agentModeFrames,
             stateKey = "agent-mode-replay-${message.id}",
@@ -1054,11 +1069,10 @@ fun ConversationAssistantGroupBubble(
         if (shouldFoldWorkBeforeFinalText) {
             AgentWorkSummaryDisclosure(
                 title = formatWorkedSummaryTitle(
-                    thoughtDurationMillis
-                        ?: workDurationMillisForMessages(
-                            workMessages,
-                            endAtMillis = messages[finalTextMessageIndex].createdAtMillis,
-                        ),
+                    workDurationMillisForMessages(
+                        messages = messages,
+                        endAtMillis = messages[finalTextMessageIndex].createdAtMillis,
+                    ),
                 ),
                 stateKey = "assistant-work-${messages.first().responseGroupId ?: messages.first().id}",
             ) {
@@ -1151,8 +1165,9 @@ private fun AssistantGroupMessageContent(
     onOpenLink: (String) -> Unit,
 ) {
     val context = LocalContext.current
-    val agentModeFrames = remember(context, message.toolInvocations) {
-        buildAgentModeReplayFrames(context, message.toolInvocations)
+    val replayToolInvocations = message.replayToolInvocations()
+    val agentModeFrames = remember(context, replayToolInvocations) {
+        buildAgentModeReplayFrames(context, replayToolInvocations)
     }
     if (message.reasoningTrace != null) {
         ReasoningTraceStatus(
@@ -1188,6 +1203,13 @@ private fun AssistantGroupMessageContent(
             workspaceDirectory = workspaceDirectory,
             allowRootImageRead = allowRootImageRead,
             onLinkClick = onOpenLink,
+        )
+    }
+    if (message.statusText.isNotBlank()) {
+        ReconnectingStatusCard(
+            text = message.statusText,
+            detail = message.statusDetail,
+            modifier = Modifier.padding(top = 6.dp),
         )
     }
 }
@@ -1969,12 +1991,8 @@ fun ShimmerStatusText(
     pauseDurationMillis: Int = 1000,
 ) {
     if (LocalReduceMotion.current) {
-        Text(
-            text = text,
-            style = MaterialTheme.typography.bodyMedium,
-            color = AetherOnSurfaceVariant,
-            modifier = modifier,
-        )
+        Text(text = text, modifier = modifier, style = MaterialTheme.typography.bodyMedium,
+            color = AetherOnSurfaceVariant)
         return
     }
     val travelDistance = (280f + text.length * 18f).coerceIn(280f, 760f)
@@ -2407,8 +2425,8 @@ private fun TimelineGlyph(
 }
 
 private fun reasoningToolIcon(toolName: String): ImageVector = when (toolName.lowercase()) {
-    "bash", "fetch_bash_output", "kill_bash" -> Icons.Rounded.Terminal
-    "fetch_web_url", "web_search", "tavily_search" -> Icons.Rounded.Language
+    "bash" -> Icons.Rounded.Terminal
+    "fetch_web_url", "tavily_search" -> Icons.Rounded.Language
     else -> Icons.Rounded.Build
 }
 
@@ -2585,6 +2603,7 @@ private fun faviconUrlForDomain(domain: String): String =
 fun ReconnectingStatusCard(
     text: String,
     detail: String,
+    isRunning: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     var expanded by rememberSaveable(text, detail) { mutableStateOf(false) }
@@ -2603,7 +2622,15 @@ fun ReconnectingStatusCard(
             .noRippleClickable(enabled = detail.isNotBlank()) { expanded = !expanded },
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        ShimmerStatusText(text = text)
+        if (isRunning) {
+            ShimmerStatusText(text = text)
+        } else {
+            Text(
+                text = text,
+                style = MaterialTheme.typography.bodyMedium,
+                color = AetherOnSurfaceVariant,
+            )
+        }
 
         AnimatedVisibility(
             visible = expanded && detail.isNotBlank(),
@@ -3201,7 +3228,7 @@ private fun IconOnlyAction(
 ) {
     Box(
         modifier = Modifier
-            .size(44.dp)
+            .size(28.dp)
             .clip(CircleShape)
             .background(
                 if (enabled) AetherSurface.copy(alpha = 0.72f) else AetherSurface.copy(alpha = 0.35f)
@@ -3227,7 +3254,7 @@ private fun AssistantMessageAction(
 ) {
     Box(
         modifier = Modifier
-            .size(44.dp)
+            .size(24.dp)
             .clickable(enabled = enabled, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
@@ -3722,6 +3749,19 @@ fun workDurationMillisForMessages(
     messages: List<ChatMessage>,
     endAtMillis: Long? = null,
 ): Long {
+    messages.asReversed().forEach { message ->
+        val usage = message.usageStatistics ?: return@forEach
+        if (
+            usage.startedAtMillis >= MinimumEpochMillis &&
+            usage.completedAtMillis >= usage.startedAtMillis
+        ) {
+            return (usage.completedAtMillis - usage.startedAtMillis).coerceAtLeast(1_000L)
+        }
+    }
+    messages.lastOrNull()?.thoughtDurationMillis?.let { duration ->
+        return duration.coerceAtLeast(1_000L)
+    }
+
     val timestamps = mutableListOf<Long>()
     messages.forEach { message ->
         if (message.createdAtMillis > 0L) {
@@ -3743,7 +3783,7 @@ fun workDurationMillisForMessages(
 
     val wallClockTimestamps = timestamps.filter { it >= MinimumEpochMillis }
     if (wallClockTimestamps.size < 2) {
-        return messages.lastOrNull()?.thoughtDurationMillis ?: 1_000L
+        return 1_000L
     }
     return (wallClockTimestamps.maxOrNull()!! - wallClockTimestamps.minOrNull()!!)
         .coerceAtLeast(1_000L)
@@ -3757,6 +3797,7 @@ fun workDurationMillisForBlocks(
     blocks.forEach { block ->
         when (block) {
             is AssistantResponseBlock.Text -> Unit
+            is AssistantResponseBlock.Status -> Unit
             is AssistantResponseBlock.ToolGroup -> block.toolInvocations.forEach { invocation ->
                 if (invocation.startedAtMillis > 0L) timestamps += invocation.startedAtMillis
                 invocation.completedAtMillis?.takeIf { it > 0L }?.let { timestamps += it }
@@ -3879,38 +3920,21 @@ private fun formatToolInvocationTitleLabel(
     arguments: JSONObject? = parseJsonObject(toolInvocation.argumentsJson),
 ): String {
     val isRunning = isRunningOverride
+    (context.applicationContext as? AetherApplication)?.runtime?.modKernel?.toolTitles
+        ?.titleFor(toolInvocation.toolName, isRunning)?.let { return it }
     return when (toolInvocation.toolName.lowercase()) {
         "bash" -> context.getString(if (isRunning) R.string.tool_title_bash_running else R.string.tool_title_bash_done)
-        "fetch_bash_output" -> context.getString(if (isRunning) R.string.tool_title_fetch_bash_output_running else R.string.tool_title_fetch_bash_output_done)
-        "kill_bash" -> context.getString(if (isRunning) R.string.tool_title_kill_bash_running else R.string.tool_title_kill_bash_done)
-        "sleep" -> context.getString(if (isRunning) R.string.tool_title_sleep_running else R.string.tool_title_sleep_done)
         "read" -> context.getString(if (isRunning) R.string.tool_title_read_running else R.string.tool_title_read_done)
         "edit" -> context.getString(if (isRunning) R.string.tool_title_edit_running else R.string.tool_title_edit_done)
         "write" -> context.getString(if (isRunning) R.string.tool_title_write_running else R.string.tool_title_write_done)
         "grep" -> context.getString(if (isRunning) R.string.tool_title_grep_running else R.string.tool_title_grep_done)
         "find" -> context.getString(if (isRunning) R.string.tool_title_find_running else R.string.tool_title_find_done)
         "ls" -> context.getString(if (isRunning) R.string.tool_title_ls_running else R.string.tool_title_ls_done)
-        "analyze_image" -> context.getString(if (isRunning) R.string.tool_title_analyze_image_running else R.string.tool_title_analyze_image_done)
         "agent_display" -> formatAgentDisplayTitle(context = context, isRunning = isRunning, arguments = arguments)
-        "chrome" -> formatChromeTitle(context = context, isRunning = isRunning, arguments = arguments)
-        "web_search", "tavily_search" -> formatArgumentDrivenTitle(
-            isRunning = isRunning,
-            progressiveVerb = context.getString(R.string.tool_title_searching),
-            completedVerb = context.getString(R.string.tool_title_searched),
-            subject = arguments?.optString("query").orEmpty(),
-            fallback = context.getString(R.string.tool_title_web_search_fallback),
-        )
-        "fetch_web_url" -> formatArgumentDrivenTitle(
-            isRunning = isRunning,
-            progressiveVerb = context.getString(R.string.tool_title_fetching),
-            completedVerb = context.getString(R.string.tool_title_fetched),
-            subject = arguments?.optString("url").orEmpty(),
-            fallback = context.getString(R.string.tool_title_web_page_fallback),
-        )
+        "chrome", "browser" -> formatChromeTitle(context = context, isRunning = isRunning, arguments = arguments)
         "aether_config_get",
         "aether_config_set",
         "aether_skill_manage",
-        "aether_mcp_manage",
         "aether_termux_manage",
         "aether_agent_mode_manage",
         "aether_developer_manage" -> formatAetherToolTitle(
@@ -3934,9 +3958,6 @@ private fun summarizeToolInvocationCommandLabel(
     if (arguments == null) return toolName
     return when (toolName.lowercase()) {
         "bash" -> arguments.optString("command").trim()
-        "fetch_bash_output" -> "fetch ${arguments.optString("run_id").ifBlank { arguments.optString("runId") }.trim()}"
-        "kill_bash" -> "kill ${arguments.optString("run_id").ifBlank { arguments.optString("runId") }.trim()}"
-        "sleep" -> "sleep ${arguments.optString("duration_ms").ifBlank { arguments.optString("durationMs") }.trim()}ms"
         "read" -> buildString {
             append("read ")
             append(arguments.optString("path").trim())
@@ -3976,8 +3997,8 @@ private fun summarizeToolInvocationCommandLabel(
             }
         }
         "agent_display" -> summarizeAgentDisplayCommand(arguments)
-        "chrome" -> summarizeChromeCommand(arguments)
-        "web_search", "tavily_search" -> "search ${arguments.optString("query").trim()}"
+        "chrome", "browser" -> summarizeChromeCommand(arguments)
+        "tavily_search" -> "search ${arguments.optString("query").trim()}"
         "fetch_web_url" -> "fetch ${arguments.optString("url").trim()}"
         "aether_config_get",
         "aether_config_set",
@@ -4070,9 +4091,6 @@ private fun summarizeToolInvocationCommand(
     if (arguments == null) return toolName
     return when (toolName.lowercase()) {
         "bash" -> arguments.optString("command").trim()
-        "fetch_bash_output" -> "fetch ${arguments.optString("run_id").ifBlank { arguments.optString("runId") }.trim()}"
-        "kill_bash" -> "kill ${arguments.optString("run_id").ifBlank { arguments.optString("runId") }.trim()}"
-        "sleep" -> "sleep ${arguments.optString("duration_ms").ifBlank { arguments.optString("durationMs") }.trim()}ms"
         "read" -> buildString {
             append("read ")
             append(arguments.optString("path").trim())
@@ -4099,8 +4117,8 @@ private fun summarizeToolInvocationCommand(
         "find" -> "find ${arguments.optString("pattern").trim()} in ${arguments.optString("path").trim()}"
         "ls" -> "ls ${arguments.optString("path").trim()}"
         "agent_display" -> summarizeAgentDisplayCommand(arguments)
-        "chrome" -> summarizeChromeCommand(arguments)
-        "web_search", "tavily_search" -> "search ${arguments.optString("query").trim()}"
+        "chrome", "browser" -> summarizeChromeCommand(arguments)
+        "tavily_search" -> "search ${arguments.optString("query").trim()}"
         "fetch_web_url" -> "fetch ${arguments.optString("url").trim()}"
         "aether_config_get",
         "aether_config_set",
@@ -4332,7 +4350,7 @@ private fun buildAgentModeReplayTimeline(
     val interleavedTextMessageIds = mutableSetOf<String>()
     var firstFrameMessageIndex = -1
     messages.forEachIndexed { index, message ->
-        val messageFrames = buildAgentModeReplayFrames(context, message.toolInvocations)
+        val messageFrames = buildAgentModeReplayFrames(context, message.replayToolInvocations())
         if (messageFrames.isNotEmpty()) {
             if (firstFrameMessageIndex < 0) {
                 firstFrameMessageIndex = index
@@ -4353,8 +4371,11 @@ private fun buildAgentModeReplayTimeline(
 
 private fun List<ChatMessage>.hasFutureAgentModeFrame(context: Context, startIndex: Int): Boolean =
     drop(startIndex).any { message ->
-        buildAgentModeReplayFrames(context, message.toolInvocations).isNotEmpty()
+        buildAgentModeReplayFrames(context, message.replayToolInvocations()).isNotEmpty()
     }
+
+private fun ChatMessage.replayToolInvocations(): List<ChatToolInvocation> =
+    (toolInvocations + reasoningTrace?.toolInvocations.orEmpty()).distinctBy(ChatToolInvocation::id)
 
 private fun buildAgentModeReplayFrames(
     context: Context,
@@ -4363,7 +4384,8 @@ private fun buildAgentModeReplayFrames(
     toolInvocations.forEach { invocation ->
         if (
             !invocation.toolName.equals("agent_display", ignoreCase = true) &&
-            !invocation.toolName.equals("chrome", ignoreCase = true)
+            !invocation.toolName.equals("chrome", ignoreCase = true) &&
+            !invocation.toolName.equals("browser", ignoreCase = true)
         ) return@forEach
         val output = parseJsonObject(invocation.outputJson) ?: return@forEach
         if (!output.optBoolean("ok")) return@forEach
@@ -4395,7 +4417,7 @@ private fun buildAgentModeReplayFrames(
 
 private fun ChatToolInvocation.isAgentModeDisplayInvocation(): Boolean =
     toolName.equals("agent_display", ignoreCase = true) ||
-        toolName.equals("chrome", ignoreCase = true)
+        toolName.equals("chrome", ignoreCase = true) || toolName.equals("browser", ignoreCase = true)
 
 private fun agentModeReplayBackdropBrush(): Brush = Brush.linearGradient(
     colorStops = arrayOf(
@@ -4502,7 +4524,7 @@ private fun formatChromeTitle(
             )
         }
     }
-    "tap" -> context.getString(
+    "tap", "click" -> context.getString(
         if (isRunning) R.string.tool_title_tapping_chrome else R.string.tool_title_tapped_chrome,
     )
     "swipe", "scroll" -> context.getString(
@@ -4537,7 +4559,7 @@ private fun formatChromeTitle(
     "reload" -> context.getString(
         if (isRunning) R.string.tool_title_reloading_chrome else R.string.tool_title_reloaded_chrome,
     )
-    "evaluate" -> context.getString(
+    "evaluate", "execute_js", "get_text", "get_page_info", "find_elements", "get_readable", "get_backbone", "wait_for_dom_stable" -> context.getString(
         if (isRunning) R.string.tool_title_evaluating_chrome else R.string.tool_title_evaluated_chrome,
     )
     "screenshot" -> context.getString(
@@ -4555,13 +4577,15 @@ private fun summarizeChromeCommand(arguments: JSONObject?): String {
     if (arguments == null) return "chrome"
     val action = arguments.optString("action").trim().ifBlank { "unknown" }
     return when (action.lowercase()) {
-        "navigate", "open" -> "chrome navigate ${arguments.optString("url").trim()}"
-        "tap" -> "chrome tap x=${arguments.optString("x").trim()} y=${arguments.optString("y").trim()}"
-        "swipe", "scroll" -> "chrome swipe ${arguments.optString("x1").trim()},${arguments.optString("y1").trim()} -> ${arguments.optString("x2").trim()},${arguments.optString("y2").trim()}"
-        "key" -> "chrome key ${arguments.optString("key").trim()}"
-        "text", "type" -> "chrome text"
-        "evaluate" -> "chrome evaluate"
-        else -> "chrome $action"
+        "navigate", "open" -> "browser navigate ${arguments.optString("url").trim()}"
+        "tap", "click" -> arguments.optString("selector").trim().ifBlank {
+            "browser click x=${arguments.optString("x").trim()} y=${arguments.optString("y").trim()}"
+        }.let { value -> if (value.startsWith("browser ")) value else "browser click $value" }
+        "swipe", "scroll" -> "browser scroll"
+        "key" -> "browser key ${arguments.optString("key").trim()}"
+        "text", "type" -> "browser type"
+        "evaluate", "execute_js" -> "browser execute_js"
+        else -> "browser $action"
     }.trim()
 }
 

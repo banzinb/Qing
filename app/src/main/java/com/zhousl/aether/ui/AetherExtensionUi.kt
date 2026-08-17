@@ -36,10 +36,15 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.AutoAwesome
+import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Code
+import androidx.compose.material.icons.rounded.Delete
+import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Extension
 import androidx.compose.material.icons.rounded.Home
 import androidx.compose.material.icons.rounded.Info
+import androidx.compose.material.icons.rounded.Link
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Settings
@@ -78,7 +83,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
-import com.zhousl.aether.data.AetherAppExtensionPage
 import com.zhousl.aether.data.AetherAppExtensionSnapshot
 import com.zhousl.aether.mod.AetherNativeComponentContext
 import com.zhousl.aether.mod.AetherNativeComponentMode
@@ -101,8 +105,12 @@ const val AetherExtensionSlotChatEmpty = "chat.empty"
 const val AetherExtensionSlotChatListStart = "chat.list.start"
 const val AetherExtensionSlotChatListEnd = "chat.list.end"
 const val AetherExtensionSlotChatComposerTop = "chat.composer.top"
+const val AetherExtensionSlotChatComposerPlusMenu = "chat.composer.plus-menu"
 const val AetherExtensionSlotSettingsHub = "settings.hub"
 const val AetherExtensionSlotDrawer = "drawer"
+const val AetherExtensionSlotDrawerHeader = "drawer.header"
+const val AetherExtensionSlotDrawerFooter = "drawer.footer"
+const val AetherExtensionSlotDrawerListEnd = "drawer.list.end"
 
 const val AetherExtensionComponentChatComposerActionTray = "chat.composer.actionTray"
 const val AetherExtensionComponentChatComposerSkillPicker = "chat.composer.skillPicker"
@@ -119,7 +127,6 @@ data class AetherExtensionUiController(
     val publicState: JSONObject,
     val onHostCall: suspend (String, JSONObject) -> JSONObject,
     val onAction: (String, String, JSONObject) -> Unit,
-    val onOpenPage: (String) -> Unit,
 )
 
 val LocalAetherExtensionUiController =
@@ -305,118 +312,6 @@ private fun AetherScriptExtensionComponentHost(
                 AetherExtensionView(
                     value = component.tree,
                     extensionId = component.extensionId,
-                )
-            }
-        }
-    }
-}
-
-@Composable
-fun AetherExtensionPageScreen(
-    page: AetherAppExtensionPage,
-    onBack: () -> Unit,
-) {
-    Scaffold(
-        modifier = Modifier.fillMaxSize(),
-        containerColor = AetherBackground,
-        topBar = {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(AetherBackground)
-                    .statusBarsPadding()
-                    .padding(horizontal = 12.dp, vertical = 10.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                IconButton(onClick = onBack) {
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
-                        contentDescription = "Back",
-                        tint = AetherOnSurface,
-                    )
-                }
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = page.title,
-                        style = MaterialTheme.typography.titleLarge,
-                        color = AetherOnSurface,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    if (page.subtitle.isNotBlank()) {
-                        Text(
-                            text = page.subtitle,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = AetherOnSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                }
-            }
-        },
-    ) { innerPadding ->
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-                .padding(horizontal = 20.dp, vertical = 12.dp)
-        ) {
-            AetherExtensionView(
-                value = page.tree,
-                extensionId = page.extensionId,
-                modifier = Modifier.fillMaxWidth(),
-            )
-        }
-    }
-}
-
-@Composable
-fun AetherExtensionPageLauncher(
-    page: AetherAppExtensionPage,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(18.dp))
-            .background(AetherSurfaceHigh)
-            .clickable(onClick = onClick)
-            .padding(horizontal = 14.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Box(
-            modifier = Modifier
-                .size(34.dp)
-                .clip(CircleShape)
-                .background(AetherSurfaceHigher),
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(
-                imageVector = extensionIcon(page.icon),
-                contentDescription = null,
-                tint = AetherOnSurface,
-                modifier = Modifier.size(18.dp),
-            )
-        }
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = page.title,
-                style = MaterialTheme.typography.bodyLarge,
-                color = AetherOnSurface,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            if (page.subtitle.isNotBlank()) {
-                Text(
-                    text = page.subtitle,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = AetherOnSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
                 )
             }
         }
@@ -691,7 +586,7 @@ private fun AetherExtensionNode(
             }
         }
 
-        "input" -> {
+        "input", "select", "slider" -> {
             val externalValue = node.optString("value")
             var value by remember(node.optString("id"), externalValue) {
                 mutableStateOf(externalValue)
@@ -769,35 +664,6 @@ private fun AetherExtensionNode(
             extensionId = extensionId,
             modifier = resolvedModifier,
         )
-
-        "pagebutton" -> {
-            val pageId = node.optString("page")
-            Button(
-                onClick = {
-                    controller.onOpenPage(
-                        if (pageId.contains(':')) pageId else "$extensionId:$pageId"
-                    )
-                },
-                modifier = resolvedModifier,
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = AetherSurfaceHigher,
-                    contentColor = AetherOnSurface,
-                ),
-                shape = RoundedCornerShape(18.dp),
-            ) {
-                Icon(
-                    imageVector = extensionIcon(node.optString("icon")),
-                    contentDescription = null,
-                    modifier = Modifier.size(18.dp),
-                )
-                Spacer(Modifier.width(8.dp))
-                Text(
-                    text = node.optString("label"),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-        }
 
         else -> Column(
             modifier = clickableModifier,
@@ -1006,12 +872,17 @@ private fun parseHexColor(value: String): Color? {
     }.getOrNull()
 }
 
-private fun extensionIcon(name: String): ImageVector = when (name.lowercase()) {
-    "add", "plus" -> Icons.Rounded.Add
+internal fun extensionIcon(name: String): ImageVector = when (name.lowercase()) {
+    "add", "plus", "new" -> Icons.Rounded.Add
     "auto", "sparkles", "magic" -> Icons.Rounded.AutoAwesome
+    "check", "done", "save" -> Icons.Rounded.Check
+    "close", "cancel", "clear" -> Icons.Rounded.Close
     "code" -> Icons.Rounded.Code
+    "delete", "remove", "trash" -> Icons.Rounded.Delete
+    "edit", "modify", "pencil" -> Icons.Rounded.Edit
     "home" -> Icons.Rounded.Home
     "info" -> Icons.Rounded.Info
+    "link", "url" -> Icons.Rounded.Link
     "play", "run" -> Icons.Rounded.PlayArrow
     "refresh", "reload" -> Icons.Rounded.Refresh
     "settings" -> Icons.Rounded.Settings

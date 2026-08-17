@@ -2,6 +2,7 @@ package com.zhousl.aether.data
 
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
@@ -15,9 +16,17 @@ import okio.Path.Companion.toPath
 
 @Serializable
 data class SharedThinkingCatalogCache(
+    val source: String = "",
     val levelsByProviderModel: Map<String, List<String>> = emptyMap(),
     val clampsByProviderModel: Map<String, Map<String, String>> = emptyMap(),
 )
+
+@Serializable
+data class SharedModelCatalogCache(
+    val models: Map<String, SharedModelCatalogInfo> = emptyMap(),
+)
+
+const val ModelsDevThinkingCatalogSource = "models.dev"
 
 data class SharedPersistedSettings(
     val providerConfigs: List<LlmProviderConfig> = emptyList(),
@@ -25,6 +34,8 @@ data class SharedPersistedSettings(
     val onboardingCompletedVersion: Int = 0,
     val appSettings: AppSettings = AppSettings(),
     val thinkingCatalogCache: SharedThinkingCatalogCache = SharedThinkingCatalogCache(),
+    val modelCatalogCache: SharedModelCatalogCache = SharedModelCatalogCache(),
+    val uiState: SharedPersistedUiState = SharedPersistedUiState(),
 ) {
     val activeProviderConfig: LlmProviderConfig?
         get() = providerConfigs.firstOrNull { it.id == activeProviderConfigId && it.isEnabled }
@@ -32,37 +43,55 @@ data class SharedPersistedSettings(
             ?: providerConfigs.firstOrNull()
 }
 
+data class SharedPersistedUiState(
+    val route: String = "",
+    val settingsDestination: String = "",
+)
+
 class AetherSettingsStore(
     private val dataStore: DataStore<Preferences>,
 ) {
     suspend fun load(): SharedPersistedSettings {
         val preferences = dataStore.data.first()
         val defaults = AppSettings()
+        // The first launch follows the platform language once, then keeps the
+        // persisted choice stable even if the system language changes later.
+        val storedLanguage = preferences[Language]
+        val initialLanguage = AppLanguage.fromStorage(
+            storedLanguage ?: preferences[AppSettingsJson]
+                ?.let { parseAppSettings(it, defaults).language.storageValue },
+        )
+        if (storedLanguage != initialLanguage.storageValue) {
+            dataStore.edit { it[Language] = initialLanguage.storageValue }
+        }
         val legacySettings = defaults.copy(
-            language = AppLanguage.fromStorage(preferences[Language]),
+            language = initialLanguage,
             themeMode = AppThemeMode.fromStorage(preferences[ThemeMode]),
             accent = AppAccent.fromStorage(preferences[Accent]),
             systemPrompt = preferences[SystemPrompt] ?: defaults.systemPrompt,
             reasoningEffort = normalizeReasoningEffort(preferences[ReasoningEffort]),
-            tavilyApiKey = preferences[TavilyApiKey].orEmpty(),
-            tavilyBaseUrl = normalizeTavilyBaseUrl(
-                preferences[TavilyBaseUrl] ?: defaults.tavilyBaseUrl,
-            ),
-            searchBackend = SearchBackend.fromStorage(preferences[SearchBackendKey]),
-            searxngBaseUrl = preferences[SearXngBaseUrlKey].orEmpty(),
-            searxngApiKey = preferences[SearXngApiKeyKey].orEmpty(),
             onboardingCompletedVersion = preferences[OnboardingCompletedVersion] ?: 0,
         )
         val fullSettings = parseAppSettings(preferences[AppSettingsJson].orEmpty(), legacySettings)
+        val privacyPolicyAccepted = preferences[PrivacyPolicyAccepted]
+            ?: fullSettings.privacyPolicyAccepted
         return SharedPersistedSettings(
             providerConfigs = parseProviderConfigs(preferences[ProviderConfigs].orEmpty()),
             activeProviderConfigId = preferences[ActiveProviderConfigId].orEmpty(),
             onboardingCompletedVersion = preferences[OnboardingCompletedVersion] ?: 0,
             appSettings = fullSettings.copy(
                 onboardingCompletedVersion = preferences[OnboardingCompletedVersion] ?: 0,
+                privacyPolicyAccepted = privacyPolicyAccepted,
             ),
             thinkingCatalogCache = parseSharedThinkingCatalogCache(
                 preferences[ThinkingCatalogCacheJson].orEmpty(),
+            ),
+            modelCatalogCache = parseSharedModelCatalogCache(
+                preferences[ModelCatalogCacheJson].orEmpty(),
+            ),
+            uiState = SharedPersistedUiState(
+                route = preferences[LastRoute].orEmpty(),
+                settingsDestination = preferences[SettingsDestination].orEmpty(),
             ),
         )
     }
@@ -112,23 +141,48 @@ class AetherSettingsStore(
 
     suspend fun saveGeneralSettings(settings: AppSettings) {
         dataStore.edit { preferences ->
-            preferences[AppSettingsJson] = serializeAppSettings(settings)
+            val accepted = privacyPolicyAccepted(
+                persisted = preferences[PrivacyPolicyAccepted]
+                    ?: parseAppSettings(preferences[AppSettingsJson].orEmpty()).privacyPolicyAccepted,
+                requested = settings.privacyPolicyAccepted,
+            )
+            val persistedSettings = settings.copy(privacyPolicyAccepted = accepted)
+            preferences[AppSettingsJson] = serializeAppSettings(persistedSettings)
+            preferences[PrivacyPolicyAccepted] = accepted
             preferences[Language] = settings.language.storageValue
             preferences[ThemeMode] = settings.themeMode.storageValue
             preferences[Accent] = settings.accent.storageValue
             preferences[SystemPrompt] = settings.systemPrompt
             preferences[ReasoningEffort] = normalizeReasoningEffort(settings.reasoningEffort)
-            preferences[TavilyApiKey] = settings.tavilyApiKey
-            preferences[TavilyBaseUrl] = normalizeTavilyBaseUrl(settings.tavilyBaseUrl)
-            preferences[SearchBackendKey] = settings.searchBackend.storageValue
-            preferences[SearXngBaseUrlKey] = normalizeSearXngBaseUrl(settings.searxngBaseUrl)
-            preferences[SearXngApiKeyKey] = settings.searxngApiKey
         }
     }
 
     suspend fun saveThinkingCatalogCache(cache: SharedThinkingCatalogCache) {
         dataStore.edit { preferences ->
-            preferences[ThinkingCatalogCacheJson] = serializeSharedThinkingCatalogCache(cache)
+            val current = parseSharedThinkingCatalogCache(preferences[ThinkingCatalogCacheJson].orEmpty())
+            val merged = SharedThinkingCatalogCache(
+                source = cache.source.ifBlank { current.source },
+                levelsByProviderModel = current.levelsByProviderModel + cache.levelsByProviderModel,
+                clampsByProviderModel = current.clampsByProviderModel + cache.clampsByProviderModel,
+            )
+            preferences[ThinkingCatalogCacheJson] = serializeSharedThinkingCatalogCache(merged)
+        }
+    }
+
+    suspend fun saveModelCatalogCache(cache: SharedModelCatalogCache) {
+        dataStore.edit { preferences ->
+            val merged = parseSharedModelCatalogCache(preferences[ModelCatalogCacheJson].orEmpty())
+                .models + cache.models
+            preferences[ModelCatalogCacheJson] = SharedSettingsJson.encodeToString(
+                SharedModelCatalogCache(merged)
+            )
+        }
+    }
+
+    suspend fun saveUiState(route: String, settingsDestination: String) {
+        dataStore.edit { preferences ->
+            preferences[LastRoute] = route
+            preferences[SettingsDestination] = settingsDestination
         }
     }
 
@@ -159,27 +213,27 @@ class AetherSettingsStore(
             val current = parseAppSettings(preferences[AppSettingsJson].orEmpty())
             val updated = current.copy(privacyPolicyAccepted = true)
             preferences[AppSettingsJson] = serializeAppSettings(updated)
+            preferences[PrivacyPolicyAccepted] = true
         }
     }
 
     suspend fun replaceAll(persisted: SharedPersistedSettings) {
         dataStore.edit { preferences ->
+            val accepted = privacyPolicyAccepted(
+                persisted = preferences[PrivacyPolicyAccepted] ?: false,
+                requested = persisted.appSettings.privacyPolicyAccepted,
+            )
+            val persistedSettings = persisted.appSettings.copy(privacyPolicyAccepted = accepted)
             preferences[ProviderConfigs] = serializeProviderConfigs(persisted.providerConfigs)
             preferences[ActiveProviderConfigId] = persisted.activeProviderConfigId
             preferences[OnboardingCompletedVersion] = persisted.onboardingCompletedVersion
-            preferences[AppSettingsJson] = serializeAppSettings(persisted.appSettings)
+            preferences[AppSettingsJson] = serializeAppSettings(persistedSettings)
+            preferences[PrivacyPolicyAccepted] = accepted
             preferences[Language] = persisted.appSettings.language.storageValue
             preferences[ThemeMode] = persisted.appSettings.themeMode.storageValue
             preferences[Accent] = persisted.appSettings.accent.storageValue
             preferences[SystemPrompt] = persisted.appSettings.systemPrompt
             preferences[ReasoningEffort] = normalizeReasoningEffort(persisted.appSettings.reasoningEffort)
-            preferences[TavilyApiKey] = persisted.appSettings.tavilyApiKey
-            preferences[TavilyBaseUrl] = normalizeTavilyBaseUrl(persisted.appSettings.tavilyBaseUrl)
-            preferences[SearchBackendKey] = persisted.appSettings.searchBackend.storageValue
-            preferences[SearXngBaseUrlKey] = normalizeSearXngBaseUrl(
-                persisted.appSettings.searxngBaseUrl,
-            )
-            preferences[SearXngApiKeyKey] = persisted.appSettings.searxngApiKey
         }
     }
 
@@ -192,20 +246,29 @@ class AetherSettingsStore(
         val Accent = stringPreferencesKey("accent")
         val SystemPrompt = stringPreferencesKey("system_prompt")
         val ReasoningEffort = stringPreferencesKey("reasoning_effort")
-        val TavilyApiKey = stringPreferencesKey("tavily_api_key")
-        val TavilyBaseUrl = stringPreferencesKey("tavily_base_url")
-        val SearchBackendKey = stringPreferencesKey("search_backend")
-        val SearXngBaseUrlKey = stringPreferencesKey("searxng_base_url")
-        val SearXngApiKeyKey = stringPreferencesKey("searxng_api_key")
         val AppSettingsJson = stringPreferencesKey("app_settings_json")
+        val PrivacyPolicyAccepted = booleanPreferencesKey("privacy_policy_accepted")
         val ThinkingCatalogCacheJson = stringPreferencesKey("thinking_catalog_cache_json")
+        val ModelCatalogCacheJson = stringPreferencesKey("model_catalog_cache_json")
+        val LastRoute = stringPreferencesKey("last_route")
+        val SettingsDestination = stringPreferencesKey("settings_destination")
     }
 }
+
+internal fun privacyPolicyAccepted(persisted: Boolean, requested: Boolean): Boolean =
+    persisted || requested
 
 private val SharedThinkingCatalogCacheJson = Json {
     ignoreUnknownKeys = true
     encodeDefaults = true
 }
+
+private val SharedSettingsJson = Json { ignoreUnknownKeys = true; encodeDefaults = true }
+
+internal fun parseSharedModelCatalogCache(value: String): SharedModelCatalogCache =
+    value.takeIf(String::isNotBlank)
+        ?.let { runCatching { SharedSettingsJson.decodeFromString<SharedModelCatalogCache>(it) }.getOrNull() }
+        ?: SharedModelCatalogCache()
 
 internal fun parseSharedThinkingCatalogCache(value: String): SharedThinkingCatalogCache =
     value.takeIf(String::isNotBlank)

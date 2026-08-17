@@ -9,6 +9,8 @@ import com.zhousl.aether.data.LocalRuntimeId
 import com.zhousl.aether.data.normalizeAlpineEnvironmentVariables
 import java.io.File
 import java.io.InputStream
+import java.net.HttpURLConnection
+import java.net.URL
 import java.util.zip.GZIPInputStream
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
@@ -19,6 +21,7 @@ import java.nio.file.LinkOption
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 
@@ -28,10 +31,54 @@ private const val AlpineMaxTailBytes = 64 * 1024
 private const val AlpineNetworkRateWindowMillis = 5_000L
 private const val AlpineAssetRoot = "runtimes/alpine/arm64-v8a"
 private const val AlpineHostLinker = "/system/bin/linker64"
+private const val AlpineNetworkTraceUrl = "https://www.cloudflare.com/cdn-cgi/trace"
+private const val AlpineNetworkDetectionTimeoutMillis = 4_000
+private const val AlpineOfficialRepository = "https://dl-cdn.alpinelinux.org/alpine"
+private const val AlpineChinaRepository = "https://mirrors.tuna.tsinghua.edu.cn/alpine"
 private val AlpineRootfsAssetCandidates = listOf(
     RootfsAsset("$AlpineAssetRoot/rootfs.tar.gz", compressed = true),
     RootfsAsset("$AlpineAssetRoot/rootfs.tar", compressed = false),
 )
+
+internal enum class ApkNetworkEnvironment {
+    China,
+    International,
+    Unknown,
+}
+
+internal fun parseCloudflareCountryCode(trace: String): String? =
+    trace.lineSequence()
+        .firstOrNull { it.startsWith("loc=", ignoreCase = true) }
+        ?.substringAfter('=')
+        ?.trim()
+        ?.takeIf { it.length == 2 }
+        ?.uppercase()
+
+internal fun apkRepositories(
+    original: String,
+    environment: ApkNetworkEnvironment,
+): String =
+    original.lines().flatMap { line ->
+        val official = line
+            .replace(Regex("https?://dl-cdn\\.alpinelinux\\.org/alpine"), AlpineOfficialRepository)
+            .replace(Regex("https?://mirrors\\.tuna\\.tsinghua\\.edu\\.cn/alpine"), AlpineOfficialRepository)
+        if (official == line &&
+            "dl-cdn.alpinelinux.org/alpine" !in line &&
+            "mirrors.tuna.tsinghua.edu.cn/alpine" !in line
+        ) {
+            listOf(line)
+        } else {
+            val china = official.replace(AlpineOfficialRepository, AlpineChinaRepository)
+            when (environment) {
+                ApkNetworkEnvironment.China -> listOf(china, official)
+                ApkNetworkEnvironment.International -> listOf(official)
+                ApkNetworkEnvironment.Unknown -> listOf(official, china)
+            }
+        }
+    }.distinct().joinToString("\n")
+
+internal fun chinaApkRepositories(original: String): String =
+    apkRepositories(original, ApkNetworkEnvironment.China)
 
 class AlpineRuntime(
     context: Context,
@@ -51,6 +98,10 @@ class AlpineRuntime(
     private val libTallocFile = File(hostLibDir, "libtalloc.so.2")
     private val runs = ConcurrentHashMap<String, AlpineRun>()
     private val nextRunId = AtomicInteger(1)
+    private val packageInstallMutex = Mutex()
+    private val apkRepositoryMutex = Mutex()
+    @Volatile
+    private var startupNetworkEnvironment: ApkNetworkEnvironment? = null
     @Volatile
     private var environmentVariables: List<AlpineEnvironmentVariable> = emptyList()
 
@@ -105,6 +156,7 @@ class AlpineRuntime(
                 state.issue != LocalRuntimeIssue.Failed &&
                 state.issue != LocalRuntimeIssue.MissingAssets
             ) {
+                if (state.isReady) refreshApkRepositoriesForCurrentNetwork(onProgress)
                 return@withContext state
             }
         }
@@ -203,6 +255,58 @@ class AlpineRuntime(
         guestPathToHostFile(normalizePath(guestPath))
     }
 
+    override suspend fun replaceHostDirectories(
+        guestRootPath: String,
+        signature: String,
+        directories: Map<String, File>,
+    ): Boolean = withContext(Dispatchers.IO) {
+        requireReady()
+        val targetRoot = guestPathToHostFile(normalizePath(guestRootPath))
+        val signatureFileName = ".aether-mirror-signature"
+        val currentSignature = File(targetRoot, signatureFileName)
+            .takeIf(File::isFile)
+            ?.readText()
+        if (currentSignature == signature) return@withContext true
+
+        val parent = targetRoot.parentFile
+            ?: error("Unable to resolve Alpine mirror parent: $guestRootPath")
+        require(parent.mkdirs() || parent.isDirectory) {
+            "Unable to create Alpine mirror parent: $guestRootPath"
+        }
+        val staging = File(parent, ".${targetRoot.name}.staging-${UUID.randomUUID()}")
+        val backup = File(parent, ".${targetRoot.name}.backup-${UUID.randomUUID()}")
+        try {
+            require(staging.mkdirs()) { "Unable to create Alpine mirror staging directory." }
+            directories.toSortedMap().forEach { (name, source) ->
+                require(name.matches(Regex("[A-Za-z0-9._-]+"))) {
+                    "Invalid Alpine mirror directory name: $name"
+                }
+                val canonicalSource = source.canonicalFile
+                require(canonicalSource.isDirectory) {
+                    "Alpine mirror source is unavailable: ${source.path}"
+                }
+                copyDirectoryWithoutSymbolicLinks(canonicalSource, File(staging, name))
+            }
+            File(staging, signatureFileName).writeText(signature)
+
+            if (targetRoot.exists()) {
+                require(targetRoot.renameTo(backup)) {
+                    "Unable to stage the existing Alpine mirror directory."
+                }
+            }
+            if (!staging.renameTo(targetRoot)) {
+                if (backup.exists()) backup.renameTo(targetRoot)
+                error("Unable to activate the Alpine mirror directory.")
+            }
+            backup.deleteRecursively()
+            true
+        } finally {
+            staging.deleteRecursively()
+            if (backup.exists() && !targetRoot.exists()) backup.renameTo(targetRoot)
+            if (targetRoot.exists()) backup.deleteRecursively()
+        }
+    }
+
     internal fun resolveManagedGuestPath(guestPath: String): File =
         guestPathToHostFile(normalizePath(guestPath))
 
@@ -231,14 +335,35 @@ class AlpineRuntime(
         profileId: String,
         onProgress: (AlpineSetupProgress) -> Unit = {},
     ): LocalRuntimeSetupState {
-        val packages = AlpinePackageProfiles[profileId]
-            ?: return LocalRuntimeSetupState(
+        packageInstallMutex.lock()
+        return try {
+            installPackageProfileLocked(profileId, onProgress)
+        } finally {
+            packageInstallMutex.unlock()
+        }
+    }
+
+    private suspend fun installPackageProfileLocked(
+        profileId: String,
+        onProgress: (AlpineSetupProgress) -> Unit,
+    ): LocalRuntimeSetupState {
+        if (profileId !in AlpinePackageProfiles) {
+            return LocalRuntimeSetupState(
                 runtimeId = id,
                 issue = LocalRuntimeIssue.Failed,
                 detail = "Unknown Alpine package profile: $profileId",
             )
+        }
         val setup = inspectSetup()
         if (!setup.isReady) return setup
+        refreshApkRepositoriesForCurrentNetwork(onProgress)
+        if (verifyPackageProfile(profileId)) {
+            return LocalRuntimeSetupState(
+                runtimeId = id,
+                issue = LocalRuntimeIssue.Ready,
+                detail = "Alpine profile $profileId is already installed.",
+            )
+        }
         val command = packageProfileInstallCommand(profileId)
             ?: return LocalRuntimeSetupState(
                 runtimeId = id,
@@ -622,7 +747,7 @@ class AlpineRuntime(
             appContext.assets.open(path).use { true }
         }.getOrDefault(false)
 
-    private fun installFromAssets(
+    private suspend fun installFromAssets(
         onProgress: (AlpineSetupProgress) -> Unit,
     ) {
         onProgress(AlpineSetupProgress(output = "Preparing Alpine runtime files...\n"))
@@ -665,7 +790,69 @@ class AlpineRuntime(
         }
         ensureWorkspace()
         ensureGuestNetworkConfig()
+        refreshApkRepositoriesForCurrentNetwork(onProgress)
         onProgress(AlpineSetupProgress(output = "Alpine runtime files are ready.\n"))
+    }
+
+    suspend fun refreshApkRepositoriesForCurrentNetwork(
+        onProgress: (AlpineSetupProgress) -> Unit = {},
+    ) = withContext(Dispatchers.IO) {
+        apkRepositoryMutex.lock()
+        try {
+            val environment = startupNetworkEnvironment ?: detectNetworkEnvironment().also {
+                startupNetworkEnvironment = it
+            }
+            configureApkRepositories(environment, onProgress)
+        } finally {
+            apkRepositoryMutex.unlock()
+        }
+    }
+
+    private fun detectNetworkEnvironment(): ApkNetworkEnvironment {
+        val countryCode = runCatching {
+            val connection = URL(AlpineNetworkTraceUrl).openConnection() as HttpURLConnection
+            try {
+                connection.requestMethod = "GET"
+                connection.connectTimeout = AlpineNetworkDetectionTimeoutMillis
+                connection.readTimeout = AlpineNetworkDetectionTimeoutMillis
+                connection.setRequestProperty("Accept", "text/plain")
+                connection.setRequestProperty("User-Agent", "Aether-Alpine-Network-Check")
+                if (connection.responseCode !in 200..299) return@runCatching null
+                connection.inputStream.bufferedReader().use { parseCloudflareCountryCode(it.readText()) }
+            } finally {
+                connection.disconnect()
+            }
+        }.getOrNull()
+        return when {
+            countryCode == null -> ApkNetworkEnvironment.Unknown
+            countryCode.equals("CN", ignoreCase = true) -> ApkNetworkEnvironment.China
+            else -> ApkNetworkEnvironment.International
+        }
+    }
+
+    private fun configureApkRepositories(
+        environment: ApkNetworkEnvironment,
+        onProgress: (AlpineSetupProgress) -> Unit,
+    ) {
+        val repositories = File(rootfsDir, "etc/apk/repositories")
+        if (!repositories.isFile) return
+        val original = runCatching { repositories.readText() }.getOrNull() ?: return
+        val updated = apkRepositories(original, environment)
+        if (updated != original) {
+            runCatching { repositories.writeText(updated) }.getOrNull() ?: return
+            onProgress(
+                AlpineSetupProgress(
+                    output = when (environment) {
+                        ApkNetworkEnvironment.China ->
+                            "Using the Tsinghua Alpine mirror with the official CDN as fallback.\n"
+                        ApkNetworkEnvironment.International ->
+                            "Using the official Alpine CDN for the current network.\n"
+                        ApkNetworkEnvironment.Unknown ->
+                            "Network region detection failed; using official and China Alpine sources.\n"
+                    },
+                )
+            )
+        }
     }
 
     private fun copyAsset(
@@ -847,6 +1034,24 @@ class AlpineRuntime(
         }
     }
 
+    private fun copyDirectoryWithoutSymbolicLinks(
+        source: File,
+        target: File,
+    ) {
+        if (Files.isSymbolicLink(source.toPath())) return
+        if (source.isDirectory) {
+            require(target.mkdirs() || target.isDirectory) {
+                "Unable to create Alpine mirror directory: ${target.path}"
+            }
+            source.listFiles().orEmpty().forEach { child ->
+                copyDirectoryWithoutSymbolicLinks(child, File(target, child.name))
+            }
+        } else if (source.isFile) {
+            target.parentFile?.mkdirs()
+            source.copyTo(target, overwrite = true)
+        }
+    }
+
     private fun isSupportedAbi(): Boolean =
         Build.SUPPORTED_ABIS.any { it == "arm64-v8a" }
 
@@ -906,7 +1111,7 @@ class AlpineRuntime(
         val command = when (profileId) {
             "python" -> "python3 --version && pip3 --version && virtualenv --version"
             "node" -> "node --version && npm --version"
-            "git_search" -> "git --version && rg --version"
+            "git_search" -> "git --version && rg --version && fd --version"
             "ssh" -> "ssh -V"
             "chrome" ->
                 "(chromium-browser --version || chromium --version) && " +
@@ -1052,7 +1257,7 @@ class AlpineRuntime(
         val AlpinePackageProfiles: Map<String, List<String>> = mapOf(
             "python" to listOf("python3", "py3-pip", "py3-virtualenv"),
             "node" to listOf("nodejs", "npm"),
-            "git_search" to listOf("git", "ripgrep"),
+            "git_search" to listOf("git", "ripgrep", "fd"),
             "ssh" to listOf("openssh-client"),
             "chrome" to listOf(
                 "chromium",

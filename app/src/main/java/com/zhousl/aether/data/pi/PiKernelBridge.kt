@@ -33,9 +33,9 @@ private const val PiBridgeGuestPath = "/root/.aether/pi-bridge/bridge.mjs"
 private const val PiBridgeWorkingDirectory = "/root/.aether/pi-bridge"
 private const val PiBridgeNodeMinVersion = "22.19.0"
 private const val PiBridgeVersion = "2.0.0-alpha.0"
-private const val PiAiVersion = "0.83.0"
-private const val PiAgentCoreVersion = "0.83.0"
-private const val PiCodingAgentVersion = "0.83.0"
+private const val PiAiVersion = "0.84.1"
+private const val PiAgentCoreVersion = "0.84.1"
+private const val PiCodingAgentVersion = "0.84.1"
 private const val PiBridgeRequestTimeoutMillis = 10 * 60 * 1000L
 private const val PiBridgeOAuthTimeoutMillis = 15 * 60 * 1000L
 private const val PiBridgePingTimeoutMillis = 15_000L
@@ -172,13 +172,83 @@ class PiKernelBridge(
             onEvent = onEvent,
         )
 
-    suspend fun closeSession(sessionId: String): JSONObject =
+    suspend fun getSessionState(sessionId: String): JSONObject =
         request(
-            type = "close_session",
+            type = "get_session_state",
             payload = JSONObject().put("session_id", sessionId),
             timeoutMillis = PiBridgePingTimeoutMillis,
             abortOnCancellation = false,
-            startIfNeeded = false,
+        )
+
+    suspend fun compactSession(
+        sessionId: String,
+        customInstructions: String = "",
+        sessionPayload: JSONObject = JSONObject(),
+    ): JSONObject = request(
+        type = "compact_session",
+        payload = JSONObject(sessionPayload.toString()).apply {
+            put("session_id", sessionId)
+            if (customInstructions.isNotBlank()) put("custom_instructions", customInstructions)
+        },
+        timeoutMillis = null,
+        abortOnCancellation = false,
+    )
+
+    suspend fun navigateSession(
+        sessionId: String,
+        entryId: String,
+        reset: Boolean = false,
+        summarize: Boolean = false,
+        customInstructions: String = "",
+        sessionPayload: JSONObject = JSONObject(),
+    ): JSONObject = request(
+        type = "navigate_session",
+        payload = JSONObject(sessionPayload.toString()).apply {
+            put("session_id", sessionId)
+            put("entry_id", entryId)
+            put("reset", reset)
+            put("summarize", summarize)
+            if (customInstructions.isNotBlank()) put("custom_instructions", customInstructions)
+        },
+        timeoutMillis = null,
+        abortOnCancellation = false,
+    )
+
+    suspend fun reloadSession(sessionId: String): JSONObject = request(
+        type = "reload_session",
+        payload = JSONObject().put("session_id", sessionId),
+        timeoutMillis = PiBridgePingTimeoutMillis,
+        abortOnCancellation = false,
+    )
+
+    suspend fun exportSessionJsonl(sessionId: String): JSONObject = request(
+        type = "export_session_jsonl",
+        payload = JSONObject().put("session_id", sessionId),
+        timeoutMillis = PiBridgePingTimeoutMillis,
+        abortOnCancellation = false,
+    )
+
+    suspend fun importSessionJsonl(sessionId: String, jsonl: String): JSONObject = request(
+        type = "import_session_jsonl",
+        payload = JSONObject().put("session_id", sessionId).put("jsonl", jsonl),
+        timeoutMillis = PiBridgePingTimeoutMillis,
+        abortOnCancellation = false,
+    )
+
+    suspend fun closeSession(
+        sessionId: String,
+        sessionFile: String = "",
+        deleteFile: Boolean = false,
+    ): JSONObject =
+        request(
+            type = "close_session",
+            payload = JSONObject()
+                .put("session_id", sessionId)
+                .put("session_file", sessionFile)
+                .put("delete_file", deleteFile),
+            timeoutMillis = PiBridgePingTimeoutMillis,
+            abortOnCancellation = false,
+            startIfNeeded = deleteFile,
         )
 
     suspend fun listExtensions(sessionId: String): JSONObject =
@@ -218,6 +288,17 @@ class PiKernelBridge(
             timeoutMillis = PiBridgeRequestTimeoutMillis,
             abortOnCancellation = false,
         )
+
+    suspend fun listDiscoveredSkills(
+        workspaceDirectory: String = alpineRuntime.workspaceRoot,
+    ): JSONObject = request(
+        type = "list_discovered_skills",
+        payload = JSONObject()
+            .put("workspace_directory", workspaceDirectory)
+            .put("workspace_trusted", true),
+        timeoutMillis = PiBridgeRequestTimeoutMillis,
+        abortOnCancellation = false,
+    )
 
     suspend fun installExtensionPackage(
         source: String,
@@ -376,6 +457,33 @@ class PiKernelBridge(
         )
     }
 
+    suspend fun sendRuntimeOperationChunk(payload: JSONObject) {
+        request(
+            type = "runtime_op_chunk",
+            payload = payload,
+            timeoutMillis = PiBridgePingTimeoutMillis,
+            abortOnCancellation = false,
+        )
+    }
+
+    suspend fun sendRuntimeOperationResult(payload: JSONObject) {
+        request(
+            type = "runtime_op_result",
+            payload = payload,
+            timeoutMillis = PiBridgePingTimeoutMillis,
+            abortOnCancellation = false,
+        )
+    }
+
+    suspend fun sendRuntimeOperationCancel(payload: JSONObject) {
+        request(
+            type = "runtime_op_cancel",
+            payload = payload,
+            timeoutMillis = PiBridgePingTimeoutMillis,
+            abortOnCancellation = false,
+        )
+    }
+
     suspend fun stop() = withContext(Dispatchers.IO) {
         mutex.withLock {
             eventScope.coroutineContext.cancelChildren()
@@ -403,6 +511,15 @@ class PiKernelBridge(
         startIfNeeded: Boolean = true,
     ): JSONObject = withContext(Dispatchers.IO) {
         val id = nextRequestId(type)
+        diagnosticLogger.event(
+            category = "pi_bridge",
+            event = "request_queued",
+            requestId = id,
+            details = requestDiagnosticDetails(type, payload) + mapOf(
+                "timeout_millis" to timeoutMillis,
+                "start_if_needed" to startIfNeeded,
+            ),
+        )
         val response = CompletableDeferred<PiBridgeFrame>()
         val eventChannel = onEvent?.let { Channel<PiBridgeFrame>(Channel.UNLIMITED) }
         val eventJob = if (onEvent != null && eventChannel != null) {
@@ -443,7 +560,22 @@ class PiKernelBridge(
                 details = diagnosticDetails,
             )
             val requestProcess = if (startIfNeeded) {
-                ensureStartedLocked(onSetupProgress)
+                diagnosticLogger.event(
+                    category = "pi_bridge",
+                    event = "ensure_started_begin",
+                    requestId = id,
+                )
+                val process = ensureStartedLocked(onSetupProgress)
+                diagnosticLogger.event(
+                    category = "pi_bridge",
+                    event = "ensure_started_end",
+                    requestId = id,
+                    details = mapOf(
+                        "process_generation" to process.generation,
+                        "process_alive" to process.process.isAlive,
+                    ),
+                )
+                process
             } else {
                 currentLiveProcess() ?: return@withContext JSONObject().put("closed", false)
             }
@@ -455,15 +587,49 @@ class PiKernelBridge(
             )
             onSetupProgress(PiCoreSetupUpdate(PiCoreSetupPhase.VerifyingBridge))
             val request = PiBridgeRequest(id = id, type = type, payload = payload)
+            diagnosticLogger.event(
+                category = "pi_bridge",
+                event = "request_write_start",
+                requestId = id,
+                details = mapOf(
+                    "process_generation" to requestProcess.generation,
+                ),
+            )
             synchronized(requestProcess.writer) {
                 request.writeJsonLine(requestProcess.writer)
                 requestProcess.writer.flush()
             }
+            diagnosticLogger.event(
+                category = "pi_bridge",
+                event = "request_write_end",
+                requestId = id,
+            )
             val frame = if (timeoutMillis == null) {
+                diagnosticLogger.event(
+                    category = "pi_bridge",
+                    event = "request_await_start",
+                    requestId = id,
+                    details = mapOf("timeout" to "none"),
+                )
                 response.await()
             } else {
+                diagnosticLogger.event(
+                    category = "pi_bridge",
+                    event = "request_await_start",
+                    requestId = id,
+                    details = mapOf("timeout_millis" to timeoutMillis),
+                )
                 withTimeout(timeoutMillis) { response.await() }
             }
+            diagnosticLogger.event(
+                category = "pi_bridge",
+                event = "request_response_received",
+                requestId = id,
+                details = mapOf(
+                    "frame_type" to frame.type,
+                    "frame_ok" to frame.ok,
+                ),
+            )
             if (!frame.ok || frame.type == "error") {
                 val error = frame.error
                 throw PiBridgeException(
@@ -523,14 +689,36 @@ class PiKernelBridge(
         onSetupProgress: (PiCoreSetupUpdate) -> Unit = {},
     ): ActivePiBridgeProcess {
         mutex.withLock {
-            currentLiveProcess()?.let { return it }
+            diagnosticLogger.event(
+                category = "pi_bridge",
+                event = "ensure_started_locked_enter",
+                details = mapOf(
+                    "current_process_alive" to (currentLiveProcess() != null),
+                ),
+            )
+            currentLiveProcess()?.let {
+                diagnosticLogger.event(
+                    category = "pi_bridge",
+                    event = "ensure_started_locked_reuse",
+                    details = mapOf("process_generation" to it.generation),
+                )
+                return it
+            }
             val staleProcess = synchronized(processStateLock) {
                 activeProcess.also { activeProcess = null }
             }
             runCatching { staleProcess?.writer?.close() }
             runCatching { staleProcess?.process?.destroy() }
 
+            diagnosticLogger.event(
+                category = "pi_bridge",
+                event = "ensure_node_available_start",
+            )
             ensureNodeAvailable(onSetupProgress)
+            diagnosticLogger.event(
+                category = "pi_bridge",
+                event = "ensure_node_available_end",
+            )
             onSetupProgress(PiCoreSetupUpdate(PiCoreSetupPhase.PreparingBridge))
             alpineRuntime.installAsset(
                 assetPath = PiBridgeAssetPath,
@@ -538,9 +726,24 @@ class PiKernelBridge(
                 executable = false,
             )
             onSetupProgress(PiCoreSetupUpdate(PiCoreSetupPhase.StartingBridge))
+            diagnosticLogger.event(
+                category = "pi_bridge",
+                event = "start_managed_process_begin",
+                details = mapOf(
+                    "command" to "node ${shellQuote(PiBridgeGuestPath)}",
+                    "working_directory" to PiBridgeWorkingDirectory,
+                ),
+            )
             val started = alpineRuntime.startManagedProcess(
                 command = "node ${shellQuote(PiBridgeGuestPath)}",
                 workingDirectory = PiBridgeWorkingDirectory,
+            )
+            diagnosticLogger.event(
+                category = "pi_bridge",
+                event = "start_managed_process_end",
+                details = mapOf(
+                    "process_alive" to started.isAlive,
+                ),
             )
             val startedProcess = ActivePiBridgeProcess(
                 process = started,
@@ -580,6 +783,14 @@ class PiKernelBridge(
         onSetupProgress(PiCoreSetupUpdate(PiCoreSetupPhase.CheckingAlpine))
         // Require explicit Alpine initialize; never download/install here.
         val setup = alpineRuntime.inspectSetup()
+        diagnosticLogger.event(
+            category = "pi_bridge",
+            event = "alpine_setup_inspected",
+            details = mapOf(
+                "is_ready" to setup.isReady,
+                "detail" to setup.detail,
+            ),
+        )
         if (!setup.isReady) {
             throw PiBridgeException(
                 setup.detail.ifBlank {
@@ -590,40 +801,72 @@ class PiKernelBridge(
         }
         onSetupProgress(PiCoreSetupUpdate(PiCoreSetupPhase.CheckingNode))
         val version = readNodeVersion()
-        if (version != null && compareSemver(version, PiBridgeNodeMinVersion) >= 0) return
-
-        onSetupProgress(PiCoreSetupUpdate(PiCoreSetupPhase.InstallingNode))
         diagnosticLogger.event(
             category = "pi_bridge",
-            event = "node_profile_install_start",
-            level = "warn",
+            event = "node_version_checked",
             details = mapOf(
-                "current_version" to version.orEmpty(),
-                "required_version" to PiBridgeNodeMinVersion,
+                "version" to version.orEmpty(),
+                "min_version" to PiBridgeNodeMinVersion,
             ),
         )
-        val installState = alpineRuntime.installPackageProfile("node") { progress ->
-            onSetupProgress(
-                PiCoreSetupUpdate(
-                    phase = PiCoreSetupPhase.InstallingNode,
-                    activity = PiCoreSetupActivity.Downloading,
-                    bytesPerSecond = progress.bytesPerSecond,
-                    output = progress.output,
+        if (version == null || compareSemver(version, PiBridgeNodeMinVersion) < 0) {
+            onSetupProgress(PiCoreSetupUpdate(PiCoreSetupPhase.InstallingNode))
+            diagnosticLogger.event(
+                category = "pi_bridge",
+                event = "node_profile_install_start",
+                level = "warn",
+                details = mapOf(
+                    "current_version" to version.orEmpty(),
+                    "required_version" to PiBridgeNodeMinVersion,
+                ),
+            )
+            val installState = alpineRuntime.installPackageProfile("node") { progress ->
+                onSetupProgress(
+                    PiCoreSetupUpdate(
+                        phase = PiCoreSetupPhase.InstallingNode,
+                        activity = PiCoreSetupActivity.Downloading,
+                        bytesPerSecond = progress.bytesPerSecond,
+                        output = progress.output,
+                    )
                 )
-            )
+            }
+            if (!installState.isReady) {
+                throw PiBridgeException(
+                    installState.detail.ifBlank { "Failed to install Node.js inside Alpine." },
+                    code = "node_install_failed",
+                )
+            }
+            val installedVersion = readNodeVersion()
+            if (installedVersion == null || compareSemver(installedVersion, PiBridgeNodeMinVersion) < 0) {
+                throw PiBridgeException(
+                    "Pi bridge requires Alpine node >= $PiBridgeNodeMinVersion, found ${installedVersion ?: "none"}.",
+                    code = "node_version_too_old",
+                )
+            }
         }
-        if (!installState.isReady) {
-            throw PiBridgeException(
-                installState.detail.ifBlank { "Failed to install Node.js inside Alpine." },
-                code = "node_install_failed",
+
+        if (!alpineRuntime.isPackageProfileInstalled("git_search")) {
+            diagnosticLogger.event(
+                category = "pi_bridge",
+                event = "git_search_install_start",
+                level = "warn",
             )
-        }
-        val installedVersion = readNodeVersion()
-        if (installedVersion == null || compareSemver(installedVersion, PiBridgeNodeMinVersion) < 0) {
-            throw PiBridgeException(
-                "Pi bridge requires Alpine node >= $PiBridgeNodeMinVersion, found ${installedVersion ?: "none"}.",
-                code = "node_version_too_old",
-            )
+            val installState = alpineRuntime.installPackageProfile("git_search") { progress ->
+                onSetupProgress(
+                    PiCoreSetupUpdate(
+                        phase = PiCoreSetupPhase.InstallingNode,
+                        activity = PiCoreSetupActivity.Downloading,
+                        bytesPerSecond = progress.bytesPerSecond,
+                        output = progress.output,
+                    )
+                )
+            }
+            if (!installState.isReady) {
+                throw PiBridgeException(
+                    installState.detail.ifBlank { "Failed to install Pi search tools inside Alpine." },
+                    code = "pi_search_tools_install_failed",
+                )
+            }
         }
     }
 
@@ -646,6 +889,11 @@ class PiKernelBridge(
     private fun startStdoutReader(startedProcess: ActivePiBridgeProcess) {
         Thread(
             {
+                diagnosticLogger.event(
+                    category = "pi_bridge",
+                    event = "stdout_reader_started",
+                    details = mapOf("process_generation" to startedProcess.generation),
+                )
                 val parser = PiJsonlParser(
                     onFrame = { frame ->
                         handleFrameFromReader(frame, startedProcess.generation)
@@ -676,6 +924,12 @@ class PiKernelBridge(
                         details = mapOf("process_generation" to startedProcess.generation),
                     )
                 }
+                diagnosticLogger.event(
+                    category = "pi_bridge",
+                    event = "stdout_reader_exiting",
+                    level = "warn",
+                    details = mapOf("process_generation" to startedProcess.generation),
+                )
                 eventScope.launch {
                     failPendingRequests(
                         exitedProcess = startedProcess,
@@ -722,11 +976,44 @@ class PiKernelBridge(
         frame: PiBridgeFrame,
         processGeneration: Long,
     ) {
+        diagnosticLogger.event(
+            category = "pi_bridge",
+            event = "frame_received",
+            requestId = frame.id,
+            details = mapOf(
+                "frame_type" to frame.type,
+                "frame_event" to frame.event,
+                "process_generation" to processGeneration,
+                "has_pending_request" to (pendingRequests[frame.id] != null),
+            ),
+        )
         val pending = pendingRequests[frame.id]
-        if (pending != null && pending.processGeneration != processGeneration) return
+        if (pending != null && pending.processGeneration != processGeneration) {
+            diagnosticLogger.event(
+                category = "pi_bridge",
+                event = "frame_generation_mismatch",
+                level = "warn",
+                requestId = frame.id,
+                details = mapOf(
+                    "frame_generation" to processGeneration,
+                    "request_generation" to pending.processGeneration,
+                ),
+            )
+            return
+        }
         when {
             pending != null && pending.eventChannel != null -> {
                 if (pending.eventChannel.trySend(frame).isFailure) {
+                    diagnosticLogger.event(
+                        category = "pi_bridge",
+                        event = "event_channel_send_failed",
+                        level = "warn",
+                        requestId = frame.id,
+                        details = mapOf(
+                            "frame_type" to frame.type,
+                            "frame_event" to frame.event,
+                        ),
+                    )
                     pending.response.completeExceptionally(
                         PiBridgeException("Pi bridge event queue was closed.", code = "event_queue_closed")
                     )
@@ -775,11 +1062,32 @@ class PiKernelBridge(
         exitedProcess: ActivePiBridgeProcess,
         message: String,
     ) {
+        diagnosticLogger.event(
+            category = "pi_bridge",
+            event = "fail_pending_requests_start",
+            level = "warn",
+            details = mapOf(
+                "message" to message,
+                "exited_process_generation" to exitedProcess.generation,
+                "pending_count" to pendingRequests.size,
+            ),
+        )
         mutex.withLock {
             val isCurrentProcess = synchronized(processStateLock) {
                 activeProcess?.process === exitedProcess.process
             }
-            if (!isCurrentProcess) return
+            if (!isCurrentProcess) {
+                diagnosticLogger.event(
+                    category = "pi_bridge",
+                    event = "fail_pending_requests_skip",
+                    level = "warn",
+                    details = mapOf(
+                        "reason" to "not_current_process",
+                        "exited_process_generation" to exitedProcess.generation,
+                    ),
+                )
+                return
+            }
             pendingRequests.forEach { (requestId, pending) ->
                 if (pending.processGeneration != exitedProcess.generation) return@forEach
                 if (!pendingRequests.remove(requestId, pending)) return@forEach

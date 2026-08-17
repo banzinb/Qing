@@ -1,4 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import { createInterface } from "node:readline";
 import { stdin as input, stdout as output, stderr } from "node:process";
 import {
@@ -6,10 +9,12 @@ import {
   clampThinkingLevel,
   createModels,
   createProvider,
+  hasApi,
   defaultProviderAuthContext,
   fauxAssistantMessage,
   fauxProvider,
   fauxToolCall,
+  InMemoryModelsStore,
   type AuthContext,
   type AuthInteraction,
   type AssistantMessage,
@@ -21,45 +26,59 @@ import {
   type ImageContent,
   type Message,
   type Model,
+  type Provider,
   type OAuthAuth,
   type MutableModels,
   type ProviderStreams,
   type SimpleStreamOptions,
   type TextContent,
   type Usage,
+  Type,
 } from "@earendil-works/pi-ai";
 import {
   builtinProviders,
   getBuiltinModels,
   getBuiltinProviders,
 } from "@earendil-works/pi-ai/providers/all";
+import { registerBunOAuthFlows } from "@earendil-works/pi-ai/bun-oauth";
 import {
-  AgentHarness,
-  InMemorySessionRepo,
   type AgentMessage,
-  type AgentHarnessEvent,
-  type AgentTool,
   type AgentToolResult,
 } from "@earendil-works/pi-agent-core/node";
 import {
-  createSyntheticSourceInfo,
-  type BuildSystemPromptOptions,
+  AgentSession,
+  DefaultResourceLoader,
+  ModelRuntime,
+  SessionManager,
+  SettingsManager,
+  createAgentSession,
+  createBashToolDefinition,
+  createLocalBashOperations,
+  createEditToolDefinition,
+  createFindToolDefinition,
+  createGrepToolDefinition,
+  createLsToolDefinition,
+  createReadToolDefinition,
+  createWriteToolDefinition,
+  type AgentSessionEvent,
+  type BashOperations,
+  type EditOperations,
   type ExtensionCommandContext,
-  type ExtensionEvent,
-  type RegisteredTool,
-  type ScopedModel,
-  type ToolInfo,
+  type ExtensionUIContext,
+  type ReadOperations,
+  type ToolDefinition,
+  type WriteOperations,
+  type ExtensionFactory,
 } from "@earendil-works/pi-coding-agent";
 import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
 import type { TSchema } from "typebox";
 import {
-  extensionTools,
+  discoverAetherExtensionPaths,
+  discoverPackageExtensionPaths,
   installAetherExtensionPackage,
   listAetherExtensionPackages,
-  loadAetherExtensions,
   removeAetherExtensionPackage,
   updateAetherExtensionPackage,
-  type AetherExtensionRuntime,
 } from "./extensions.js";
 import {
   aetherAppExtensionSnapshot,
@@ -68,16 +87,18 @@ import {
   invokeAetherAppExtensionAction,
   loadAetherAppExtensions,
 } from "./aether-extensions.js";
+import { bridgeDebug, bridgeDebugEnabled, elapsedMillis } from "./debug.js";
+
+registerBunOAuthFlows();
 
 const BRIDGE_VERSION = "2.0.0-alpha.0";
-const PI_AI_VERSION = "0.83.0";
-const PI_AGENT_CORE_VERSION = "0.83.0";
-const PI_CODING_AGENT_VERSION = "0.83.0";
-const AETHER_MANUAL_OAUTH_CALLBACK_HOST = "203.0.113.1";
+const PI_AI_VERSION = "0.84.1";
+const PI_AGENT_CORE_VERSION = "0.84.1";
+const PI_CODING_AGENT_VERSION = "0.84.1";
+const AETHER_LOOPBACK_OAUTH_CALLBACK_HOST = "127.0.0.1";
 const OAUTH_FETCH_MAX_ATTEMPTS = 3;
-const DEFAULT_HARNESS_SESSION_LIMIT = 8;
-const DEFAULT_HARNESS_SESSION_TTL_MS = 30 * 60 * 1000;
-const CUSTOM_BASE_URL_BUILTIN_PROVIDER_IDS = new Set(["openai", "anthropic"]);
+const DEFAULT_AGENT_RETRY_MAX_RETRIES = 5;
+const RUNTIME_OPERATION_CHUNK_BYTES = 64 * 1024;
 
 type JsonObject = Record<string, unknown>;
 
@@ -124,40 +145,48 @@ interface PendingHostToolRequest {
   onUpdate?: (partialResult: AgentToolResult<JsonObject>) => void;
 }
 
+interface PendingRuntimeOperation {
+  sessionId: string;
+  resolve: (result: JsonObject) => void;
+  reject: (error: Error) => void;
+  onChunk?: (chunk: Buffer) => void;
+}
+
 interface PendingAetherHostCall {
   resolve: (result: JsonObject) => void;
   reject: (error: Error) => void;
   timeout: NodeJS.Timeout;
 }
 
-type InMemorySession = Awaited<ReturnType<InMemorySessionRepo["create"]>>;
-
-interface HarnessSessionState {
+interface AgentSessionState {
   sessionId: string;
   configSignature: string;
   toolSignature: string;
+  extensionSignature: string;
+  skillSignature: string;
   workspaceDirectory: string;
-  models: MutableModels;
+  termuxWorkspaceDirectory: string;
+  runtime: "alpine" | "termux";
+  platform: "android" | "ios";
+  chromeEnabled: boolean;
+  modelRuntime: ModelRuntime;
   model: Model<string>;
   credentialStore?: BridgeCredentialStore;
-  session: InMemorySession;
-  harness: AgentHarness;
-  hostTools: AgentTool[];
-  extensionRuntime: AetherExtensionRuntime;
+  session: AgentSession;
+  resourceLoader: DefaultResourceLoader;
+  settingsManager: SettingsManager;
   configuredExtensionPaths: string[];
-  pendingExtensionRuntime?: AetherExtensionRuntime;
-  extensionUnsubscribers: Array<() => void>;
-  pendingToolRefresh: boolean;
-  pendingActiveToolNames?: string[];
-  currentSignal?: AbortSignal;
-  systemPrompt: string;
+  pendingReload: boolean;
   currentRequestId: string;
+  turnStartedAtMillis?: number;
+  firstAssistantEventAtMillis?: number;
   toolArgsById: Map<string, unknown>;
   lastAccessedAt: number;
 }
 
 const activeAborters = new Map<string, () => void | Promise<unknown>>();
 const pendingHostToolRequests = new Map<string, PendingHostToolRequest>();
+const pendingRuntimeOperations = new Map<string, PendingRuntimeOperation>();
 const pendingAetherHostCalls = new Map<string, PendingAetherHostCall>();
 const aetherSubscriberRequestIds = new Set<string>();
 const aetherOperationContext = new AsyncLocalStorage<string>();
@@ -170,7 +199,7 @@ const pendingAuthPrompts = new Map<
     requestId: string;
   }
 >();
-const harnessSessions = new Map<string, HarnessSessionState>();
+const agentSessions = new Map<string, AgentSessionState>();
 let currentExtensionLoadOptions = {
   disabledExtensionPaths: [] as string[],
   disabledPackageSources: [] as string[],
@@ -203,22 +232,9 @@ const builtinProviderById = new Map(
 );
 let defaultModelConfig: ModelConfig | undefined;
 let hostToolCounter = 0;
+let runtimeOperationCounter = 0;
 let authPromptCounter = 0;
 let aetherHostCallCounter = 0;
-
-function positiveIntegerEnvironmentValue(name: string, fallback: number): number {
-  const parsed = Number.parseInt(process.env[name] ?? "", 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
-}
-
-const harnessSessionLimit = positiveIntegerEnvironmentValue(
-  "AETHER_PI_MAX_HARNESS_SESSIONS",
-  DEFAULT_HARNESS_SESSION_LIMIT,
-);
-const harnessSessionTtlMs = positiveIntegerEnvironmentValue(
-  "AETHER_PI_HARNESS_SESSION_TTL_MS",
-  DEFAULT_HARNESS_SESSION_TTL_MS,
-);
 
 function aetherOAuthAuth(providerId: string, oauth: OAuthAuth | undefined): OAuthAuth | undefined {
   if (!oauth) return undefined;
@@ -229,12 +245,17 @@ function aetherOAuthAuth(providerId: string, oauth: OAuthAuth | undefined): OAut
       withAetherOAuthTransport(providerId, interaction, () =>
         oauth.login({
           ...interaction,
+          prompt: (prompt) =>
+            interaction.prompt(
+              prompt.type === "manual_code"
+                ? { ...prompt, placeholder: "http://localhost:..." }
+                : prompt,
+            ),
           notify: (event) => {
             if (event.type === "auth_url") {
               interaction.notify({
                 ...event,
-                instructions:
-                  "Complete login in your browser. When it reaches the localhost redirect, copy the full URL back into Aether.",
+                instructions: "Complete login in the authentication window.",
               });
               return;
             }
@@ -264,7 +285,14 @@ class BridgeCredentialStore implements CredentialStore {
 
   async read(providerId: string): Promise<Credential | undefined> {
     if (providerId !== this.providerId) return undefined;
+    const startedAt = Date.now();
+    bridgeDebug("credential_read_start", { provider_id: providerId });
     await this.state.queue;
+    bridgeDebug("credential_read_done", {
+      provider_id: providerId,
+      has_credential: this.state.credential !== undefined,
+      elapsed_ms: elapsedMillis(startedAt),
+    });
     return this.state.credential;
   }
 
@@ -279,6 +307,8 @@ class BridgeCredentialStore implements CredentialStore {
     fn: (current: Credential | undefined) => Promise<Credential | undefined>,
   ): Promise<Credential | undefined> {
     if (providerId !== this.providerId) return undefined;
+    const startedAt = Date.now();
+    bridgeDebug("credential_modify_start", { provider_id: providerId });
     let result: Credential | undefined;
     const operation = this.state.queue.then(async () => {
       const next = await fn(this.state.credential);
@@ -286,17 +316,32 @@ class BridgeCredentialStore implements CredentialStore {
       result = this.state.credential;
     });
     this.state.queue = operation.catch(() => undefined);
-    await operation;
+    try {
+      await operation;
+      bridgeDebug("credential_modify_done", {
+        provider_id: providerId,
+        elapsed_ms: elapsedMillis(startedAt),
+      });
+    } catch (error) {
+      bridgeDebug("credential_modify_failed", {
+        provider_id: providerId,
+        error: errorMessageWithCause(error),
+        elapsed_ms: elapsedMillis(startedAt),
+      });
+      throw error;
+    }
     return result;
   }
 
   async delete(providerId: string): Promise<void> {
     if (providerId !== this.providerId) return;
+    bridgeDebug("credential_delete_start", { provider_id: providerId });
     const operation = this.state.queue.then(() => {
       this.state.credential = undefined;
     });
     this.state.queue = operation.catch(() => undefined);
     await operation;
+    bridgeDebug("credential_delete_done", { provider_id: providerId });
   }
 }
 
@@ -304,6 +349,7 @@ async function replaceSharedCredential(
   providerConfigId: string,
   credential: Credential,
 ): Promise<void> {
+  bridgeDebug("shared_credential_replace", { provider_config_id: providerConfigId });
   const existing = sharedCredentialStates.get(providerConfigId);
   if (!existing) {
     sharedCredentialStates.set(providerConfigId, {
@@ -320,6 +366,7 @@ async function replaceSharedCredential(
 }
 
 async function clearSharedCredential(providerConfigId: string): Promise<boolean> {
+  bridgeDebug("shared_credential_clear", { provider_config_id: providerConfigId });
   const existing = sharedCredentialStates.get(providerConfigId);
   if (!existing) return false;
   const operation = existing.queue.then(() => {
@@ -368,17 +415,25 @@ function requestAetherHost(method: string, args: JsonObject): Promise<JsonObject
     ? operationRequestId
     : aetherSubscriberRequestIds.values().next().value;
   if (!requestId) {
-    throw new Error("The Aether Android host is not subscribed.");
+    bridgeDebug("aether_host_call_no_subscriber", { method });
+    throw new Error("The Aether app host is not subscribed.");
   }
   const callId = `aether-host-${Date.now()}-${++aetherHostCallCounter}`;
+  bridgeDebug("aether_host_call_start", { call_id: callId, method, routed_request_id: requestId });
   writeEvent(requestId, "aether_host_call", {
     call_id: callId,
     method,
     args,
   });
+  const startedAt = Date.now();
   return new Promise<JsonObject>((resolve, reject) => {
     const timeout = setTimeout(() => {
       pendingAetherHostCalls.delete(callId);
+      bridgeDebug("aether_host_call_timeout", {
+        call_id: callId,
+        method,
+        elapsed_ms: elapsedMillis(startedAt),
+      });
       reject(new Error(`Aether host call timed out: ${method}`));
     }, 2 * 60 * 1000);
     pendingAetherHostCalls.set(callId, { resolve, reject, timeout });
@@ -400,9 +455,13 @@ async function runAetherOperation<T>(
 function resolveAetherHostCall(payload: JsonObject): boolean {
   const callId = asString(payload.call_id).trim();
   const pending = callId ? pendingAetherHostCalls.get(callId) : undefined;
-  if (!pending) return false;
+  if (!pending) {
+    bridgeDebug("aether_host_result_orphaned", { call_id: callId });
+    return false;
+  }
   pendingAetherHostCalls.delete(callId);
   clearTimeout(pending.timeout);
+  bridgeDebug("aether_host_call_resolved", { call_id: callId, ok: asBoolean(payload.ok, true) });
   if (asBoolean(payload.ok, true)) {
     pending.resolve(asObject(payload.result));
   } else {
@@ -422,16 +481,87 @@ configureAetherExtensionTransport({
 });
 
 function errorMessageWithCause(error: unknown): string {
-  if (!(error instanceof Error)) return String(error);
   const messages: string[] = [];
-  let current: unknown = error;
-  while (current instanceof Error) {
-    const message = current.message.trim();
-    if (message && !messages.includes(message)) messages.push(message);
-    current = current.cause;
+  const seen = new Set<object>();
+  const pending: unknown[] = [error];
+  while (pending.length > 0 && seen.size < 32) {
+    const current = pending.shift();
+    if (!current || typeof current !== "object" || seen.has(current)) continue;
+    seen.add(current);
+    const record = current as {
+      message?: unknown;
+      code?: unknown;
+      errno?: unknown;
+      syscall?: unknown;
+      address?: unknown;
+      hostname?: unknown;
+      port?: unknown;
+      cause?: unknown;
+      reason?: unknown;
+      errors?: unknown;
+    };
+    const message = typeof record.message === "string" ? record.message.trim() : "";
+    const code = typeof record.code === "string" || typeof record.code === "number"
+      ? String(record.code).trim()
+      : "";
+    const errno = typeof record.errno === "string" || typeof record.errno === "number"
+      ? String(record.errno).trim()
+      : "";
+    const syscall = typeof record.syscall === "string" ? record.syscall.trim() : "";
+    const host = [record.hostname ?? record.address, record.port]
+      .filter((value) => typeof value === "string" || typeof value === "number")
+      .map(String)
+      .filter(Boolean)
+      .join(":");
+    const context = [code, errno !== code ? errno : "", syscall, host]
+      .filter((value) => value && !message.includes(value))
+      .join(", ");
+    const detail = context
+      ? `${message || "Network request failed"} (${context})`
+      : message;
+    if (detail && !messages.includes(detail)) messages.push(detail);
+    pending.push(record.cause, record.reason);
+    if (Array.isArray(record.errors)) pending.push(...record.errors);
   }
-  return messages.join(": ") || error.name;
+  if (messages.length > 0) return messages.join(": ");
+  return error instanceof Error ? error.name : String(error);
 }
+
+function fetchWithDetailedErrors(
+  fetchImplementation: typeof fetch,
+  onError?: (detail: string) => void,
+): typeof fetch {
+  return async (input, init) => {
+    const url = fetchUrl(input);
+    const method = typeof init?.method === "string" ? init.method : "GET";
+    const startedAt = Date.now();
+    bridgeDebug("fetch_start", { method, url });
+    try {
+      const response = await fetchImplementation(input, init);
+      bridgeDebug("fetch_end", {
+        method,
+        url,
+        status: response.status,
+        elapsed_ms: elapsedMillis(startedAt),
+      });
+      return response;
+    } catch (error) {
+      const detail = errorMessageWithCause(error);
+      bridgeDebug("fetch_error", {
+        method,
+        url,
+        error: detail,
+        aborted: Boolean(init?.signal?.aborted),
+        elapsed_ms: elapsedMillis(startedAt),
+      });
+      onError?.(detail);
+      if (error instanceof Error && detail === error.message) throw error;
+      throw new Error(detail, { cause: error });
+    }
+  };
+}
+
+globalThis.fetch = fetchWithDetailedErrors(globalThis.fetch.bind(globalThis));
 
 function fetchUrl(input: string | URL | Request): string {
   if (typeof input === "string") return input;
@@ -455,7 +585,7 @@ async function withAetherOAuthTransport<T>(
 
   const previousCallbackHost = process.env.PI_OAUTH_CALLBACK_HOST;
   const originalFetch = globalThis.fetch;
-  process.env.PI_OAUTH_CALLBACK_HOST = AETHER_MANUAL_OAUTH_CALLBACK_HOST;
+  process.env.PI_OAUTH_CALLBACK_HOST = AETHER_LOOPBACK_OAUTH_CALLBACK_HOST;
   globalThis.fetch = async (input, init) => {
     const url = fetchUrl(input);
     if (!url.startsWith("https://auth.openai.com/")) {
@@ -511,6 +641,31 @@ function asBoolean(value: unknown, fallback: boolean): boolean {
   return typeof value === "boolean" ? value : fallback;
 }
 
+function normalizeBaseUrlForComparison(value: string | undefined): string {
+  const trimmed = (value ?? "").trim();
+  if (!trimmed) return "";
+  try {
+    const url = new URL(trimmed);
+    url.pathname = url.pathname.replace(/\/+$/, "");
+    return url.toString();
+  } catch {
+    return trimmed.replace(/\/+$/, "");
+  }
+}
+
+function isCustomResponsesEndpoint(
+  model: Model<string>,
+  configuredBaseUrl: string | undefined,
+  defaultBaseUrl: string | undefined,
+): model is Model<"openai-responses"> {
+  const configured = normalizeBaseUrlForComparison(configuredBaseUrl);
+  return (
+    hasApi(model, "openai-responses") &&
+    configured.length > 0 &&
+    configured !== normalizeBaseUrlForComparison(defaultBaseUrl)
+  );
+}
+
 function normalizeHeaders(value: unknown): Record<string, string> {
   const inputHeaders = asObject(value);
   const headers: Record<string, string> = {};
@@ -538,6 +693,20 @@ function normalizeModelConfig(rawValue: unknown): ModelConfig {
     throw new Error("model_config.base_url is required.");
   }
   const authMethod = asString(raw.auth_method).trim();
+  bridgeDebug("model_config_normalized", {
+    provider_type: providerType,
+    pi_provider_id: piProviderId,
+    pi_api: piApi,
+    model_id: modelId,
+    base_url: baseUrl,
+    auth_method: authMethod || "api_key",
+    has_api_key: asString(raw.api_key) !== "",
+    custom_header_names: Object.keys(normalizeHeaders(raw.custom_headers)),
+    timeout_ms: asNumber(raw.timeout_ms, 360000),
+    max_retries: Math.max(0, asNumber(raw.max_retries, DEFAULT_AGENT_RETRY_MAX_RETRIES)),
+    max_retry_delay_ms: asNumber(raw.max_retry_delay_ms, 60000),
+    reasoning: asBoolean(raw.reasoning, false),
+  });
   return {
     provider_type: providerType,
     provider_config_id: providerConfigId,
@@ -551,7 +720,7 @@ function normalizeModelConfig(rawValue: unknown): ModelConfig {
     context_window: asNumber(raw.context_window, 128000),
     max_tokens: asNumber(raw.max_tokens, 16384),
     timeout_ms: asNumber(raw.timeout_ms, 360000),
-    max_retries: asNumber(raw.max_retries, 2),
+    max_retries: Math.max(0, asNumber(raw.max_retries, DEFAULT_AGENT_RETRY_MAX_RETRIES)),
     max_retry_delay_ms: asNumber(raw.max_retry_delay_ms, 60000),
     auth_method:
       authMethod === "oauth" || authMethod === "ambient" ? authMethod : "api_key",
@@ -647,16 +816,22 @@ function createAetherModel(config: ModelConfig): Model<string> {
   };
 }
 
-function normalizedBaseUrl(value: string | undefined): string {
-  return (value ?? "").trim().replace(/\/+$/, "");
-}
-
 function buildModels(config: ModelConfig): {
   models: MutableModels;
   model: Model<string>;
+  provider: Provider;
   credentialStore?: BridgeCredentialStore;
 } {
+  bridgeDebug("build_models_start", {
+    provider_type: config.provider_type,
+    pi_provider_id: config.pi_provider_id,
+    pi_api: config.pi_api,
+    model_id: config.model_id,
+    base_url: config.base_url,
+    auth_method: config.auth_method,
+  });
   if (config.provider_type === "faux") {
+    bridgeDebug("build_models_path", { path: "faux" });
     const models = createModels();
     const faux = fauxProvider({
       provider: config.pi_provider_id,
@@ -688,24 +863,33 @@ function buildModels(config: ModelConfig): {
     }
     models.setProvider(faux.provider);
     const model = faux.getModel(config.model_id) ?? faux.getModel();
-    return { models, model };
+    return { models, model, provider: faux.provider };
   }
 
   if (config.provider_type === "builtin") {
+    bridgeDebug("build_models_path", { path: "builtin", pi_provider_id: config.pi_provider_id });
     const provider = builtinProviderById.get(config.pi_provider_id);
     if (!provider) throw new Error(`Unknown built-in Pi provider: ${config.pi_provider_id}`);
     const providerModels = provider.getModels();
     const builtinModel = providerModels.find((candidate) => candidate.id === config.model_id);
-    const providerBaseUrl = provider.baseUrl ?? providerModels[0]?.baseUrl;
-    const usesCustomBaseUrl =
-      CUSTOM_BASE_URL_BUILTIN_PROVIDER_IDS.has(provider.id) &&
-      normalizedBaseUrl(config.base_url) !== normalizedBaseUrl(providerBaseUrl);
-    const modelTemplate = builtinModel ?? (usesCustomBaseUrl ? providerModels[0] : undefined);
+    const modelTemplate = builtinModel ?? providerModels[0];
     if (!modelTemplate) {
-      throw new Error(
-        `Unknown model ${config.model_id} for built-in Pi provider ${config.pi_provider_id}.`,
-      );
+      throw new Error(`Built-in Pi provider ${config.pi_provider_id} has no protocol template.`);
     }
+    const defaultBaseUrl = provider.baseUrl ?? modelTemplate.baseUrl;
+    const customBaseUrlModelOverrides = isCustomResponsesEndpoint(
+      modelTemplate,
+      config.base_url,
+      defaultBaseUrl,
+    )
+      ? {
+          // Custom Responses endpoints must not inherit official prompt-cache capabilities.
+          compat: {
+            ...(modelTemplate.compat ?? {}),
+            supportsExplicitPromptCacheMode: false,
+          },
+        }
+      : {};
     const credentialStore = new BridgeCredentialStore(
       provider.id,
       config.provider_config_id,
@@ -733,17 +917,19 @@ function buildModels(config: ModelConfig): {
               cacheWrite: 0,
             },
           }),
+      ...customBaseUrlModelOverrides,
       ...(config.base_url ? { baseUrl: config.base_url } : {}),
       headers: {
         ...modelTemplate.headers,
         ...config.custom_headers,
       },
     } as Model<string>;
-    return { models, model, credentialStore };
+    return { models, model, provider, credentialStore };
   }
 
   const models = createModels();
   const model = createAetherModel(config);
+  bridgeDebug("build_models_path", { path: "custom", pi_api: config.pi_api });
   const headers = config.custom_headers ?? {};
   const provider = createProvider({
     id: config.pi_provider_id,
@@ -767,7 +953,38 @@ function buildModels(config: ModelConfig): {
     api: apiStreamsFor(config.pi_api),
   });
   models.setProvider(provider);
-  return { models, model };
+  return { models, model, provider };
+}
+
+async function buildModelRuntime(config: ModelConfig): Promise<{
+  modelRuntime: ModelRuntime;
+  model: Model<string>;
+  credentialStore?: BridgeCredentialStore;
+}> {
+  const startedAt = Date.now();
+  bridgeDebug("model_runtime_create_start", {
+    provider_type: config.provider_type,
+    model_id: config.model_id,
+  });
+  const built = buildModels(config);
+  const modelRuntime = await ModelRuntime.create({
+    credentials: built.credentialStore,
+    modelsPath: null,
+    modelsStore: new InMemoryModelsStore(),
+    allowModelNetwork: false,
+    refreshOnCreate: false,
+  });
+  modelRuntime.registerNativeProvider(built.provider);
+  bridgeDebug("model_runtime_create_done", {
+    provider_type: config.provider_type,
+    model_id: config.model_id,
+    elapsed_ms: elapsedMillis(startedAt),
+  });
+  return {
+    modelRuntime,
+    model: built.model,
+    credentialStore: built.credentialStore,
+  };
 }
 
 async function credentialPayload(
@@ -1016,7 +1233,7 @@ function streamOptionsFor(
     sessionId: asString(payload.session_id),
     headers: normalizeHeaders(payload.headers),
     timeoutMs: asNumber(payload.timeout_ms, config.timeout_ms ?? 360000),
-    maxRetries: asNumber(payload.max_retries, config.max_retries ?? 2),
+    maxRetries: asNumber(payload.max_retries, config.max_retries ?? 5),
     maxRetryDelayMs: asNumber(payload.max_retry_delay_ms, config.max_retry_delay_ms ?? 60000),
   };
   const temperature = payload.temperature;
@@ -1029,15 +1246,6 @@ function streamOptionsFor(
     options.reasoning = reasoning as SimpleStreamOptions["reasoning"];
   }
   return options;
-}
-
-function harnessStreamOptions(payload: JsonObject, config: ModelConfig) {
-  return {
-    headers: normalizeHeaders(payload.headers),
-    timeoutMs: asNumber(payload.timeout_ms, config.timeout_ms ?? 360000),
-    maxRetries: asNumber(payload.max_retries, config.max_retries ?? 2),
-    maxRetryDelayMs: asNumber(payload.max_retry_delay_ms, config.max_retry_delay_ms ?? 60000),
-  };
 }
 
 function normalizeHostToolDefinitions(rawTools: unknown): HostToolDefinition[] {
@@ -1123,19 +1331,22 @@ function hostToolResultFromPayload(payload: JsonObject): AgentToolResult<JsonObj
 }
 
 function resolveHostToolResult(payload: JsonObject): boolean {
-  const sessionId = asString(payload.session_id).trim();
-  const systemPrompt = asString(payload.system_prompt);
-  if (sessionId && systemPrompt) {
-    const state = harnessSessions.get(sessionId);
-    if (state) {
-      state.systemPrompt = systemPrompt;
-      state.lastAccessedAt = Date.now();
-    }
-  }
   const toolRequestId = asString(payload.tool_request_id).trim();
   const pending = toolRequestId ? pendingHostToolRequests.get(toolRequestId) : undefined;
-  if (!pending) return false;
+  if (!pending) {
+    bridgeDebug("host_tool_result_orphaned", {
+      tool_request_id: toolRequestId,
+      tool_name: asString(payload.tool_name),
+    });
+    return false;
+  }
   pendingHostToolRequests.delete(toolRequestId);
+  bridgeDebug("host_tool_result_accepted", {
+    tool_request_id: toolRequestId,
+    tool_name: asString(payload.tool_name),
+    is_error: asBoolean(payload.is_error, false),
+  });
+  applyRuntimeToolResult(payload);
   pending.resolve(hostToolResultFromPayload(payload));
   return true;
 }
@@ -1143,591 +1354,12 @@ function resolveHostToolResult(payload: JsonObject): boolean {
 function applyHostToolProgress(payload: JsonObject): boolean {
   const toolRequestId = asString(payload.tool_request_id).trim();
   const pending = toolRequestId ? pendingHostToolRequests.get(toolRequestId) : undefined;
-  if (!pending) return false;
+  if (!pending) {
+    bridgeDebug("host_tool_progress_orphaned", { tool_request_id: toolRequestId });
+    return false;
+  }
   pending.onUpdate?.(hostToolResultFromPayload(payload));
   return true;
-}
-
-function requestHostTool(
-  runRequestId: string,
-  sessionId: string,
-  toolName: string,
-  toolCallId: string,
-  params: JsonObject,
-  executionMode: "sequential" | "parallel",
-  signal?: AbortSignal,
-  onUpdate?: (partialResult: AgentToolResult<JsonObject>) => void,
-): Promise<AgentToolResult<JsonObject>> {
-  const toolRequestId = `host-tool-${Date.now()}-${++hostToolCounter}`;
-  const argumentsJson = JSON.stringify(params);
-  writeEvent(runRequestId, "host_tool_request", {
-    tool_request_id: toolRequestId,
-    session_id: sessionId,
-    tool_call_id: toolCallId,
-    tool_name: toolName,
-    arguments: params,
-    arguments_json: argumentsJson,
-    execution_mode: executionMode,
-  });
-  return new Promise<AgentToolResult<JsonObject>>((resolve, reject) => {
-    if (signal?.aborted) {
-      reject(new Error("Host tool execution aborted."));
-      return;
-    }
-    const abortListener = () => {
-      pendingHostToolRequests.delete(toolRequestId);
-      reject(new Error("Host tool execution aborted."));
-    };
-    signal?.addEventListener("abort", abortListener, { once: true });
-    pendingHostToolRequests.set(toolRequestId, {
-      sessionId,
-      resolve: (result) => {
-        signal?.removeEventListener("abort", abortListener);
-        resolve(result);
-      },
-      reject: (error) => {
-        signal?.removeEventListener("abort", abortListener);
-        reject(error);
-      },
-      onUpdate,
-    });
-  });
-}
-
-function createHostTool(state: HarnessSessionState, definition: HostToolDefinition): AgentTool<TSchema, JsonObject> {
-  return {
-    label: definition.name,
-    name: definition.name,
-    description: definition.description,
-    parameters: hostToolSchema(definition),
-    prepareArguments: normalizeToolArguments,
-    executionMode: definition.execution_mode,
-    execute: async (toolCallId, params, signal, onUpdate) => {
-      if (!state.currentRequestId) {
-        throw new Error(`Host tool ${definition.name} was called without an active Pi request.`);
-      }
-      return requestHostTool(
-        state.currentRequestId,
-        state.sessionId,
-        definition.name,
-        toolCallId,
-        normalizeToolArguments(params),
-        definition.execution_mode ?? "parallel",
-        signal,
-        onUpdate,
-      );
-    },
-  };
-}
-
-function extensionMessageText(content: unknown): string {
-  if (typeof content === "string") return content;
-  if (!Array.isArray(content)) return "";
-  return content
-    .flatMap((part) => {
-      const value = asObject(part);
-      return value.type === "text" ? [asString(value.text)] : [];
-    })
-    .join("\n");
-}
-
-function allSessionTools(state: HarnessSessionState): AgentTool[] {
-  const tools = new Map(state.hostTools.map((tool) => [tool.name, tool]));
-  for (const tool of extensionTools(state.extensionRuntime)) {
-    tools.set(tool.name, tool);
-  }
-  return [...tools.values()];
-}
-
-function allSessionToolInfo(state: HarnessSessionState): ToolInfo[] {
-  const tools = new Map<string, ToolInfo>();
-  for (const tool of state.hostTools) {
-    tools.set(tool.name, {
-      name: tool.name,
-      description: tool.description,
-      parameters: tool.parameters,
-      sourceInfo: createSyntheticSourceInfo(`<aether:${tool.name}>`, {
-        source: "sdk",
-      }),
-    });
-  }
-  for (const registered of state.extensionRuntime.runner.getAllRegisteredTools()) {
-    const definition = registered.definition;
-    tools.set(definition.name, {
-      name: definition.name,
-      description: definition.description,
-      parameters: definition.parameters,
-      promptGuidelines: definition.promptGuidelines,
-      sourceInfo: registered.sourceInfo,
-    });
-  }
-  return [...tools.values()];
-}
-
-function sessionCommands(state: HarnessSessionState) {
-  return state.extensionRuntime.runner.getRegisteredCommands().map((command) => ({
-    name: command.invocationName,
-    description: command.description,
-    source: "extension" as const,
-    sourceInfo: command.sourceInfo,
-  }));
-}
-
-async function refreshSessionTools(
-  state: HarnessSessionState,
-  requestedActiveToolNames?: string[],
-): Promise<void> {
-  const previousToolNames = new Set(state.harness.getTools().map((tool) => tool.name));
-  const previousActiveNames =
-    requestedActiveToolNames ?? state.harness.getActiveTools().map((tool) => tool.name);
-  const tools = allSessionTools(state);
-  const toolNames = new Set(tools.map((tool) => tool.name));
-  const activeNames = previousActiveNames.filter((name) => toolNames.has(name));
-  for (const tool of tools) {
-    if (!previousToolNames.has(tool.name)) activeNames.push(tool.name);
-  }
-  await state.harness.setTools(tools, [...new Set(activeNames)]);
-}
-
-function queueExtensionUserMessage(
-  state: HarnessSessionState,
-  content: string | Array<TextContent | ImageContent>,
-  deliverAs?: "steer" | "followUp",
-): void {
-  const text = extensionMessageText(content);
-  const images = Array.isArray(content)
-    ? content.filter((part): part is ImageContent => part.type === "image")
-    : [];
-  if (!text && images.length === 0) return;
-  const options = images.length > 0 ? { images } : undefined;
-  if (state.currentRequestId) {
-    const operation =
-      deliverAs === "steer"
-        ? state.harness.steer(text, options)
-        : state.harness.followUp(text, options);
-    void operation.catch((error) => {
-      stderr.write(`pi extension message failed: ${errorMessageWithCause(error)}\n`);
-    });
-    return;
-  }
-  void state.harness.nextTurn(text, options).catch((error) => {
-    stderr.write(`pi extension message failed: ${errorMessageWithCause(error)}\n`);
-  });
-}
-
-function extensionSystemPromptOptions(state: HarnessSessionState): BuildSystemPromptOptions {
-  return {
-    cwd: state.workspaceDirectory,
-  } as BuildSystemPromptOptions;
-}
-
-function bindExtensionCore(state: HarnessSessionState): void {
-  const runner = state.extensionRuntime.runner;
-  runner.bindCore(
-    {
-      sendMessage: (message, options) => {
-        state.extensionRuntime.sessionManager.appendCustomMessageEntry(
-          message.customType,
-          message.content,
-          message.display,
-          message.details,
-        );
-        if (options?.triggerTurn || options?.deliverAs) {
-          queueExtensionUserMessage(
-            state,
-            message.content,
-            options.deliverAs === "steer" ? "steer" : "followUp",
-          );
-        }
-      },
-      sendUserMessage: (content, options) => {
-        queueExtensionUserMessage(state, content, options?.deliverAs);
-      },
-      appendEntry: (customType, data) => {
-        state.extensionRuntime.sessionManager.appendCustomEntry(customType, data);
-      },
-      setSessionName: (name) => {
-        state.extensionRuntime.sessionManager.appendSessionInfo(name);
-        void runner.emit({
-          type: "session_info_changed",
-          name: state.extensionRuntime.sessionManager.getSessionName(),
-        });
-      },
-      getSessionName: () => state.extensionRuntime.sessionManager.getSessionName(),
-      setLabel: (entryId, label) => {
-        state.extensionRuntime.sessionManager.appendLabelChange(entryId, label);
-      },
-      getActiveTools: () => state.harness.getActiveTools().map((tool) => tool.name),
-      getAllTools: () => allSessionToolInfo(state),
-      setActiveTools: (toolNames) => {
-        if (state.currentRequestId) {
-          state.pendingActiveToolNames = [...toolNames];
-          return;
-        }
-        void state.harness.setActiveTools(toolNames).catch((error) => {
-          runner.emitError({
-            extensionPath: "<aether>",
-            event: "set_active_tools",
-            error: errorMessageWithCause(error),
-          });
-        });
-      },
-      refreshTools: () => {
-        if (state.currentRequestId) {
-          state.pendingToolRefresh = true;
-          return;
-        }
-        void refreshSessionTools(state).catch((error) => {
-          runner.emitError({
-            extensionPath: "<aether>",
-            event: "refresh_tools",
-            error: errorMessageWithCause(error),
-          });
-        });
-      },
-      getCommands: () => sessionCommands(state),
-      setModel: async (model) => {
-        const available = state.models.getModel(model.provider, model.id);
-        if (!available) return false;
-        await state.harness.setModel(available);
-        state.model = available;
-        return true;
-      },
-      getThinkingLevel: () => state.harness.getThinkingLevel(),
-      setThinkingLevel: (level) => {
-        void state.harness.setThinkingLevel(level).catch((error) => {
-          runner.emitError({
-            extensionPath: "<aether>",
-            event: "set_thinking_level",
-            error: errorMessageWithCause(error),
-          });
-        });
-      },
-    },
-    {
-      getModel: () => state.harness.getModel(),
-      getScopedModels: (): readonly ScopedModel[] => [],
-      isIdle: () => !state.currentRequestId,
-      isProjectTrusted: () => true,
-      getSignal: () => state.currentSignal,
-      abort: () => {
-        void state.harness.abort();
-      },
-      hasPendingMessages: () => false,
-      shutdown: () => {
-        void closeHarnessSession(state.sessionId, state);
-      },
-      getContextUsage: () => ({
-        tokens: null,
-        contextWindow: state.harness.getModel().contextWindow,
-        percent: null,
-      }),
-      compact: (options) => {
-        void state.harness
-          .compact(options?.customInstructions)
-          .then((result) => {
-            if (!result.firstKeptEntryId) {
-              throw new Error("Compaction finished without a first kept entry id.");
-            }
-            options?.onComplete?.({
-              summary: result.summary,
-              firstKeptEntryId: result.firstKeptEntryId,
-              tokensBefore: result.tokensBefore,
-              usage: result.usage,
-              details: result.details,
-            });
-          })
-          .catch((error) =>
-            options?.onError?.(error instanceof Error ? error : new Error(String(error))),
-          );
-      },
-      getSystemPrompt: () => state.systemPrompt,
-      getSystemPromptOptions: () => extensionSystemPromptOptions(state),
-    },
-  );
-  runner.bindCommandContext({
-    waitForIdle: () => state.harness.waitForIdle(),
-    newSession: async () => ({ cancelled: true }),
-    fork: async () => ({ cancelled: true }),
-    navigateTree: async (targetId, options) => {
-      const result = await state.harness.navigateTree(targetId, options);
-      return { cancelled: result.cancelled };
-    },
-    switchSession: async () => ({ cancelled: true }),
-    reload: async () => {
-      await reloadExtensionsForState(state);
-    },
-  });
-}
-
-function installExtensionHooks(state: HarnessSessionState): void {
-  const runner = state.extensionRuntime.runner;
-  state.extensionUnsubscribers.push(
-    runner.onError((error) => {
-      stderr.write(
-        `pi extension error (${error.extensionPath}, ${error.event}): ${error.error}\n`,
-      );
-      if (state.currentRequestId) {
-        writeEvent(state.currentRequestId, "extension_error", {
-          extension_path: error.extensionPath,
-          event: error.event,
-          error: error.error,
-        });
-      }
-    }),
-    state.harness.on("before_agent_start", async (event) => {
-      const result = await runner.emitBeforeAgentStart(
-        event.prompt,
-        event.images,
-        event.systemPrompt,
-        extensionSystemPromptOptions(state),
-      );
-      return result
-        ? {
-            messages: result.messages as AgentMessage[] | undefined,
-            systemPrompt: result.systemPrompt,
-          }
-        : undefined;
-    }),
-    state.harness.on("context", async (event) => ({
-      messages: await runner.emitContext(event.messages),
-    })),
-    state.harness.on("before_provider_request", async (event) => {
-      const headers = await runner.emitBeforeProviderHeaders({
-        ...(event.streamOptions.headers ?? {}),
-      });
-      return {
-        streamOptions: {
-          headers: Object.fromEntries(
-            Object.entries(headers).map(([name, value]) => [
-              name,
-              value === null ? undefined : value,
-            ]),
-          ),
-        },
-      };
-    }),
-    state.harness.on("before_provider_payload", async (event) => ({
-      payload: await runner.emitBeforeProviderRequest(event.payload),
-    })),
-    state.harness.on("tool_call", async (event) =>
-      runner.emitToolCall({
-        type: "tool_call",
-        toolCallId: event.toolCallId,
-        toolName: event.toolName,
-        input: event.input,
-      }),
-    ),
-    state.harness.on("tool_result", async (event) =>
-      runner.emitToolResult({
-        type: "tool_result",
-        toolCallId: event.toolCallId,
-        toolName: event.toolName,
-        input: event.input,
-        content: event.content,
-        details: event.details,
-        isError: event.isError,
-      }),
-    ),
-    state.harness.on("session_before_compact", async (event) =>
-      runner.emit({
-        type: "session_before_compact",
-        preparation: event.preparation as never,
-        branchEntries: event.branchEntries as never,
-        customInstructions: event.customInstructions,
-        reason: "manual",
-        willRetry: false,
-        signal: event.signal,
-      }),
-    ),
-    state.harness.on("session_before_tree", async (event) =>
-      runner.emit({
-        type: "session_before_tree",
-        preparation: event.preparation as never,
-        signal: event.signal,
-      }),
-    ),
-    state.harness.subscribe(async (event, signal) => {
-      state.currentSignal = signal;
-      await emitExtensionHarnessEvent(state, event);
-      if (event.type === "settled") {
-        state.currentSignal = undefined;
-      }
-    }),
-  );
-}
-
-async function emitExtensionHarnessEvent(
-  state: HarnessSessionState,
-  event: AgentHarnessEvent,
-): Promise<void> {
-  const runner = state.extensionRuntime.runner;
-  switch (event.type) {
-    case "agent_start":
-    case "agent_end":
-    case "turn_start":
-    case "turn_end":
-    case "message_start":
-    case "message_update":
-    case "tool_execution_start":
-    case "tool_execution_update":
-    case "tool_execution_end":
-      await runner.emit(event as never);
-      return;
-    case "message_end": {
-      state.extensionRuntime.sessionManager.appendMessage(event.message as never);
-      await runner.emitMessageEnd(event);
-      return;
-    }
-    case "settled":
-      await runner.emit({ type: "agent_settled" });
-      return;
-    case "after_provider_response":
-      await runner.emit(event);
-      return;
-    case "model_update":
-      await runner.emit({
-        type: "model_select",
-        model: event.model,
-        previousModel: event.previousModel,
-        source: event.source,
-      });
-      return;
-    case "thinking_level_update":
-      await runner.emit({
-        type: "thinking_level_select",
-        level: event.level,
-        previousLevel: event.previousLevel,
-      });
-      return;
-    case "session_compact":
-      await runner.emit({
-        type: "session_compact",
-        compactionEntry: event.compactionEntry as never,
-        fromExtension: event.fromHook,
-        reason: "manual",
-        willRetry: false,
-      });
-      return;
-    case "session_tree":
-      await runner.emit({
-        type: "session_tree",
-        newLeafId: event.newLeafId,
-        oldLeafId: event.oldLeafId,
-        summaryEntry: event.summaryEntry as never,
-        fromExtension: event.fromHook,
-      });
-      return;
-    default:
-      return;
-  }
-}
-
-function disposeExtensionRuntime(
-  state: HarnessSessionState,
-  reason: "quit" | "reload",
-): Promise<void> {
-  const runner = state.extensionRuntime.runner;
-  return runner
-    .emit({ type: "session_shutdown", reason })
-    .catch((error) => {
-      stderr.write(`pi extension shutdown failed: ${errorMessageWithCause(error)}\n`);
-    })
-    .then(() => {
-      for (const unsubscribe of state.extensionUnsubscribers.splice(0)) unsubscribe();
-      runner.invalidate();
-    });
-}
-
-async function activateExtensionRuntime(
-  state: HarnessSessionState,
-  nextRuntime: AetherExtensionRuntime,
-  reason: "startup" | "reload",
-): Promise<void> {
-  if (reason === "reload") await disposeExtensionRuntime(state, "reload");
-  state.extensionRuntime = nextRuntime;
-  bindExtensionCore(state);
-  installExtensionHooks(state);
-  await refreshSessionTools(state);
-  await nextRuntime.runner.emit({ type: "session_start", reason });
-}
-
-async function reloadExtensionsForState(
-  state: HarnessSessionState,
-  configuredPaths: string[] = [],
-  loadOptions: {
-    disabledExtensionPaths?: string[];
-    disabledPackageSources?: string[];
-  } = {},
-): Promise<{
-  reloaded: boolean;
-  scheduled: boolean;
-  paths: string[];
-  errors: Array<{ path: string; error: string }>;
-}> {
-  const candidate = await loadAetherExtensions(
-    state.workspaceDirectory,
-    configuredPaths,
-    loadOptions,
-  );
-  if (candidate.errors.length > 0) {
-    candidate.runner.invalidate("Extension reload candidate was rejected.");
-    return {
-      reloaded: false,
-      scheduled: false,
-      paths: candidate.paths,
-      errors: candidate.errors,
-    };
-  }
-  if (state.currentRequestId) {
-    state.pendingExtensionRuntime?.runner.invalidate("Superseded by a newer reload.");
-    state.pendingExtensionRuntime = candidate;
-    return {
-      reloaded: false,
-      scheduled: true,
-      paths: candidate.paths,
-      errors: [],
-    };
-  }
-  await activateExtensionRuntime(state, candidate, "reload");
-  return {
-    reloaded: true,
-    scheduled: false,
-    paths: candidate.paths,
-    errors: [],
-  };
-}
-
-function extensionLoadOptionsFromPayload(payload: JsonObject): {
-  disabledExtensionPaths: string[];
-  disabledPackageSources: string[];
-} {
-  const stringsFrom = (value: unknown): string[] =>
-    Array.isArray(value)
-      ? value.filter((entry): entry is string => typeof entry === "string")
-      : [];
-  const hasOptions =
-    Object.prototype.hasOwnProperty.call(payload, "disabled_extension_paths") ||
-    Object.prototype.hasOwnProperty.call(payload, "disabled_package_sources");
-  if (!hasOptions) return currentExtensionLoadOptions;
-  currentExtensionLoadOptions = {
-    disabledExtensionPaths: stringsFrom(payload.disabled_extension_paths),
-    disabledPackageSources: stringsFrom(payload.disabled_package_sources),
-  };
-  return currentExtensionLoadOptions;
-}
-
-async function applyPendingExtensionChanges(state: HarnessSessionState): Promise<void> {
-  const pending = state.pendingExtensionRuntime;
-  if (pending) {
-    state.pendingExtensionRuntime = undefined;
-    await activateExtensionRuntime(state, pending, "reload");
-  } else if (state.pendingToolRefresh || state.pendingActiveToolNames) {
-    const activeToolNames = state.pendingActiveToolNames;
-    state.pendingToolRefresh = false;
-    state.pendingActiveToolNames = undefined;
-    await refreshSessionTools(state, activeToolNames);
-  }
 }
 
 function toolTextOutput(result: AgentToolResult<JsonObject> | undefined): string {
@@ -1790,75 +1422,12 @@ function thinkingLevelFor(payload: JsonObject): "off" | "minimal" | "low" | "med
   return undefined;
 }
 
-function emitHarnessEvent(
-  state: HarnessSessionState,
-  event: Parameters<AgentHarness["subscribe"]>[0] extends (event: infer TEvent, signal?: AbortSignal) => unknown ? TEvent : never,
-): void {
-  const requestId = state.currentRequestId;
-  if (!requestId) return;
-  switch (event.type) {
-    case "message_update":
-      if (event.message.role === "assistant") {
-        if (event.assistantMessageEvent.type === "text_delta" || event.assistantMessageEvent.type === "thinking_delta") {
-          emitStreamEvent(requestId, event.assistantMessageEvent);
-        }
-      }
-      break;
-    case "tool_execution_start":
-      state.toolArgsById.set(event.toolCallId, event.args);
-      writeEvent(requestId, "tool_call_start", toolEventPayload(event.toolCallId, event.toolName, event.args));
-      break;
-    case "tool_execution_update":
-      writeEvent(requestId, "tool_call_delta", toolEventPayload(event.toolCallId, event.toolName, event.args, event.partialResult));
-      break;
-    case "tool_execution_end":
-      writeEvent(
-        requestId,
-        "tool_call_end",
-        toolEventPayload(
-          event.toolCallId,
-          event.toolName,
-          state.toolArgsById.get(event.toolCallId) ?? {},
-          event.result,
-          event.isError,
-        ),
-      );
-      state.toolArgsById.delete(event.toolCallId);
-      break;
-  }
-}
-
 function modelConfigSignature(config: ModelConfig): string {
   return JSON.stringify(config);
 }
 
 function hostToolSignature(rawTools: unknown): string {
   return JSON.stringify(normalizeHostToolDefinitions(rawTools));
-}
-
-function stableJsonValue(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(stableJsonValue);
-  if (!value || typeof value !== "object") return value;
-  return Object.fromEntries(
-    Object.entries(value as JsonObject)
-      .sort(([left], [right]) => left.localeCompare(right))
-      .map(([key, entry]) => [key, stableJsonValue(entry)]),
-  );
-}
-
-function historySignature(messages: AgentMessage[]): string {
-  return JSON.stringify(
-    stableJsonValue(
-      messages.map((message) => {
-        const normalized = { ...(message as unknown as JsonObject) };
-        delete normalized.timestamp;
-        if (normalized.role === "user" && typeof normalized.content === "string") {
-          normalized.content = [{ type: "text", text: normalized.content }];
-        }
-        return normalized;
-      }),
-    ),
-  );
 }
 
 function latestAssistantMessage(messages: AgentMessage[]): AssistantMessage | undefined {
@@ -1869,21 +1438,853 @@ function latestAssistantMessage(messages: AgentMessage[]): AssistantMessage | un
   return undefined;
 }
 
-async function canReuseHarnessSession(
-  state: HarnessSessionState,
-  config: ModelConfig,
-  toolSignature: string,
-  workspaceDirectory: string,
-  history: AgentMessage[],
-): Promise<boolean> {
-  if (state.configSignature !== modelConfigSignature(config)) return false;
-  if (state.toolSignature !== toolSignature) return false;
-  if (state.workspaceDirectory !== workspaceDirectory) return false;
-  const inMemoryContext = await state.session.buildContext();
-  return historySignature(history) === historySignature(inMemoryContext.messages);
+const AETHER_HOST_TOOL_NAMES = new Set([
+  "browser",
+  "aether_config_get",
+  "aether_config_set",
+  "aether_skill_manage",
+  "aether_termux_manage",
+  "aether_agent_mode_manage",
+  "aether_scheduled_task_manage",
+  "aether_extension_manage",
+  "aether_developer_manage",
+  "aether_runtime_manage",
+  "agent_display",
+]);
+
+function runtimeForPayload(payload: JsonObject): "alpine" | "termux" {
+  const explicit = asString(payload.runtime, asString(payload.runtime_id)).trim().toLowerCase();
+  if (explicit === "termux") return "termux";
+  if (explicit === "alpine") return "alpine";
+  return asString(payload.platform).trim().toLowerCase() === "ios" ? "alpine" : "alpine";
 }
 
-function rejectPendingHostToolsForSession(sessionId: string, message: string): void {
+function platformForPayload(payload: JsonObject): "android" | "ios" {
+  return asString(payload.platform).trim().toLowerCase() === "ios" ? "ios" : "android";
+}
+
+function activeNativeToolNames(runtime: "alpine" | "termux"): string[] {
+  return runtime === "termux"
+    ? ["read", "bash", "edit", "write"]
+    : ["read", "bash", "edit", "write", "grep", "find", "ls"];
+}
+
+function allowedHostToolDefinitions(rawTools: unknown, platform: "android" | "ios"): HostToolDefinition[] {
+  return normalizeHostToolDefinitions(rawTools).filter((definition) => {
+    if (!AETHER_HOST_TOOL_NAMES.has(definition.name)) return false;
+    if (platform === "ios") {
+      return new Set([
+        "browser",
+        "aether_config_get",
+        "aether_config_set",
+        "aether_skill_manage",
+        "aether_extension_manage",
+        "aether_developer_manage",
+      ]).has(definition.name);
+    }
+    return true;
+  });
+}
+
+function requestAgentHostTool(
+  state: AgentSessionState,
+  definition: HostToolDefinition,
+  toolCallId: string,
+  args: unknown,
+  signal: AbortSignal | undefined,
+  onUpdate: ((partial: AgentToolResult<JsonObject>) => void) | undefined,
+): Promise<AgentToolResult<JsonObject>> {
+  const runRequestId = state.currentRequestId;
+  if (!runRequestId) throw new Error(`Host tool ${definition.name} was called outside an active turn.`);
+  const toolRequestId = `host-tool-${Date.now()}-${++hostToolCounter}`;
+  const startedAt = Date.now();
+  bridgeDebug("host_tool_request_sent", {
+    tool_request_id: toolRequestId,
+    tool_call_id: toolCallId,
+    tool_name: definition.name,
+    session_id: state.sessionId,
+    run_request_id: runRequestId,
+  });
+  return new Promise((resolve, reject) => {
+    const abort = () => {
+      if (!pendingHostToolRequests.delete(toolRequestId)) return;
+      bridgeDebug("host_tool_request_aborted", {
+        tool_request_id: toolRequestId,
+        tool_name: definition.name,
+        elapsed_ms: elapsedMillis(startedAt),
+      });
+      reject(new Error(`Host tool ${definition.name} was aborted.`));
+    };
+    signal?.addEventListener("abort", abort, { once: true });
+    pendingHostToolRequests.set(toolRequestId, {
+      sessionId: state.sessionId,
+      resolve: (result) => {
+        signal?.removeEventListener("abort", abort);
+        bridgeDebug("host_tool_request_resolved", {
+          tool_request_id: toolRequestId,
+          tool_name: definition.name,
+          elapsed_ms: elapsedMillis(startedAt),
+        });
+        resolve(result);
+      },
+      reject: (error) => {
+        signal?.removeEventListener("abort", abort);
+        bridgeDebug("host_tool_request_rejected", {
+          tool_request_id: toolRequestId,
+          tool_name: definition.name,
+          error: errorMessageWithCause(error),
+          elapsed_ms: elapsedMillis(startedAt),
+        });
+        reject(error);
+      },
+      onUpdate,
+    });
+    writeEvent(runRequestId, "host_tool_request", {
+      session_id: state.sessionId,
+      tool_request_id: toolRequestId,
+      tool_call_id: toolCallId,
+      tool_name: definition.name,
+      arguments: normalizeToolArguments(args),
+      arguments_json: JSON.stringify(normalizeToolArguments(args)),
+      execution_mode: definition.execution_mode ?? "parallel",
+    });
+  });
+}
+
+function createAgentHostToolDefinition(
+  state: AgentSessionState,
+  definition: HostToolDefinition,
+): ToolDefinition<any, any, any> {
+  return {
+    name: definition.name,
+    label: definition.name,
+    description: definition.description,
+    parameters: hostToolSchema(definition),
+    executionMode: definition.execution_mode,
+    execute: (toolCallId, args, signal, onUpdate) =>
+      requestAgentHostTool(state, definition, toolCallId, args, signal, onUpdate),
+  };
+}
+
+function requestRuntimeOperation(
+  state: AgentSessionState,
+  kind: string,
+  payload: JsonObject,
+  options: { signal?: AbortSignal; onChunk?: (chunk: Buffer) => void; input?: Buffer } = {},
+): Promise<JsonObject> {
+  const requestId = state.currentRequestId;
+  if (!requestId) throw new Error(`Runtime operation ${kind} was called outside an active turn.`);
+  const operationId = `runtime-op-${Date.now()}-${++runtimeOperationCounter}`;
+  const startedAt = Date.now();
+  bridgeDebug("runtime_op_request_sent", {
+    operation_id: operationId,
+    kind,
+    session_id: state.sessionId,
+    input_bytes: options.input?.length ?? 0,
+  });
+  return new Promise((resolve, reject) => {
+    const abort = () => {
+      if (!pendingRuntimeOperations.delete(operationId)) return;
+      bridgeDebug("runtime_op_aborted", {
+        operation_id: operationId,
+        kind,
+        elapsed_ms: elapsedMillis(startedAt),
+      });
+      writeEvent(requestId, "runtime_op_cancel", {
+        operation_id: operationId,
+        session_id: state.sessionId,
+        runtime: state.runtime,
+      });
+      reject(new Error(`Runtime operation ${kind} was aborted.`));
+    };
+    options.signal?.addEventListener("abort", abort, { once: true });
+    pendingRuntimeOperations.set(operationId, {
+      sessionId: state.sessionId,
+      onChunk: options.onChunk,
+      resolve: (result) => {
+        options.signal?.removeEventListener("abort", abort);
+        bridgeDebug("runtime_op_resolved", {
+          operation_id: operationId,
+          kind,
+          elapsed_ms: elapsedMillis(startedAt),
+        });
+        resolve(result);
+      },
+      reject: (error) => {
+        options.signal?.removeEventListener("abort", abort);
+        bridgeDebug("runtime_op_rejected", {
+          operation_id: operationId,
+          kind,
+          error: errorMessageWithCause(error),
+          elapsed_ms: elapsedMillis(startedAt),
+        });
+        reject(error);
+      },
+    });
+    const inputChunks = options.input
+      ? Array.from({ length: Math.ceil(options.input.length / RUNTIME_OPERATION_CHUNK_BYTES) }, (_, index) =>
+          options.input!.subarray(index * RUNTIME_OPERATION_CHUNK_BYTES, (index + 1) * RUNTIME_OPERATION_CHUNK_BYTES))
+      : [];
+    writeEvent(requestId, "runtime_op_request", {
+      operation_id: operationId,
+      session_id: state.sessionId,
+      runtime: state.runtime,
+      kind,
+      payload,
+      input_chunk_count: inputChunks.length,
+      input_byte_count: options.input?.length ?? 0,
+    });
+    inputChunks.forEach((chunk, sequence) => {
+      writeEvent(requestId, "runtime_op_chunk", {
+        operation_id: operationId,
+        session_id: state.sessionId,
+        runtime: state.runtime,
+        direction: "input",
+        sequence,
+        data_base64: chunk.toString("base64"),
+        final: sequence === inputChunks.length - 1,
+      });
+    });
+  });
+}
+
+function runtimeOperationChunk(payload: JsonObject): boolean {
+  const operationId = asString(payload.operation_id).trim();
+  const pending = pendingRuntimeOperations.get(operationId);
+  if (!pending) return false;
+  const encoded = asString(payload.data_base64).trim();
+  if (encoded) pending.onChunk?.(Buffer.from(encoded, "base64"));
+  return true;
+}
+
+function runtimeOperationResult(payload: JsonObject): boolean {
+  const operationId = asString(payload.operation_id).trim();
+  const pending = pendingRuntimeOperations.get(operationId);
+  if (!pending) {
+    bridgeDebug("runtime_op_result_orphaned", { operation_id: operationId });
+    return false;
+  }
+  pendingRuntimeOperations.delete(operationId);
+  bridgeDebug("runtime_op_result_received", {
+    operation_id: operationId,
+    ok: asBoolean(payload.ok, true),
+  });
+  if (!asBoolean(payload.ok, true)) {
+    pending.reject(new Error(asString(payload.error, "Runtime operation failed.")));
+  } else {
+    pending.resolve(asObject(payload.result));
+  }
+  return true;
+}
+
+function nodeTemporaryOutputPath(filePath: string): boolean {
+  const relative = path.relative(os.tmpdir(), filePath);
+  return !relative.startsWith(`..${path.sep}`) && relative !== ".." &&
+    path.basename(filePath).startsWith("pi-bash-");
+}
+
+function runtimePath(state: AgentSessionState, absolutePath: string): string {
+  if (state.runtime !== "termux" || nodeTemporaryOutputPath(absolutePath)) return absolutePath;
+  const relative = path.relative(state.workspaceDirectory, absolutePath);
+  if (relative === "" || (!relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))) {
+    return path.resolve(state.termuxWorkspaceDirectory, relative);
+  }
+  return absolutePath;
+}
+
+async function detectLocalImageMimeType(absolutePath: string): Promise<string | undefined> {
+  const handle = await fs.open(absolutePath, "r");
+  try {
+    const bytes = Buffer.alloc(16);
+    const { bytesRead } = await handle.read(bytes, 0, bytes.length, 0);
+    const header = bytes.subarray(0, bytesRead);
+    if (header.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return "image/png";
+    if (header[0] === 0xff && header[1] === 0xd8 && header[2] === 0xff) return "image/jpeg";
+    if (header.subarray(0, 6).toString("ascii") === "GIF87a" || header.subarray(0, 6).toString("ascii") === "GIF89a") return "image/gif";
+    if (header.subarray(0, 2).toString("ascii") === "BM") return "image/bmp";
+    if (header.subarray(0, 4).toString("ascii") === "RIFF" && header.subarray(8, 12).toString("ascii") === "WEBP") return "image/webp";
+    return undefined;
+  } finally {
+    await handle.close();
+  }
+}
+
+function termuxReadOperations(state: AgentSessionState): ReadOperations {
+  return {
+    access: async (absolutePath) => {
+      if (nodeTemporaryOutputPath(absolutePath)) {
+        await fs.access(absolutePath);
+        return;
+      }
+      await requestRuntimeOperation(state, "access", { path: absolutePath, mode: "read" });
+    },
+    readFile: async (absolutePath) => {
+      if (nodeTemporaryOutputPath(absolutePath)) return fs.readFile(absolutePath);
+      const chunks: Buffer[] = [];
+      const result = await requestRuntimeOperation(
+        state,
+        "readFile",
+        { path: absolutePath },
+        { onChunk: (chunk) => chunks.push(chunk) },
+      );
+      return chunks.length > 0
+        ? Buffer.concat(chunks)
+        : Buffer.from(asString(result.data_base64), "base64");
+    },
+    detectImageMimeType: async (absolutePath) => {
+      if (nodeTemporaryOutputPath(absolutePath)) return undefined;
+      const result = await requestRuntimeOperation(state, "detectMime", { path: absolutePath });
+      return asString(result.mime_type).trim() || undefined;
+    },
+  };
+}
+
+function termuxEditOperations(state: AgentSessionState): EditOperations {
+  const read = termuxReadOperations(state);
+  return {
+    access: read.access,
+    readFile: read.readFile,
+    writeFile: async (absolutePath, content) => {
+      await requestRuntimeOperation(
+        state,
+        "writeFile",
+        { path: absolutePath, atomic: true },
+        { input: Buffer.from(content, "utf8") },
+      );
+    },
+  };
+}
+
+function termuxWriteOperations(state: AgentSessionState): WriteOperations {
+  return {
+    mkdir: async (directory) => {
+      await requestRuntimeOperation(state, "mkdir", { path: directory, recursive: true });
+    },
+    writeFile: async (absolutePath, content) => {
+      await requestRuntimeOperation(
+        state,
+        "writeFile",
+        { path: absolutePath, atomic: true },
+        { input: Buffer.from(content, "utf8") },
+      );
+    },
+  };
+}
+
+function termuxBashOperations(state: AgentSessionState): BashOperations {
+  return {
+    exec: async (command, cwd, options) => {
+      const result = await requestRuntimeOperation(
+        state,
+        "bash",
+        {
+          command,
+          cwd,
+          timeout_seconds: options.timeout,
+          env: options.env ?? {},
+        },
+        { signal: options.signal, onChunk: options.onData },
+      );
+      const exitCode = result.exit_code;
+      return { exitCode: typeof exitCode === "number" ? exitCode : null };
+    },
+  };
+}
+
+function dynamicReadOperations(state: AgentSessionState): ReadOperations {
+  return {
+    access: async (absolutePath) => {
+      const resolved = runtimePath(state, absolutePath);
+      if (state.runtime === "termux" && !nodeTemporaryOutputPath(resolved)) {
+        await termuxReadOperations(state).access(resolved);
+      } else {
+        await fs.access(resolved);
+      }
+    },
+    readFile: async (absolutePath) => {
+      const resolved = runtimePath(state, absolutePath);
+      return state.runtime === "termux" && !nodeTemporaryOutputPath(resolved)
+        ? termuxReadOperations(state).readFile(resolved)
+        : fs.readFile(resolved);
+    },
+    detectImageMimeType: async (absolutePath) => {
+      const resolved = runtimePath(state, absolutePath);
+      return state.runtime === "termux" && !nodeTemporaryOutputPath(resolved)
+        ? termuxReadOperations(state).detectImageMimeType?.(resolved)
+        : detectLocalImageMimeType(resolved);
+    },
+  };
+}
+
+function dynamicEditOperations(state: AgentSessionState): EditOperations {
+  const read = dynamicReadOperations(state);
+  return {
+    access: read.access,
+    readFile: read.readFile,
+    writeFile: async (absolutePath, content) => {
+      const resolved = runtimePath(state, absolutePath);
+      if (state.runtime === "termux") {
+        await termuxEditOperations(state).writeFile(resolved, content);
+      } else {
+        await fs.writeFile(resolved, content, "utf8");
+      }
+    },
+  };
+}
+
+function dynamicWriteOperations(state: AgentSessionState): WriteOperations {
+  return {
+    mkdir: async (directory) => {
+      const resolved = runtimePath(state, directory);
+      if (state.runtime === "termux") {
+        await termuxWriteOperations(state).mkdir(resolved);
+      } else {
+        await fs.mkdir(resolved, { recursive: true });
+      }
+    },
+    writeFile: async (absolutePath, content) => {
+      const resolved = runtimePath(state, absolutePath);
+      if (state.runtime === "termux") {
+        await termuxWriteOperations(state).writeFile(resolved, content);
+      } else {
+        await fs.writeFile(resolved, content, "utf8");
+      }
+    },
+  };
+}
+
+function dynamicBashOperations(state: AgentSessionState): BashOperations {
+  const local = createLocalBashOperations();
+  return {
+    exec: (command, cwd, options) => state.runtime === "termux"
+      ? termuxBashOperations(state).exec(command, runtimePath(state, cwd), options)
+      : local.exec(command, cwd, options),
+  };
+}
+
+function nativeToolDefinitions(state: AgentSessionState): ToolDefinition<any, any, any>[] {
+  const cwd = state.workspaceDirectory;
+  return [
+    createReadToolDefinition(cwd, { operations: dynamicReadOperations(state) }),
+    createBashToolDefinition(cwd, { operations: dynamicBashOperations(state) }),
+    createEditToolDefinition(cwd, { operations: dynamicEditOperations(state) }),
+    createWriteToolDefinition(cwd, { operations: dynamicWriteOperations(state) }),
+    createGrepToolDefinition(cwd),
+    createFindToolDefinition(cwd),
+    createLsToolDefinition(cwd),
+  ];
+}
+
+function applyRuntimeToolResult(payload: JsonObject): void {
+  if (asString(payload.tool_name) !== "aether_runtime_manage" || asBoolean(payload.is_error, false)) return;
+  const sessionId = asString(payload.session_id).trim();
+  const state = agentSessions.get(sessionId);
+  if (!state) return;
+  const raw = asString(payload.raw_output_json, asString(payload.output_json));
+  let result: JsonObject;
+  try {
+    result = asObject(JSON.parse(raw));
+  } catch {
+    return;
+  }
+  if (!asBoolean(result.ok, false) || asString(result.action) !== "set") return;
+  const runtime = asString(result.runtime).trim();
+  if (runtime !== "alpine" && runtime !== "termux") return;
+  state.runtime = runtime;
+  state.session.sessionManager.appendCustomEntry("aether_runtime", {
+    runtime,
+    cwd: runtime === "termux" ? state.termuxWorkspaceDirectory : state.workspaceDirectory,
+  });
+  setActiveSessionTools(state);
+}
+
+function sessionSettings(payload: JsonObject, config: ModelConfig): SettingsManager {
+  return SettingsManager.inMemory({
+    defaultProvider: config.pi_provider_id,
+    defaultModel: config.model_id,
+    defaultThinkingLevel: thinkingLevelFor(payload) ?? "off",
+    enableSkillCommands: true,
+    compaction: { enabled: true },
+    retry: {
+      enabled: true,
+      maxRetries: Math.max(0, asNumber(payload.max_retries, config.max_retries ?? DEFAULT_AGENT_RETRY_MAX_RETRIES)),
+      provider: {
+        timeoutMs: asNumber(payload.timeout_ms, config.timeout_ms ?? 360000),
+        maxRetries: 0,
+        maxRetryDelayMs: asNumber(payload.max_retry_delay_ms, config.max_retry_delay_ms ?? 60000),
+      },
+    },
+    images: { autoResize: true, blockImages: false },
+  }, { projectTrusted: asBoolean(payload.workspace_trusted, false) });
+}
+
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
+    : [];
+}
+
+async function createSessionManager(
+  sessionId: string,
+  cwd: string,
+  payload: JsonObject,
+): Promise<{ manager: SessionManager; existed: boolean }> {
+  const explicitFile = asString(payload.session_file).trim();
+  if (explicitFile) return { manager: SessionManager.open(explicitFile, undefined, cwd), existed: true };
+  const sessionDirectory = asString(
+    payload.session_directory,
+    path.join(os.homedir(), ".aether", "agent-sessions"),
+  );
+  await fs.mkdir(sessionDirectory, { recursive: true });
+  const suffix = `_${sessionId}.jsonl`;
+  const existing = (await fs.readdir(sessionDirectory))
+    .filter((entry) => entry.endsWith(suffix))
+    .sort()
+    .at(-1);
+  if (existing) {
+    return {
+      manager: SessionManager.open(path.join(sessionDirectory, existing), sessionDirectory, cwd),
+      existed: true,
+    };
+  }
+  return {
+    manager: SessionManager.create(cwd, sessionDirectory, { id: sessionId }),
+    existed: false,
+  };
+}
+
+function extensionUiContext(): ExtensionUIContext {
+  const unsupported = async () => undefined;
+  return {
+    select: async (title: string, options: string[]) => {
+      const result = await requestAetherHost("pi_extension_select", { title, options });
+      return asString(result.value).trim() || undefined;
+    },
+    confirm: async (title: string, message: string) => {
+      const result = await requestAetherHost("pi_extension_confirm", { title, message });
+      return asBoolean(result.value, false);
+    },
+    input: async (title: string, placeholder?: string) => {
+      const result = await requestAetherHost("pi_extension_input", { title, placeholder: placeholder ?? "" });
+      return asString(result.value) || undefined;
+    },
+    notify: (message: string, type?: "info" | "warning" | "error") => {
+      void requestAetherHost("pi_extension_notify", { message, type: type ?? "info" });
+    },
+    onTerminalInput: () => () => undefined,
+    setStatus: () => undefined,
+    setWorkingMessage: () => undefined,
+    setWorkingVisible: () => undefined,
+    setWorkingIndicator: () => undefined,
+    setHiddenThinkingLabel: () => undefined,
+    setWidget: () => undefined,
+    setFooter: () => undefined,
+    setHeader: () => undefined,
+    setTitle: () => undefined,
+    custom: unsupported,
+    setEditorText: () => undefined,
+    getEditorText: () => "",
+    editor: () => undefined,
+    setEditorComponent: () => undefined,
+    getTheme: () => undefined,
+    getAllThemes: () => [],
+    setTheme: () => ({ success: false, error: "Pi TUI components are unavailable in Aether." }),
+    getToolsExpanded: () => false,
+    setToolsExpanded: () => undefined,
+  } as unknown as ExtensionUIContext;
+}
+
+const aetherChromeExtensionFactory: ExtensionFactory = (pi) => {
+  pi.registerTool({
+    name: "browser",
+    label: "Browser",
+    description: "Control Aether's Chromium browser. Prefer CSS selectors and DOM-reading actions; use normalized coordinates only as a fallback.",
+    promptSnippet: "control the optional browser",
+    executionMode: "sequential",
+    parameters: Type.Object({
+      action: Type.Union([
+        Type.Literal("start"), Type.Literal("status"), Type.Literal("navigate"), Type.Literal("click"),
+        Type.Literal("type"), Type.Literal("get_text"), Type.Literal("scroll"), Type.Literal("get_page_info"),
+        Type.Literal("execute_js"), Type.Literal("find_elements"), Type.Literal("get_readable"),
+        Type.Literal("get_backbone"), Type.Literal("back"), Type.Literal("forward"), Type.Literal("reload"),
+        Type.Literal("screenshot"), Type.Literal("wait_for_dom_stable"), Type.Literal("stop"),
+      ]),
+      url: Type.Optional(Type.String({ description: "For navigate: the URL to open." })),
+      selector: Type.Optional(Type.String({ description: "CSS selector for click, type, get_text, scroll, or find_elements." })),
+      text: Type.Optional(Type.String({ description: "For type: text to enter." })),
+      x: Type.Optional(Type.Integer({ description: "For click fallback: normalized X coordinate from 0 to 1000." })),
+      y: Type.Optional(Type.Integer({ description: "For click fallback: normalized Y coordinate from 0 to 1000." })),
+      direction: Type.Optional(Type.Union([Type.Literal("up"), Type.Literal("down")])),
+      amount: Type.Optional(Type.Integer({ description: "Scroll distance in CSS pixels." })),
+      script: Type.Optional(Type.String({ description: "JavaScript source for execute_js." })),
+      max_depth: Type.Optional(Type.Integer({ description: "Maximum DOM depth for get_backbone." })),
+      timeout: Type.Optional(Type.Integer({ description: "Maximum wait in milliseconds for wait_for_dom_stable." })),
+    }),
+    execute: async (_toolCallId, params, signal) => {
+      if (signal?.aborted) throw new Error("Browser operation was cancelled.");
+      const result = await requestAetherHost("aether_chrome_execute", { arguments: params as JsonObject });
+      const screenshot = asString(result.screenshot_base64).trim();
+      const visible = { ...result };
+      delete visible.screenshot_base64;
+      const content: Array<TextContent | ImageContent> = [{
+        type: "text",
+        text: asString(visible.stdout, JSON.stringify(visible)),
+      }];
+      if (screenshot) {
+        content.push({
+          type: "image",
+          mimeType: asString(result.screenshot_mime_type, "image/jpeg"),
+          data: screenshot,
+        });
+      }
+      return { content, details: visible };
+    },
+  });
+};
+
+function setActiveSessionTools(state: AgentSessionState): void {
+  const nativeNames = new Set(["read", "bash", "edit", "write", "grep", "find", "ls"]);
+  const nonNative = state.session.getActiveToolNames()
+    .filter((name) => !nativeNames.has(name))
+    .filter((name) => name !== "browser" || state.chromeEnabled || state.platform === "ios");
+  state.session.setActiveToolsByName([...activeNativeToolNames(state.runtime), ...nonNative]);
+}
+
+function emitAgentSessionEvent(state: AgentSessionState, event: AgentSessionEvent): void {
+  const requestId = state.currentRequestId;
+  if (!requestId) {
+    if (event.type !== "message_update") {
+      bridgeDebug("agent_session_event_without_request", {
+        event_type: event.type,
+        session_id: state.sessionId,
+      });
+    }
+    return;
+  }
+  switch (event.type) {
+    case "message_update":
+      if (event.message.role === "assistant" &&
+          (event.assistantMessageEvent.type === "text_delta" || event.assistantMessageEvent.type === "thinking_delta")) {
+        if (state.firstAssistantEventAtMillis === undefined) {
+          state.firstAssistantEventAtMillis = Date.now();
+          bridgeDebug("first_assistant_delta", {
+            session_id: state.sessionId,
+            delta_type: event.assistantMessageEvent.type,
+            elapsed_since_turn_start_ms: state.turnStartedAtMillis
+              ? state.firstAssistantEventAtMillis - state.turnStartedAtMillis
+              : undefined,
+          });
+        }
+        emitStreamEvent(requestId, event.assistantMessageEvent);
+      }
+      return;
+    case "tool_execution_start":
+      state.toolArgsById.set(event.toolCallId, event.args);
+      writeEvent(requestId, "tool_call_start", toolEventPayload(event.toolCallId, event.toolName, event.args));
+      return;
+    case "tool_execution_update":
+      writeEvent(requestId, "tool_call_delta", toolEventPayload(event.toolCallId, event.toolName, event.args, event.partialResult));
+      return;
+    case "tool_execution_end":
+      writeEvent(requestId, "tool_call_end", toolEventPayload(
+        event.toolCallId,
+        event.toolName,
+        state.toolArgsById.get(event.toolCallId) ?? {},
+        event.result,
+        event.isError,
+      ));
+      state.toolArgsById.delete(event.toolCallId);
+      return;
+    case "auto_retry_start":
+      writeEvent(requestId, "assistant_stream_reset", {});
+      writeEvent(requestId, "assistant_retry", {
+        attempt: event.attempt,
+        max_attempts: event.maxAttempts,
+        delay_ms: event.delayMs,
+        error_message: event.errorMessage,
+      });
+      return;
+    case "compaction_start":
+      writeEvent(requestId, "compaction_start", { reason: event.reason });
+      return;
+    case "compaction_end":
+      writeEvent(requestId, "compaction_end", {
+        reason: event.reason,
+        aborted: event.aborted,
+        will_retry: event.willRetry,
+        error_message: event.errorMessage ?? "",
+      });
+      return;
+    case "entry_appended":
+      writeEvent(requestId, "session_entry_appended", { entry: event.entry });
+      return;
+    case "agent_settled":
+      if (state.pendingReload) {
+        state.pendingReload = false;
+        void state.session.reload().catch((error) => {
+          stderr.write(`pi session reload failed: ${errorMessageWithCause(error)}\n`);
+        });
+      }
+      return;
+    default:
+      return;
+  }
+}
+
+async function createNativeAgentSession(
+  sessionId: string,
+  payload: JsonObject,
+  config: ModelConfig,
+  history: AgentMessage[],
+): Promise<AgentSessionState> {
+  const workspaceDirectory = asString(payload.workspace_directory, process.cwd()) || process.cwd();
+  const termuxWorkspaceDirectory = asString(payload.termux_workspace_directory, workspaceDirectory) || workspaceDirectory;
+  let runtime = runtimeForPayload(payload);
+  const platform = platformForPayload(payload);
+  const built = await buildModelRuntime(config);
+  const settingsManager = sessionSettings(payload, config);
+  const agentDir = asString(payload.agent_directory, path.join(os.homedir(), ".pi", "agent"));
+  const disabledPaths = stringArray(payload.disabled_extension_paths).map((entry) => path.resolve(entry));
+  const configuredExtensionPaths = stringArray(payload.extension_paths);
+  const additionalExtensionPaths = discoverAetherExtensionPaths(workspaceDirectory, configuredExtensionPaths)
+    .filter((candidate) => !disabledPaths.some((disabled) => {
+      const relative = path.relative(disabled, candidate);
+      return relative === "" || (!relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+    }));
+  // Extension files are part of the session's tool registry. Include the
+  // resolved set in the reuse key so installing/enabling a package cannot
+  // leave an existing session with a stale tool list.
+  const packageExtensionPaths = await discoverPackageExtensionPaths(
+    workspaceDirectory,
+    new Set(stringArray(payload.disabled_package_sources)),
+  );
+  const extensionSignature = JSON.stringify(
+    [...new Set([...additionalExtensionPaths, ...packageExtensionPaths])].sort(),
+  );
+  const resourceLoader = new DefaultResourceLoader({
+    cwd: workspaceDirectory,
+    agentDir,
+    settingsManager,
+    additionalExtensionPaths,
+    extensionFactories: platform === "android" ? [aetherChromeExtensionFactory] : [],
+    additionalSkillPaths: stringArray(payload.skill_paths),
+    appendSystemPrompt: [asString(payload.system_prompt)].filter(Boolean),
+  });
+  await resourceLoader.reload({
+    resolveProjectTrust: async () => asBoolean(payload.workspace_trusted, false),
+  });
+  const { manager, existed } = await createSessionManager(sessionId, workspaceDirectory, payload);
+  if (!existed) history.forEach((message) => manager.appendMessage(message as never));
+  if (existed) {
+    const runtimeEntry = manager.getEntries().findLast((entry) =>
+      entry.type === "custom" && entry.customType === "aether_runtime"
+    );
+    if (runtimeEntry?.type === "custom") {
+      const persistedRuntime = asString(asObject(runtimeEntry.data).runtime);
+      if (persistedRuntime === "alpine" || persistedRuntime === "termux") runtime = persistedRuntime;
+    }
+  }
+  const state = {
+    sessionId,
+    configSignature: modelConfigSignature(config),
+    toolSignature: hostToolSignature(allowedHostToolDefinitions(payload.host_tools, platform)),
+    extensionSignature,
+    skillSignature: JSON.stringify(stringArray(payload.skill_paths).sort()),
+    workspaceDirectory,
+    termuxWorkspaceDirectory,
+    runtime,
+    platform,
+    chromeEnabled: platform === "android" && asBoolean(payload.chrome_enabled, false),
+    modelRuntime: built.modelRuntime,
+    model: built.model,
+    credentialStore: built.credentialStore,
+    session: undefined as unknown as AgentSession,
+    resourceLoader,
+    settingsManager,
+    configuredExtensionPaths,
+    pendingReload: false,
+    currentRequestId: "",
+    toolArgsById: new Map<string, unknown>(),
+    lastAccessedAt: Date.now(),
+  } satisfies AgentSessionState;
+  const customTools = [
+    ...nativeToolDefinitions(state),
+    ...allowedHostToolDefinitions(payload.host_tools, platform).map((tool) =>
+      createAgentHostToolDefinition(state, tool),
+    ),
+  ];
+  const created = await createAgentSession({
+    cwd: workspaceDirectory,
+    agentDir,
+    modelRuntime: built.modelRuntime,
+    model: built.model,
+    thinkingLevel: thinkingLevelFor(payload),
+    resourceLoader,
+    settingsManager,
+    sessionManager: manager,
+    noTools: "builtin",
+    customTools,
+  });
+  state.session = created.session;
+  state.session.subscribe((event) => emitAgentSessionEvent(state, event));
+  await state.session.bindExtensions({
+    uiContext: extensionUiContext(),
+    mode: "rpc",
+    onError: (error) => {
+      if (state.currentRequestId) {
+        writeEvent(state.currentRequestId, "extension_error", {
+          extension_path: error.extensionPath,
+          event: error.event,
+          error: error.error,
+        });
+      }
+    },
+  });
+  setActiveSessionTools(state);
+  agentSessions.set(sessionId, state);
+  return state;
+}
+
+async function listDiscoveredSkills(payload: JsonObject): Promise<JsonObject> {
+  const workspaceDirectory = asString(payload.workspace_directory, process.cwd()) || process.cwd();
+  const agentDir = asString(payload.agent_directory, path.join(os.homedir(), ".pi", "agent"));
+  const settingsManager = SettingsManager.create(workspaceDirectory, agentDir, {
+    projectTrusted: asBoolean(payload.workspace_trusted, true),
+  });
+  const resourceLoader = new DefaultResourceLoader({
+    cwd: workspaceDirectory,
+    agentDir,
+    settingsManager,
+    additionalSkillPaths: stringArray(payload.skill_paths),
+    noExtensions: true,
+    noPromptTemplates: true,
+    noThemes: true,
+    noContextFiles: true,
+  });
+  await resourceLoader.reload({
+    resolveProjectTrust: async () => asBoolean(payload.workspace_trusted, true),
+  });
+  const managedRoot = path.resolve(workspaceDirectory, ".aether", "skills");
+  const skills = resourceLoader.getSkills().skills
+    .filter((skill) => {
+      const relative = path.relative(managedRoot, path.resolve(skill.filePath));
+      return skill.sourceInfo.origin !== "package" &&
+        relative !== "" &&
+        (relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative));
+    })
+    .map((skill) => ({
+      name: skill.name,
+      description: skill.description,
+      file_path: skill.filePath,
+      base_dir: skill.baseDir,
+      source: skill.sourceInfo.source,
+      scope: skill.sourceInfo.scope,
+      origin: skill.sourceInfo.origin,
+    }));
+  return { skills };
+}
+
+function rejectPendingHostToolsForAgentSession(sessionId: string, message: string): void {
   for (const [toolRequestId, pending] of pendingHostToolRequests) {
     if (pending.sessionId !== sessionId) continue;
     pending.reject(new Error(message));
@@ -1891,209 +2292,11 @@ function rejectPendingHostToolsForSession(sessionId: string, message: string): v
   }
 }
 
-async function closeHarnessSession(
-  sessionId: string,
-  expectedState?: HarnessSessionState,
-): Promise<boolean> {
-  const state = harnessSessions.get(sessionId);
-  if (!state || (expectedState && state !== expectedState)) return false;
-  harnessSessions.delete(sessionId);
-  rejectPendingHostToolsForSession(sessionId, "Host tool execution ended with the Pi session.");
-  await disposeExtensionRuntime(state, "quit");
-  state.pendingExtensionRuntime?.runner.invalidate("Pi session closed before reload completed.");
-  await state.harness.abort().catch((error) => {
-    stderr.write(
-      `pi-bridge session close failed: ${error instanceof Error ? error.message : String(error)}\n`,
-    );
-  });
-  return true;
-}
-
-async function pruneHarnessSessions(protectedSessionId = ""): Promise<void> {
-  const now = Date.now();
-  const expired = [...harnessSessions.values()]
-    .filter(
-      (state) =>
-        state.sessionId !== protectedSessionId &&
-        !state.currentRequestId &&
-        now - state.lastAccessedAt >= harnessSessionTtlMs,
-    )
-    .sort((left, right) => left.lastAccessedAt - right.lastAccessedAt);
-  for (const state of expired) {
-    await closeHarnessSession(state.sessionId, state);
-  }
-
-  while (harnessSessions.size > harnessSessionLimit) {
-    const candidate = [...harnessSessions.values()]
-      .filter((state) => state.sessionId !== protectedSessionId && !state.currentRequestId)
-      .sort((left, right) => left.lastAccessedAt - right.lastAccessedAt)[0];
-    if (!candidate) return;
-    await closeHarnessSession(candidate.sessionId, candidate);
-  }
-}
-
-async function createHarnessSession(
-  sessionId: string,
-  payload: JsonObject,
-  config: ModelConfig,
-  history: AgentMessage[],
-): Promise<HarnessSessionState> {
-  const { models, model, credentialStore } = buildModels(config);
-  const workspaceDirectory = asString(payload.workspace_directory, process.cwd()) || process.cwd();
-  const sessionRepo = new InMemorySessionRepo();
-  const session = await sessionRepo.create({ id: sessionId });
-  for (const message of history) {
-    await session.appendMessage(message);
-  }
-  const extensionRuntime = await loadAetherExtensions(
-    workspaceDirectory,
-    Array.isArray(payload.extension_paths)
-      ? payload.extension_paths.filter((value): value is string => typeof value === "string")
-      : [],
-    extensionLoadOptionsFromPayload(payload),
-  );
-  const configuredExtensionPaths = Array.isArray(payload.extension_paths)
-    ? payload.extension_paths.filter((value): value is string => typeof value === "string")
-    : [];
-  for (const message of history) {
-    extensionRuntime.sessionManager.appendMessage(message as never);
-  }
-  const state: HarnessSessionState = {
-    sessionId,
-    configSignature: modelConfigSignature(config),
-    toolSignature: hostToolSignature(payload.host_tools),
-    workspaceDirectory,
-    models,
-    model,
-    credentialStore,
-    session,
-    harness: undefined as unknown as AgentHarness,
-    hostTools: [],
-    extensionRuntime,
-    configuredExtensionPaths,
-    extensionUnsubscribers: [],
-    pendingToolRefresh: false,
-    pendingActiveToolNames: undefined,
-    currentSignal: undefined,
-    systemPrompt: asString(payload.system_prompt),
-    currentRequestId: "",
-    toolArgsById: new Map<string, unknown>(),
-    lastAccessedAt: Date.now(),
-  };
-  state.hostTools = normalizeHostToolDefinitions(payload.host_tools).map((tool) =>
-    createHostTool(state, tool),
-  );
-  const tools = [
-    ...state.hostTools,
-    ...extensionTools(extensionRuntime),
-  ].reduce((toolMap, tool) => toolMap.set(tool.name, tool), new Map<string, AgentTool>());
-  const harness = new AgentHarness({
-    models,
-    session,
-    model,
-    systemPrompt: () => state.systemPrompt,
-    tools: [...tools.values()],
-    thinkingLevel: thinkingLevelFor(payload),
-    streamOptions: harnessStreamOptions(payload, config),
-  });
-  state.harness = harness;
-  harness.subscribe((event) => emitHarnessEvent(state, event));
-  harness.on("tool_result", (event) => {
-    const details = asObject(event.details);
-    if (asBoolean(details.is_error, false)) return { isError: true };
-    return undefined;
-  });
-  bindExtensionCore(state);
-  installExtensionHooks(state);
-  harness.subscribe(async (event) => {
-    if (event.type === "settled") await applyPendingExtensionChanges(state);
-  });
-  await extensionRuntime.runner.emit({ type: "session_start", reason: "startup" });
-  harnessSessions.set(sessionId, state);
-  return state;
-}
-
-async function prepareHarnessSession(
-  payload: JsonObject,
-  history: AgentMessage[],
-): Promise<{ state: HarnessSessionState; reused: boolean }> {
-  await pruneHarnessSessions();
-  const config = normalizeModelConfig(payload.model_config ?? defaultModelConfig);
-  const sessionId = asString(payload.session_id).trim();
-  if (!sessionId) throw new Error("session_id is required for Pi harness sessions.");
-  const workspaceDirectory = asString(payload.workspace_directory, process.cwd()) || process.cwd();
-  const toolSignature = hostToolSignature(payload.host_tools);
-  const existing = harnessSessions.get(sessionId);
-  const reused = existing
-    ? await canReuseHarnessSession(existing, config, toolSignature, workspaceDirectory, history)
-    : false;
-  if (!existing || !reused) {
-    if (existing) await closeHarnessSession(sessionId, existing);
-    const state = await createHarnessSession(sessionId, payload, config, history);
-    await pruneHarnessSessions(sessionId);
-    return {
-      state,
-      reused: false,
-    };
-  }
-
-  const reusable = existing;
-  reusable.lastAccessedAt = Date.now();
-  reusable.systemPrompt = asString(payload.system_prompt);
-  reusable.configuredExtensionPaths = Array.isArray(payload.extension_paths)
-    ? payload.extension_paths.filter((value): value is string => typeof value === "string")
-    : [];
-  await reusable.harness.setThinkingLevel(thinkingLevelFor(payload) ?? "off");
-  await reusable.harness.setStreamOptions(harnessStreamOptions(payload, config));
-  reusable.hostTools = normalizeHostToolDefinitions(payload.host_tools).map((tool) =>
-    createHostTool(reusable, tool),
-  );
-  await refreshSessionTools(reusable);
-  return { state: reusable, reused: true };
-}
-
-async function runHarnessPrompt(
-  id: string,
-  state: HarnessSessionState,
-  text: string,
-  images: ImageContent[],
-): Promise<AssistantMessage> {
-  state.lastAccessedAt = Date.now();
-  state.currentRequestId = id;
-  activeAborters.set(id, () => state.harness.abort());
-  try {
-    const message = await state.harness.prompt(text, images.length > 0 ? { images } : undefined);
-    await state.harness.waitForIdle();
-    return message;
-  } finally {
-    activeAborters.delete(id);
-    if (state.currentRequestId === id) state.currentRequestId = "";
-    state.lastAccessedAt = Date.now();
-  }
-}
-
-async function runHarnessTurn(id: string, payload: JsonObject): Promise<JsonObject> {
-  const messages = normalizeMessages(payload.messages);
-  const prompt = promptFromLastUserMessage(messages);
-  const { state, reused } = await prepareHarnessSession(payload, prompt.history);
-  const message = await runHarnessPrompt(id, state, prompt.text, prompt.images);
-  return {
-    ...assistantPayload(message),
-    ...(await credentialPayload(state.credentialStore)),
-    session_id: state.sessionId,
-    session_reused: reused,
-  };
-}
-
-function bridgePrompt(rawMessage: unknown): { text: string; images: ImageContent[] } {
+function nativeBridgePrompt(rawMessage: unknown): { text: string; images: ImageContent[] } {
   const messages = normalizeMessages([rawMessage]);
   const message = messages[0];
-  if (!message || message.role !== "user") {
-    throw new Error("A user message is required.");
-  }
-  if (typeof message.content === "string") {
-    return { text: message.content, images: [] };
-  }
+  if (!message || message.role !== "user") throw new Error("A user message is required.");
+  if (typeof message.content === "string") return { text: message.content, images: [] };
   return {
     text: message.content
       .filter((part): part is TextContent => part.type === "text")
@@ -2103,47 +2306,257 @@ function bridgePrompt(rawMessage: unknown): { text: string; images: ImageContent
   };
 }
 
-async function lastSessionAssistant(state: HarnessSessionState): Promise<AssistantMessage> {
-  const context = await state.session.buildContext();
-  const message = latestAssistantMessage(context.messages);
-  if (!message) throw new Error(`Pi session ${state.sessionId} has no assistant response.`);
-  return message;
-}
-
-async function steerHarnessSession(payload: JsonObject): Promise<JsonObject> {
-  await pruneHarnessSessions();
-  const sessionId = asString(payload.session_id).trim();
-  const state = harnessSessions.get(sessionId);
-  if (!state || !state.currentRequestId) return { accepted: false };
-  state.lastAccessedAt = Date.now();
-  const prompt = bridgePrompt(payload.message);
-  try {
-    await state.harness.steer(prompt.text, prompt.images.length > 0 ? { images: prompt.images } : undefined);
-    return { accepted: true };
-  } catch {
-    return { accepted: false };
+async function closeNativeAgentSession(sessionId: string): Promise<boolean> {
+  const state = agentSessions.get(sessionId);
+  if (!state) return false;
+  agentSessions.delete(sessionId);
+  rejectPendingHostToolsForAgentSession(sessionId, "Host tool execution ended with the Pi session.");
+  for (const [operationId, pending] of pendingRuntimeOperations) {
+    if (pending.sessionId !== sessionId) continue;
+    pending.reject(new Error("Runtime operation ended with the Pi session."));
+    pendingRuntimeOperations.delete(operationId);
   }
+  await state.session.abort().catch(() => undefined);
+  state.session.dispose();
+  return true;
 }
 
-async function followUpHarnessSession(id: string, payload: JsonObject): Promise<JsonObject> {
-  await pruneHarnessSessions();
+function nativeSessionFromPayload(payload: JsonObject): AgentSessionState {
   const sessionId = asString(payload.session_id).trim();
-  const state = harnessSessions.get(sessionId);
+  if (!sessionId) throw new Error("session_id is required for Pi AgentSession operations.");
+  const state = agentSessions.get(sessionId);
   if (!state) throw new Error(`Unknown Pi session: ${sessionId}`);
-  state.lastAccessedAt = Date.now();
-  const prompt = bridgePrompt(payload.message);
-  if (state.currentRequestId) {
-    await state.harness.followUp(prompt.text, prompt.images.length > 0 ? { images: prompt.images } : undefined);
-    await state.harness.waitForIdle();
-    return {
-      ...assistantPayload(await lastSessionAssistant(state)),
-      ...(await credentialPayload(state.credentialStore)),
-    };
-  }
+  return state;
+}
+
+async function ensureNativeSessionForRequest(payload: JsonObject): Promise<AgentSessionState> {
+  const sessionId = asString(payload.session_id).trim();
+  if (!sessionId) throw new Error("session_id is required for Pi AgentSession operations.");
+  const existing = agentSessions.get(sessionId);
+  if (existing) return existing;
+  const config = normalizeModelConfig(payload.model_config ?? defaultModelConfig);
+  if (!config) throw new Error(`Unknown Pi session: ${sessionId}`);
+  return createNativeAgentSession(sessionId, payload, config, []);
+}
+
+function nativeSessionPayload(state: AgentSessionState): JsonObject {
   return {
-    ...assistantPayload(await runHarnessPrompt(id, state, prompt.text, prompt.images)),
-    ...(await credentialPayload(state.credentialStore)),
+    session_id: state.session.sessionId,
+    session_file: state.session.sessionFile ?? "",
+    session_leaf_id: state.session.sessionManager.getLeafId() ?? "",
+    runtime: state.runtime,
+    cwd: state.runtime === "termux" ? state.termuxWorkspaceDirectory : state.workspaceDirectory,
+    is_idle: state.session.isIdle,
+    is_streaming: state.session.isStreaming,
+    is_compacting: state.session.isCompacting,
+    active_tools: state.session.getActiveToolNames(),
+    tools: state.session.getAllTools().map((tool) => ({
+      name: tool.name,
+      description: tool.description,
+      parameters: tool.parameters,
+      prompt_guidelines: tool.promptGuidelines ?? [],
+      source_path: tool.sourceInfo.path,
+    })),
+    entries: state.session.sessionManager.getEntries(),
+    tree: state.session.sessionManager.getTree(),
   };
+}
+
+async function compactNativeAgentSession(id: string, payload: JsonObject): Promise<JsonObject> {
+  const state = await ensureNativeSessionForRequest(payload);
+  if (!state.session.isIdle) throw new Error("Cannot manually compact a busy Pi AgentSession.");
+  state.currentRequestId = id;
+  activeAborters.set(id, () => state.session.abortCompaction());
+  try {
+    const result = await state.session.compact(asString(payload.custom_instructions).trim() || undefined);
+    return { ...nativeSessionPayload(state), compaction: result as unknown as JsonObject };
+  } finally {
+    activeAborters.delete(id);
+    if (state.currentRequestId === id) state.currentRequestId = "";
+  }
+}
+
+async function navigateNativeAgentSession(id: string, payload: JsonObject): Promise<JsonObject> {
+  // The AgentSession map is process-local. Reopen the persisted JSONL session
+  // when the bridge was restarted, provided the caller supplies its model
+  // configuration (the normal Aether navigation path does).
+  const state = await ensureNativeSessionForRequest(payload);
+  if (!state.session.isIdle) throw new Error("Cannot navigate a busy Pi AgentSession.");
+  const entryId = asString(payload.entry_id).trim();
+  if (!entryId && asBoolean(payload.reset, false)) {
+    state.session.sessionManager.resetLeaf();
+    return { ...nativeSessionPayload(state), navigation: { reset: true } };
+  }
+  if (!entryId) throw new Error("entry_id is required for Pi session navigation.");
+  state.currentRequestId = id;
+  activeAborters.set(id, () => state.session.abortBranchSummary());
+  try {
+    const result = await state.session.navigateTree(entryId, {
+      summarize: asBoolean(payload.summarize, false),
+      customInstructions: asString(payload.custom_instructions).trim() || undefined,
+      replaceInstructions: asBoolean(payload.replace_instructions, false),
+      label: asString(payload.label).trim() || undefined,
+    });
+    return { ...nativeSessionPayload(state), navigation: result };
+  } finally {
+    activeAborters.delete(id);
+    if (state.currentRequestId === id) state.currentRequestId = "";
+  }
+}
+
+async function reloadNativeAgentSession(payload: JsonObject): Promise<JsonObject> {
+  const state = nativeSessionFromPayload(payload);
+  if (!state.session.isIdle) {
+    state.pendingReload = true;
+    return { ...nativeSessionPayload(state), reloaded: false, scheduled: true };
+  }
+  await state.session.reload();
+  return { ...nativeSessionPayload(state), reloaded: true, scheduled: false };
+}
+
+function exportNativeAgentSession(payload: JsonObject): JsonObject {
+  const state = nativeSessionFromPayload(payload);
+  const outputPath = asString(payload.output_path).trim() || undefined;
+  return {
+    ...nativeSessionPayload(state),
+    exported_path: state.session.exportToJsonl(outputPath),
+  };
+}
+
+async function importNativeAgentSession(payload: JsonObject): Promise<JsonObject> {
+  const sessionId = asString(payload.session_id).trim();
+  const jsonl = asString(payload.jsonl);
+  if (!sessionId || !jsonl.trim()) throw new Error("session_id and jsonl are required.");
+  const firstLine = jsonl.split(/\r?\n/, 1)[0] ?? "";
+  let header: JsonObject;
+  try {
+    header = JSON.parse(firstLine) as JsonObject;
+  } catch {
+    throw new Error("Pi JSONL header is invalid.");
+  }
+  if (header.type !== "session" || asString(header.id) !== sessionId) {
+    throw new Error("Pi JSONL header/session id mismatch.");
+  }
+  const sessionDirectory = asString(
+    payload.session_directory,
+    path.join(os.homedir(), ".aether", "agent-sessions"),
+  );
+  await fs.mkdir(sessionDirectory, { recursive: true });
+  const target = path.join(sessionDirectory, `${Date.now()}_${sessionId}.jsonl`);
+  const temporary = `${target}.tmp-${process.pid}`;
+  await fs.writeFile(temporary, jsonl.endsWith("\n") ? jsonl : `${jsonl}\n`, "utf8");
+  await fs.rename(temporary, target);
+  await closeNativeAgentSession(sessionId);
+  return { imported: true, session_id: sessionId, session_file: target };
+}
+
+async function prepareNativeAgentSession(
+  payload: JsonObject,
+  history: AgentMessage[],
+): Promise<{ state: AgentSessionState; reused: boolean }> {
+  const config = normalizeModelConfig(payload.model_config ?? defaultModelConfig);
+  const sessionId = asString(payload.session_id).trim();
+  if (!sessionId) throw new Error("session_id is required for Pi AgentSession.");
+  const platform = platformForPayload(payload);
+  const signature = hostToolSignature(allowedHostToolDefinitions(payload.host_tools, platform));
+  const disabledPaths = stringArray(payload.disabled_extension_paths).map((entry) => path.resolve(entry));
+  const configuredExtensionPaths = stringArray(payload.extension_paths);
+  const extensionPaths = discoverAetherExtensionPaths(
+    asString(payload.workspace_directory, process.cwd()) || process.cwd(),
+    configuredExtensionPaths,
+  ).filter((candidate) => !disabledPaths.some((disabled) => {
+    const relative = path.relative(disabled, candidate);
+    return relative === "" || (!relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+  }));
+  const packageExtensionPaths = await discoverPackageExtensionPaths(
+    asString(payload.workspace_directory, process.cwd()) || process.cwd(),
+    new Set(stringArray(payload.disabled_package_sources)),
+  );
+  const extensionSignature = JSON.stringify(
+    [...new Set([...extensionPaths, ...packageExtensionPaths])].sort(),
+  );
+  const skillSignature = JSON.stringify(stringArray(payload.skill_paths).sort());
+  const existing = agentSessions.get(sessionId);
+  const reusable = existing &&
+    existing.configSignature === modelConfigSignature(config) &&
+    existing.toolSignature === signature &&
+    existing.extensionSignature === extensionSignature &&
+    existing.skillSignature === skillSignature &&
+    existing.workspaceDirectory === asString(payload.workspace_directory, process.cwd()) &&
+    existing.runtime === runtimeForPayload(payload);
+  if (existing && !reusable) await closeNativeAgentSession(sessionId);
+  if (!reusable) {
+    return { state: await createNativeAgentSession(sessionId, payload, config, history), reused: false };
+  }
+  existing.lastAccessedAt = Date.now();
+  existing.chromeEnabled = platform === "android" && asBoolean(payload.chrome_enabled, false);
+  setActiveSessionTools(existing);
+  return { state: existing, reused: true };
+}
+
+async function runNativeAgentPrompt(
+  id: string,
+  state: AgentSessionState,
+  text: string,
+  images: ImageContent[],
+): Promise<AssistantMessage> {
+  state.currentRequestId = id;
+  state.lastAccessedAt = Date.now();
+  activeAborters.set(id, () => state.session.abort());
+  activeAetherOperationRequestIds.add(id);
+  try {
+    await aetherOperationContext.run(id, () =>
+      state.session.prompt(text, { images: images.length > 0 ? images : undefined }),
+    );
+    await state.session.waitForIdle();
+    const message = latestAssistantMessage(state.session.messages);
+    if (!message) throw new Error(`Pi session ${state.sessionId} has no assistant response.`);
+    return message;
+  } finally {
+    activeAborters.delete(id);
+    activeAetherOperationRequestIds.delete(id);
+    if (state.currentRequestId === id) state.currentRequestId = "";
+    state.lastAccessedAt = Date.now();
+  }
+}
+
+async function runNativeAgentTurn(id: string, payload: JsonObject): Promise<JsonObject> {
+  const messages = normalizeMessages(payload.messages);
+  const prompt = promptFromLastUserMessage(messages);
+  const { state, reused } = await prepareNativeAgentSession(payload, prompt.history);
+  const message = await runNativeAgentPrompt(id, state, prompt.text, prompt.images);
+  return {
+    ...assistantPayload(message),
+    ...(await credentialPayload(state.credentialStore)),
+    session_id: state.session.sessionId,
+    session_file: state.session.sessionFile ?? "",
+    session_leaf_id: state.session.sessionManager.getLeafId() ?? "",
+    runtime: state.runtime,
+    cwd: state.runtime === "termux" ? state.termuxWorkspaceDirectory : state.workspaceDirectory,
+    session_reused: reused,
+  };
+}
+
+async function steerNativeAgentSession(payload: JsonObject): Promise<JsonObject> {
+  const state = agentSessions.get(asString(payload.session_id).trim());
+  if (!state || !state.session.isStreaming) return { accepted: false };
+  const prompt = nativeBridgePrompt(payload.message);
+  await state.session.steer(prompt.text, prompt.images);
+  return { accepted: true };
+}
+
+async function followUpNativeAgentSession(id: string, payload: JsonObject): Promise<JsonObject> {
+  const state = agentSessions.get(asString(payload.session_id).trim());
+  if (!state) throw new Error(`Unknown Pi session: ${asString(payload.session_id)}`);
+  const prompt = nativeBridgePrompt(payload.message);
+  if (state.session.isStreaming) {
+    await state.session.followUp(prompt.text, prompt.images);
+    await state.session.waitForIdle();
+    const message = latestAssistantMessage(state.session.messages);
+    if (!message) throw new Error(`Pi session ${state.sessionId} has no assistant response.`);
+    return assistantPayload(message);
+  }
+  return assistantPayload(await runNativeAgentPrompt(id, state, prompt.text, prompt.images));
 }
 
 async function runSimpleCompletion(id: string, payload: JsonObject, stream: boolean): Promise<JsonObject> {
@@ -2240,7 +2653,7 @@ async function loginProvider(id: string, payload: JsonObject): Promise<JsonObjec
   const oauthFlow = asString(payload.oauth_flow).trim();
   const controller = new AbortController();
   activeAborters.set(id, () => controller.abort());
-  const callbacks: AuthInteraction = {
+  const callbacks = {
     signal: controller.signal,
     prompt: (prompt) => {
       if (providerId === "openai-codex" && oauthFlow && prompt.type === "select") {
@@ -2276,7 +2689,7 @@ async function loginProvider(id: string, payload: JsonObject): Promise<JsonObjec
           break;
       }
     },
-  };
+  } satisfies AuthInteraction;
   try {
     if (authMethod === "api_key") {
       const apiKey = provider.auth.apiKey;
@@ -2321,20 +2734,35 @@ async function clearProviderCredential(payload: JsonObject): Promise<JsonObject>
   return { cleared: await clearSharedCredential(providerConfigId) };
 }
 
-async function closeHarnessSessionRequest(payload: JsonObject): Promise<JsonObject> {
+async function closeAgentSessionRequest(payload: JsonObject): Promise<JsonObject> {
   const sessionId = asString(payload.session_id).trim();
-  if (!sessionId) throw new Error("session_id is required to close a Pi harness session.");
-  return { closed: await closeHarnessSession(sessionId) };
+  if (!sessionId) throw new Error("session_id is required to close a Pi AgentSession.");
+  const state = agentSessions.get(sessionId);
+  const sessionFile = state?.session.sessionFile ?? asString(payload.session_file).trim();
+  const closed = await closeNativeAgentSession(sessionId);
+  let deleted = false;
+  if (asBoolean(payload.delete_file, false) && sessionFile) {
+    const expectedSuffix = `_${sessionId}.jsonl`;
+    if (!path.basename(sessionFile).endsWith(expectedSuffix)) {
+      throw new Error("Refusing to delete a Pi session file that does not match the session id.");
+    }
+    deleted = await fs.unlink(sessionFile).then(() => true).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return false;
+      throw error;
+    });
+  }
+  return { closed, deleted, session_file: sessionFile };
 }
 
-function extensionRuntimePayload(state: HarnessSessionState): JsonObject {
-  const runner = state.extensionRuntime.runner;
+function extensionRuntimePayload(state: AgentSessionState): JsonObject {
+  const runner = state.session.extensionRunner;
+  const loaded = state.resourceLoader.getExtensions();
   return {
     session_id: state.sessionId,
     workspace_directory: state.workspaceDirectory,
     extension_paths: runner.getExtensionPaths(),
-    discovered_paths: state.extensionRuntime.paths,
-    errors: state.extensionRuntime.errors,
+    discovered_paths: loaded.extensions.map((extension) => extension.path),
+    errors: loaded.errors,
     tools: runner.getAllRegisteredTools().map((tool) => ({
       name: tool.definition.name,
       description: tool.definition.description,
@@ -2345,55 +2773,48 @@ function extensionRuntimePayload(state: HarnessSessionState): JsonObject {
       description: command.description ?? "",
       source_path: command.sourceInfo.path,
     })),
-    pending_reload: Boolean(state.pendingExtensionRuntime),
-    ui_mode: "print",
+    pending_reload: state.pendingReload,
+    ui_mode: "rpc",
     custom_tui_supported: false,
   };
 }
 
-function extensionSessionFromPayload(payload: JsonObject): HarnessSessionState {
+function extensionSessionFromPayload(payload: JsonObject): AgentSessionState {
   const sessionId = asString(payload.session_id).trim();
   if (!sessionId) throw new Error("session_id is required for Pi extension operations.");
-  const state = harnessSessions.get(sessionId);
+  const state = agentSessions.get(sessionId);
   if (!state) throw new Error(`Unknown Pi session: ${sessionId}`);
   return state;
 }
 
 async function listExtensions(payload: JsonObject): Promise<JsonObject> {
-  await pruneHarnessSessions();
   return extensionRuntimePayload(extensionSessionFromPayload(payload));
 }
 
 async function reloadExtensions(payload: JsonObject): Promise<JsonObject> {
-  await pruneHarnessSessions();
   const state = extensionSessionFromPayload(payload);
-  const configuredPaths = Array.isArray(payload.extension_paths)
-    ? payload.extension_paths.filter((value): value is string => typeof value === "string")
-    : [];
-  const result = await reloadExtensionsForState(
-    state,
-    configuredPaths,
-    extensionLoadOptionsFromPayload(payload),
-  );
+  const scheduled = !state.session.isIdle;
+  if (scheduled) state.pendingReload = true;
+  else await state.session.reload();
   return {
     ...extensionRuntimePayload(state),
-    ...result,
+    reloaded: !scheduled,
+    scheduled,
   };
 }
 
 async function invokeExtensionCommand(payload: JsonObject): Promise<JsonObject> {
-  await pruneHarnessSessions();
   const state = extensionSessionFromPayload(payload);
   const commandName = asString(payload.command).trim().replace(/^\//, "");
   if (!commandName) throw new Error("command is required for Pi extension command invocation.");
-  const command = state.extensionRuntime.runner.getCommand(commandName);
+  const command = state.session.extensionRunner.getCommand(commandName);
   if (!command) throw new Error(`Unknown Pi extension command: ${commandName}`);
-  const context = state.extensionRuntime.runner.createCommandContext() as ExtensionCommandContext;
+  const context = state.session.extensionRunner.createCommandContext() as ExtensionCommandContext;
   await command.handler(asString(payload.args), context);
   return {
     invoked: true,
     command: commandName,
-    pending_reload: Boolean(state.pendingExtensionRuntime),
+    pending_reload: state.pendingReload,
   };
 }
 
@@ -2421,17 +2842,17 @@ async function installedExtensionPackagesPayload(): Promise<JsonObject> {
 async function reloadAllExtensionSessions(
   payload: JsonObject = {},
 ): Promise<JsonObject> {
-  const loadOptions = extensionLoadOptionsFromPayload(payload);
+  const loadOptions = nativeExtensionLoadOptionsFromPayload(payload);
   const results: JsonObject[] = [];
-  for (const state of harnessSessions.values()) {
-    const result = await reloadExtensionsForState(
-      state,
-      state.configuredExtensionPaths,
-      loadOptions,
-    );
+  for (const state of agentSessions.values()) {
+    const scheduled = !state.session.isIdle;
+    if (scheduled) state.pendingReload = true;
+    else await state.session.reload();
     results.push({
       session_id: state.sessionId,
-      ...result,
+      reloaded: !scheduled,
+      scheduled,
+      errors: state.resourceLoader.getExtensions().errors,
     });
   }
   const aetherReload = await loadAetherAppExtensions(process.cwd(), loadOptions);
@@ -2445,6 +2866,21 @@ async function reloadAllExtensionSessions(
     aether_reload: aetherReload,
     aether: await aetherAppExtensionSnapshot(),
   };
+}
+
+function nativeExtensionLoadOptionsFromPayload(payload: JsonObject): {
+  disabledExtensionPaths: string[];
+  disabledPackageSources: string[];
+} {
+  const hasOptions = Object.prototype.hasOwnProperty.call(payload, "disabled_extension_paths") ||
+    Object.prototype.hasOwnProperty.call(payload, "disabled_package_sources");
+  if (hasOptions) {
+    currentExtensionLoadOptions = {
+      disabledExtensionPaths: stringArray(payload.disabled_extension_paths),
+      disabledPackageSources: stringArray(payload.disabled_package_sources),
+    };
+  }
+  return currentExtensionLoadOptions;
 }
 
 async function installExtensionPackage(payload: JsonObject): Promise<JsonObject> {
@@ -2465,9 +2901,6 @@ async function removeExtensionPackage(payload: JsonObject): Promise<JsonObject> 
     removed,
     source,
     ...(await installedExtensionPackagesPayload()),
-    reload: removed
-      ? await reloadAllExtensionSessions(payload)
-      : { session_count: 0, sessions: [] },
   };
 }
 
@@ -2489,7 +2922,7 @@ async function reloadAetherAppExtensionsRequest(
   return runAetherOperation(id, async () => {
     const result = await loadAetherAppExtensions(
       process.cwd(),
-      extensionLoadOptionsFromPayload(payload),
+      nativeExtensionLoadOptionsFromPayload(payload),
     );
     return {
       ...result,
@@ -2540,13 +2973,13 @@ async function abortBridgeTarget(payload: JsonObject): Promise<JsonObject> {
   const targetId = asString(payload.request_id, asString(payload.target_id)).trim();
   const sessionId = asString(payload.session_id).trim();
   const aborter = targetId ? activeAborters.get(targetId) : undefined;
-  const state = sessionId ? harnessSessions.get(sessionId) : undefined;
+  const state = sessionId ? agentSessions.get(sessionId) : undefined;
   if (aborter) {
     void Promise.resolve(aborter()).catch((error) => {
       stderr.write(`pi-bridge abort failed: ${error instanceof Error ? error.message : String(error)}\n`);
     });
   } else if (state) {
-    void state.harness.abort().catch((error) => {
+    void state.session.abort().catch((error) => {
       stderr.write(`pi-bridge abort failed: ${error instanceof Error ? error.message : String(error)}\n`);
     });
   }
@@ -2554,6 +2987,12 @@ async function abortBridgeTarget(payload: JsonObject): Promise<JsonObject> {
     if (sessionId && pending.sessionId === sessionId) {
       pending.reject(new Error("Host tool execution aborted with the Pi session."));
       pendingHostToolRequests.delete(toolRequestId);
+    }
+  }
+  for (const [operationId, pending] of pendingRuntimeOperations) {
+    if (sessionId && pending.sessionId === sessionId) {
+      pending.reject(new Error("Runtime operation aborted with the Pi session."));
+      pendingRuntimeOperations.delete(operationId);
     }
   }
   for (const [promptId, pending] of pendingAuthPrompts) {
@@ -2600,10 +3039,28 @@ async function handleRequest(request: BridgeRequest): Promise<void> {
       writeResponse(id, await runSimpleCompletion(id, payload, asBoolean(payload.stream, false)));
       return;
     case "run_turn":
-      writeResponse(id, await runHarnessTurn(id, payload));
+      writeResponse(id, await runNativeAgentTurn(id, payload));
       return;
     case "close_session":
-      writeResponse(id, await closeHarnessSessionRequest(payload));
+      writeResponse(id, await closeAgentSessionRequest(payload));
+      return;
+    case "get_session_state":
+      writeResponse(id, nativeSessionPayload(nativeSessionFromPayload(payload)));
+      return;
+    case "compact_session":
+      writeResponse(id, await compactNativeAgentSession(id, payload));
+      return;
+    case "navigate_session":
+      writeResponse(id, await navigateNativeAgentSession(id, payload));
+      return;
+    case "reload_session":
+      writeResponse(id, await reloadNativeAgentSession(payload));
+      return;
+    case "export_session_jsonl":
+      writeResponse(id, exportNativeAgentSession(payload));
+      return;
+    case "import_session_jsonl":
+      writeResponse(id, await importNativeAgentSession(payload));
       return;
     case "list_extensions":
       writeResponse(id, await listExtensions(payload));
@@ -2616,6 +3073,9 @@ async function handleRequest(request: BridgeRequest): Promise<void> {
       return;
     case "list_extension_packages":
       writeResponse(id, await installedExtensionPackagesPayload());
+      return;
+    case "list_discovered_skills":
+      writeResponse(id, await listDiscoveredSkills(payload));
       return;
     case "install_extension_package":
       writeResponse(id, await installExtensionPackage(payload));
@@ -2653,10 +3113,10 @@ async function handleRequest(request: BridgeRequest): Promise<void> {
       writeResponse(id, { accepted: resolveAetherHostCall(payload) });
       return;
     case "steer":
-      writeResponse(id, await steerHarnessSession(payload));
+      writeResponse(id, await steerNativeAgentSession(payload));
       return;
     case "follow_up":
-      writeResponse(id, await followUpHarnessSession(id, payload));
+      writeResponse(id, await followUpNativeAgentSession(id, payload));
       return;
     case "host_tool_result":
       writeResponse(id, { accepted: resolveHostToolResult(payload) });
@@ -2664,6 +3124,22 @@ async function handleRequest(request: BridgeRequest): Promise<void> {
     case "host_tool_progress":
       writeResponse(id, { accepted: applyHostToolProgress(payload) });
       return;
+    case "runtime_op_chunk":
+      writeResponse(id, { accepted: runtimeOperationChunk(payload) });
+      return;
+    case "runtime_op_result":
+      writeResponse(id, { accepted: runtimeOperationResult(payload) });
+      return;
+    case "runtime_op_cancel": {
+      const operationId = asString(payload.operation_id).trim();
+      const pending = pendingRuntimeOperations.get(operationId);
+      if (pending) {
+        pendingRuntimeOperations.delete(operationId);
+        pending.reject(new Error(asString(payload.error, "Runtime operation cancelled by host.")));
+      }
+      writeResponse(id, { accepted: Boolean(pending) });
+      return;
+    }
     case "abort":
       writeResponse(id, await abortBridgeTarget(payload));
       return;

@@ -44,6 +44,7 @@ const INDEX_FILE_NAMES = [
   "index.cjs",
 ];
 const PI_AGENT_DIRECTORY = path.join(os.homedir(), ".pi", "agent");
+const AETHER_JITI_CACHE = path.join(os.homedir(), ".aether", "cache", "jiti");
 
 const virtualModules: Record<string, unknown> = {
   typebox,
@@ -210,7 +211,7 @@ function createPackageManager(cwd: string): DefaultPackageManager {
   });
 }
 
-async function discoverPackageExtensionPaths(
+export async function discoverPackageExtensionPaths(
   cwd: string,
   disabledPackageSources: Set<string> = new Set(),
 ): Promise<string[]> {
@@ -312,10 +313,12 @@ export async function listAetherExtensionPackages(
   cwd: string,
 ): Promise<AetherInstalledExtensionPackage[]> {
   const packageManager = createPackageManager(cwd);
-  const resolved = await packageManager.resolve();
-  return packageManager
+  const configuredPackages = packageManager
     .listConfiguredPackages()
-    .filter((configuredPackage) => configuredPackage.scope === "user")
+    .filter((configuredPackage) => configuredPackage.scope === "user");
+  if (configuredPackages.length === 0) return [];
+  const resolved = await packageManager.resolve();
+  return configuredPackages
     .map((configuredPackage) =>
       installedPackagePayload(
         configuredPackage,
@@ -344,7 +347,37 @@ export async function removeAetherExtensionPackage(
   cwd: string,
   source: string,
 ): Promise<boolean> {
-  return createPackageManager(cwd).removeAndPersist(requireNpmPackageSource(source));
+  const normalized = requireNpmPackageSource(source);
+  const settingsManager = SettingsManager.create(cwd, PI_AGENT_DIRECTORY, {
+    projectTrusted: false,
+  });
+  const packageManager = new DefaultPackageManager({
+    cwd,
+    agentDir: PI_AGENT_DIRECTORY,
+    settingsManager,
+  });
+  const configuredPackage = packageManager.listConfiguredPackages().find((entry) =>
+    entry.scope === "user" && entry.source === normalized
+  );
+  if (!configuredPackage) return false;
+
+  const installedPath = configuredPackage.installedPath;
+  if (installedPath) {
+    const managedRoot = path.resolve(PI_AGENT_DIRECTORY, "npm", "node_modules");
+    const resolvedPath = path.resolve(installedPath);
+    const relative = path.relative(managedRoot, resolvedPath);
+    if (relative === "" || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+      throw new Error("Refusing to remove an extension package outside the managed npm directory.");
+    }
+    fs.rmSync(resolvedPath, { recursive: true, force: true });
+  }
+
+  const configured = settingsManager.getGlobalSettings().packages ?? [];
+  settingsManager.setPackages(configured.filter((entry) => {
+    const configuredSource = typeof entry === "string" ? entry : entry.source;
+    return configuredSource !== normalized;
+  }));
+  return true;
 }
 
 export async function updateAetherExtensionPackage(
@@ -357,7 +390,7 @@ export async function updateAetherExtensionPackage(
 async function loadFactory(extensionPath: string): Promise<ExtensionFactory> {
   const jiti = createJiti(import.meta.url, {
     moduleCache: false,
-    fsCache: false,
+    fsCache: AETHER_JITI_CACHE,
     tryNative: false,
     virtualModules,
   });
@@ -409,6 +442,8 @@ export async function loadAetherExtensions(
     allowModelNetwork: false,
   });
   const modelRegistry = new ModelRegistry(modelRuntime);
+  // The extension-facing facade has no refresh options, so keep catalog reloads offline.
+  modelRegistry.refresh = () => modelRuntime.refresh({ allowNetwork: false });
   const runner = new ExtensionRunner(
     extensions,
     runtime,

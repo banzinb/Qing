@@ -8,12 +8,9 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.test.runTest
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonObject
 
 class SharedProviderModelCatalogClientTest {
     @Test
@@ -31,7 +28,6 @@ class SharedProviderModelCatalogClientTest {
         }
         val result = SharedProviderModelCatalogClient(engine).fetchModels(
             customConfig(),
-            fetchBuiltinCatalog = { error("Built-in catalog should not be used") },
         )
 
         assertEquals(listOf("model-a", "model-b"), result.models)
@@ -39,59 +35,54 @@ class SharedProviderModelCatalogClientTest {
     }
 
     @Test
-    fun builtInProviderUsesPiCatalogWithoutCallingNetwork() = runTest {
-        var networkCalled = false
-        val engine = MockEngine {
-            networkCalled = true
-            respond("{}")
+    fun builtInProviderUsesConfiguredModelsEndpointFirst() = runTest {
+        val engine = MockEngine { request ->
+            assertEquals("https://api.anthropic.com/models", request.url.toString())
+            respond(
+                """{"data":[{"id":"claude-live"}]}""",
+                headers = headersOf(HttpHeaders.ContentType, "application/json"),
+            )
         }
-        val catalog = Json.parseToJsonElement(
-            """{"providers":[{"id":"anthropic","models":[{"id":"claude-a","reasoning":true,"thinking_levels":["off","low","high","unknown"],"thinking_level_clamps":{"max":"high","invalid":"low"}},{"id":"claude-b"}]}]}""",
-        ) as JsonObject
         val result = SharedProviderModelCatalogClient(engine).fetchModels(
             customConfig(
                 piProviderId = "anthropic",
                 baseUrl = "https://api.anthropic.com",
                 authMethod = ProviderAuthMethod.OAuth,
             ),
-            fetchBuiltinCatalog = { catalog },
         )
 
-        assertEquals(listOf("claude-a", "claude-b"), result.models)
-        assertEquals(listOf("off", "low", "high"), result.thinkingLevelsByModel["claude-a"])
-        assertEquals(mapOf("max" to "high"), result.thinkingLevelClampsByModel["claude-a"])
-        assertFalse(networkCalled)
+        assertEquals(listOf("claude-live"), result.models)
+        assertNull(result.error)
     }
 
     @Test
-    fun openAiApiKeyUsesRemoteEndpoint() {
-        assertTrue(
-            shouldFetchModelsFromEndpoint(
-                customConfig(
-                    piProviderId = "openai",
-                    baseUrl = "https://api.openai.com/v1",
-                    authMethod = ProviderAuthMethod.ApiKey,
-                ),
-            ),
+    fun modelsDevProviderAliasesMatchAetherBuiltIns() {
+        assertEquals(
+            listOf("togetherai"),
+            PiProviderCatalog.resolve("together").modelsDevProviderIds(),
         )
+        assertEquals(
+            listOf("kimi-for-coding"),
+            PiProviderCatalog.resolve("kimi-coding").modelsDevProviderIds(),
+        )
+    }
+
+    @Test
+    fun modelEndpointFollowsConfiguredBaseUrl() {
         assertEquals("https://example.com/v1/models", modelsEndpoint("https://example.com/v1/responses"))
         assertEquals("https://example.com/v1/models", modelsEndpoint("https://example.com/v1/chat/completions"))
     }
 
     @Test
-    fun openAiEndpointModelsAreMergedWithPublicCatalog() = runTest {
+    fun successfulProviderRequestDoesNotFetchModelsDev() = runTest {
+        var requestCount = 0
         val engine = MockEngine { request ->
-            when (request.url.host) {
-                "api.openai.com" -> respond(
-                    """{"data":[{"id":"gpt-endpoint"}]}""",
-                    headers = headersOf(HttpHeaders.ContentType, "application/json"),
-                )
-                "models.dev" -> respond(
-                    """{"providers":{"openai":{"models":{"gpt-catalog":{"id":"gpt-catalog"}}}}}""",
-                    headers = headersOf(HttpHeaders.ContentType, "application/json"),
-                )
-                else -> respondError(HttpStatusCode.NotFound)
-            }
+            requestCount += 1
+            assertEquals("api.openai.com", request.url.host)
+            respond(
+                """{"data":[{"id":"gpt-endpoint"}]}""",
+                headers = headersOf(HttpHeaders.ContentType, "application/json"),
+            )
         }
 
         val result = SharedProviderModelCatalogClient(engine).fetchModels(
@@ -100,10 +91,38 @@ class SharedProviderModelCatalogClientTest {
                 baseUrl = "https://api.openai.com/v1",
                 authMethod = ProviderAuthMethod.ApiKey,
             ),
-            fetchBuiltinCatalog = { error("Pi catalog should not be needed") },
         )
 
-        assertEquals(listOf("gpt-endpoint", "gpt-catalog"), result.models)
+        assertEquals(listOf("gpt-endpoint"), result.models)
+        assertEquals(1, requestCount)
+        assertNull(result.error)
+    }
+
+    @Test
+    fun failedProviderRequestFallsBackToModelsDev() = runTest {
+        val requestedHosts = mutableListOf<String>()
+        val engine = MockEngine { request ->
+            requestedHosts += request.url.host
+            when (request.url.host) {
+                "api.anthropic.com" -> respondError(HttpStatusCode.Unauthorized)
+                "models.dev" -> respond(
+                    """{"providers":{"anthropic":{"models":{"claude-fallback":{"id":"claude-fallback"}}}}}""",
+                    headers = headersOf(HttpHeaders.ContentType, "application/json"),
+                )
+                else -> respondError(HttpStatusCode.NotFound)
+            }
+        }
+
+        val result = SharedProviderModelCatalogClient(engine).fetchModels(
+            customConfig(
+                piProviderId = "anthropic",
+                baseUrl = "https://api.anthropic.com",
+                authMethod = ProviderAuthMethod.OAuth,
+            ),
+        )
+
+        assertEquals(listOf("api.anthropic.com", "models.dev"), requestedHosts)
+        assertEquals(listOf("claude-fallback"), result.models)
         assertNull(result.error)
     }
 
@@ -127,6 +146,29 @@ class SharedProviderModelCatalogClientTest {
         assertEquals(
             listOf("off", "low", "medium", "high"),
             levels[sharedThinkingCatalogKey("openai", "gpt-5")],
+        )
+    }
+
+    @Test
+    fun openAiCompatibleKimiK3UsesMoonshotPublicCatalog() = runTest {
+        val engine = MockEngine {
+            respond(
+                """{"providers":{"moonshotai":{"models":{"kimi-k3":{"id":"kimi-k3","reasoning":true,"reasoning_options":[{"type":"toggle"},{"type":"effort","values":["low","high","max"]}]}}}}}""",
+                headers = headersOf(HttpHeaders.ContentType, "application/json"),
+            )
+        }
+        val config = customConfig(piProviderId = "openai-compatible").copy(
+            modelId = "kimi-k3",
+            cachedModels = listOf("kimi-k3"),
+            enabledModelIds = listOf("kimi-k3"),
+        )
+        val option = listOf(config).availableModelOptions().single()
+
+        val levels = SharedProviderModelCatalogClient(engine).fetchThinkingLevels(listOf(option))
+
+        assertEquals(
+            listOf("off", "low", "high", "max"),
+            levels[sharedThinkingCatalogKey("openai-compatible", "kimi-k3")],
         )
     }
 

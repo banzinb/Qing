@@ -26,6 +26,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
@@ -39,6 +40,7 @@ class SharedPiChatClientTest {
         assertEquals("30000", testProvider().toSharedPiModelConfig(1)["timeout_ms"].toString())
         assertEquals("90000", testProvider().toSharedPiModelConfig(90_000)["timeout_ms"].toString())
         assertEquals("3600000", testProvider().toSharedPiModelConfig(Int.MAX_VALUE)["timeout_ms"].toString())
+        assertEquals("5", testProvider().toSharedPiModelConfig()["max_retries"].toString())
     }
 
     @Test
@@ -63,10 +65,13 @@ class SharedPiChatClientTest {
                 )
             ),
             sessionId = "session-1",
+            reasoning = "high",
         )
 
         val request = process.requests.single()
         val payload = request["payload"]!!.jsonObject
+        assertTrue(payload["model_config"]!!.jsonObject["reasoning"]!!.jsonPrimitive.boolean)
+        assertEquals("high", payload["reasoning"]!!.jsonPrimitive.content)
         val content = payload["messages"]!!.jsonArray.single().jsonObject["content"]!!.jsonArray
         assertEquals("text", content[0].jsonObject["type"]!!.jsonPrimitive.content)
         assertEquals("image/png", content[1].jsonObject["mime_type"]!!.jsonPrimitive.content)
@@ -84,6 +89,22 @@ class SharedPiChatClientTest {
         assertEquals("assistant", providerPayload["piAssistantMessage"]!!.jsonObject["role"]!!.jsonPrimitive.content)
         assertEquals("response-1", providerPayload["responseId"]!!.jsonPrimitive.content)
         assertEquals(1, providerPayload["usage"]!!.jsonObject["request_count"]!!.jsonPrimitive.content.toInt())
+        bridge.close()
+    }
+
+    @Test
+    fun collectsPiSessionEntryIdsFromTurnEvents() = runTest {
+        val process = ChatProtocolProcess()
+        val bridge = SharedPiBridgeClient(
+            transport = SingleProcessTransport(process),
+            dispatcher = StandardTestDispatcher(testScheduler),
+        )
+        val result = SharedPiChatClient(bridge).runTurn(
+            config = testProvider(),
+            messages = listOf(SharedPiChatMessage("user", "hello")),
+            sessionId = "session-entry-ids",
+        )
+        assertEquals(listOf("entry-user", "entry-assistant"), result.piEntryIds)
         bridge.close()
     }
 
@@ -249,6 +270,32 @@ class SharedPiChatClientTest {
     }
 
     @Test
+    fun parsesNativeToolLifecycleEventsLikeAndroid() {
+        val started = buildJsonObject {
+            put("id", "tool-1")
+            put("name", "read")
+            put("arguments_json", "{\"path\":\"/workspace/note.txt\"}")
+        }.toSharedPiToolEvent(isRunning = true)
+        assertEquals("tool-1", started.id)
+        assertEquals("read", started.name)
+        assertEquals("{\"path\":\"/workspace/note.txt\"}", started.argumentsJson)
+        assertNull(started.outputJson)
+        assertTrue(started.isRunning)
+
+        val finished = buildJsonObject {
+            put("id", "tool-1")
+            put("name", "read")
+            put("arguments", buildJsonObject { put("path", "/workspace/note.txt") })
+            put("output_json", "{\"stdout\":\"ok\"}")
+            put("is_error", true)
+        }.toSharedPiToolEvent(isRunning = false)
+        assertEquals("{\"path\":\"/workspace/note.txt\"}", finished.argumentsJson)
+        assertEquals("{\"stdout\":\"ok\"}", finished.outputJson)
+        assertFalse(finished.isRunning)
+        assertTrue(finished.isError)
+    }
+
+    @Test
     fun reportsAndroidStreamingStatusesAndClearsThemAtCompletion() = runTest {
         val process = ChatProtocolProcess(assistantErrorEvent = "provider disconnected")
         val bridge = SharedPiBridgeClient(
@@ -269,6 +316,37 @@ class SharedPiChatClientTest {
         assertEquals("Agent engine error", statuses[1]?.text)
         assertEquals("provider disconnected", statuses[1]?.detail)
         assertNull(statuses[2])
+        bridge.close()
+    }
+
+    @Test
+    fun dispatchesProviderReconnectLifecycleWithoutEndingTheTurn() = runTest {
+        val process = ChatProtocolProcess(reconnectEvents = true)
+        val bridge = SharedPiBridgeClient(
+            transport = SingleProcessTransport(process),
+            dispatcher = StandardTestDispatcher(testScheduler),
+        )
+        var requestStarts = 0
+        var responseResets = 0
+        val textDeltas = mutableListOf<String>()
+        val statuses = mutableListOf<SharedPiStreamingStatus?>()
+
+        SharedPiChatClient(bridge).runTurn(
+            config = testProvider(),
+            messages = listOf(SharedPiChatMessage("user", "hello")),
+            sessionId = "reconnect-session",
+            onAssistantTextDelta = textDeltas::add,
+            onAssistantRequestStarted = { requestStarts += 1 },
+            onAssistantResponseReset = { responseResets += 1 },
+            onStreamingStatus = statuses::add,
+        )
+
+        assertEquals(1, requestStarts)
+        assertEquals(1, responseResets)
+        assertEquals(listOf("STALE", "RECOVERED"), textDeltas)
+        assertEquals("Reconnecting... 1/5", statuses[1]?.text)
+        assertEquals("Stream ended without finish_reason\nRetrying in 5s", statuses[1]?.detail)
+        assertNull(statuses.last())
         bridge.close()
     }
 
@@ -345,6 +423,7 @@ private class ChatProtocolProcess(
     private val assistantErrorEvent: String? = null,
     private val oauthCredential: JsonObject? = null,
     private val steerAccepted: Boolean = true,
+    private val reconnectEvents: Boolean = false,
 ) : RuntimeProcess {
     private val output = Channel<ByteArray>(Channel.UNLIMITED)
     val requests = mutableListOf<JsonObject>()
@@ -386,6 +465,44 @@ private class ChatProtocolProcess(
                 put("payload", buildJsonObject {
                     put("delta", delta)
                     put("kind", "summary")
+                })
+            }.toString() + "\n").encodeToByteArray())
+        }
+        if (reconnectEvents && type == "run_turn") {
+            suspend fun sendEvent(event: String, payload: JsonObject = JsonObject(emptyMap())) {
+                output.send((buildJsonObject {
+                    put("type", "event")
+                    put("id", id)
+                    put("event", event)
+                    put("payload", payload)
+                }.toString() + "\n").encodeToByteArray())
+            }
+            sendEvent("assistant_request_start")
+            sendEvent("assistant_text_delta", buildJsonObject { put("delta", "STALE") })
+            sendEvent("assistant_stream_reset")
+            sendEvent("assistant_retry", buildJsonObject {
+                put("attempt", 1)
+                put("max_attempts", 5)
+                put("delay_ms", 5_000)
+                put("error_message", "Stream ended without finish_reason")
+            })
+            sendEvent("assistant_text_delta", buildJsonObject { put("delta", "RECOVERED") })
+        }
+        if (type == "run_turn") {
+            output.send((buildJsonObject {
+                put("type", "event")
+                put("id", id)
+                put("event", "session_entry_appended")
+                put("payload", buildJsonObject {
+                    put("entry", buildJsonObject { put("id", "entry-user") })
+                })
+            }.toString() + "\n").encodeToByteArray())
+            output.send((buildJsonObject {
+                put("type", "event")
+                put("id", id)
+                put("event", "session_entry_appended")
+                put("payload", buildJsonObject {
+                    put("entry", buildJsonObject { put("id", "entry-assistant") })
                 })
             }.toString() + "\n").encodeToByteArray())
         }

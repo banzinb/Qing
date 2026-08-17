@@ -16,6 +16,15 @@ const factory = defineAetherExtension((aether) => {
     const count = aether.storage.get("count", 0) + 1;
     aether.storage.set("count", count);
   });
+  aether.registerSettings({
+    id: "preferences",
+    title: "Preferences",
+    categories: [{ id: "general", title: "General", sections: [{ settings: [{ id: "enabled", label: "Enabled", type: "toggle", default: true }] }] }],
+  });
+  aether.registerComposerMenuItem({ id: "run", title: "Run", action: "run" });
+  aether.registerMessageType({ type: "demo", render: ({ message }) => ui.text(String(message.text ?? "")) });
+  aether.registerToolTitle("demo_search", "Searching demos", "Searched demos", 200);
+  aether.registerAction("message", () => aether.messages.append("demo", { text: "hello" }));
 });
 
 const acceptsApi = (_api: AetherExtensionAPI) => factory;

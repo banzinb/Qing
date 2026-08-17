@@ -77,6 +77,52 @@ data class AetherNativeComponentRegistration(
     val renderer: AetherNativeComponentRenderer?,
 )
 
+data class AetherNativeToolTitleRegistration(
+    val toolName: String,
+    val runningTitle: String,
+    val completedTitle: String,
+    val owner: String,
+    val priority: Int,
+    val sequence: Long,
+)
+
+class AetherNativeToolTitleRegistry {
+    private val lock = Any()
+    private val sequence = AtomicLong()
+    private val _registrations = MutableStateFlow<List<AetherNativeToolTitleRegistration>>(emptyList())
+    val registrations: StateFlow<List<AetherNativeToolTitleRegistration>> = _registrations.asStateFlow()
+
+    fun register(
+        toolName: String,
+        runningTitle: String,
+        completedTitle: String,
+        owner: String,
+        priority: Int = 100,
+    ): () -> Unit {
+        val registration = AetherNativeToolTitleRegistration(
+            toolName = toolName.trim().also { require(it.isNotBlank()) { "Native tool title requires a tool name." } },
+            runningTitle = runningTitle.trim().also { require(it.isNotBlank()) { "Native tool title requires a running title." } },
+            completedTitle = completedTitle.trim().also { require(it.isNotBlank()) { "Native tool title requires a completed title." } },
+            owner = owner.trim().ifBlank { "unknown" },
+            priority = priority,
+            sequence = sequence.incrementAndGet(),
+        )
+        synchronized(lock) { _registrations.value = _registrations.value + registration }
+        return { synchronized(lock) { _registrations.value = _registrations.value - registration } }
+    }
+
+    fun titleFor(toolName: String, running: Boolean): String? = _registrations.value
+        .filter { it.toolName.equals(toolName, ignoreCase = true) }
+        .maxWithOrNull(compareBy<AetherNativeToolTitleRegistration> { it.priority }.thenBy { it.sequence })
+        ?.let { if (running) it.runningTitle else it.completedTitle }
+
+    fun unregisterOwner(owner: String) {
+        synchronized(lock) {
+            _registrations.value = _registrations.value.filterNot { it.owner == owner }
+        }
+    }
+}
+
 class AetherNativeComponentRegistry {
     private val lock = Any()
     private val sequence = AtomicLong()
@@ -202,6 +248,15 @@ class AetherNativeModContext internal constructor(
         )
     )
 
+    fun registerToolTitle(
+        toolName: String,
+        runningTitle: String,
+        completedTitle: String,
+        priority: Int = 100,
+    ): () -> Unit = track(
+        kernel.toolTitles.register(toolName, runningTitle, completedTitle, modId, priority)
+    )
+
     fun packageFile(relativePath: String): File =
         File(packageRoot, relativePath).canonicalFile
 
@@ -226,6 +281,7 @@ class AetherNativeModContext internal constructor(
         kernel.services.unregisterOwner(modId)
         kernel.operations.unregisterOwner(modId)
         kernel.components.unregisterOwner(modId)
+        kernel.toolTitles.unregisterOwner(modId)
     }
 
     private fun track(cleanup: () -> Unit): () -> Unit {
@@ -310,7 +366,7 @@ class AetherNativeModManager(
             if (didInitialize) return
             didInitialize = true
         }
-        val discovery = discoverNativeMods()
+        val importedDiscovery = discoverNativeMods(includeInstalledPackages = false)
         val previousStartupWasInterrupted =
             preferences.getBoolean(PreferenceStartupInProgress, false)
         val suspectedModId = preferences.getString(PreferenceLastLoadingMod, "").orEmpty()
@@ -329,9 +385,31 @@ class AetherNativeModManager(
             _state.value = AetherNativeModState(
                 safeModeActive = true,
                 suspectedCrashModId = suspectedModId,
-                discovered = discovery.manifests.map(AetherNativeModManifest::descriptor),
+                discovered = importedDiscovery.manifests.map(AetherNativeModManifest::descriptor),
                 failures = (
-                    discovery.failures +
+                    importedDiscovery.failures +
+                        previousFailedModIds.map { id ->
+                            AetherNativeModFailure(
+                                id = id,
+                                message = "Failed during the previous Native Mod startup.",
+                            )
+                        }
+                    ).distinctBy { "${it.id}:${it.entrypoint}:${it.message}" },
+            )
+            diagnosticLogger.event(
+                category = "native_mod",
+                event = "safe_mode_active",
+                level = "warn",
+                details = mapOf(
+                    "suspected_mod_id" to suspectedModId,
+                    "discovered_count" to importedDiscovery.manifests.size,
+                ),
+            )
+            val completeDiscovery = discoverNativeMods()
+            _state.value = _state.value.copy(
+                discovered = completeDiscovery.manifests.map(AetherNativeModManifest::descriptor),
+                failures = (
+                    completeDiscovery.failures +
                         previousFailedModIds.map { id ->
                             AetherNativeModFailure(
                                 id = id,
@@ -341,39 +419,61 @@ class AetherNativeModManager(
                     ).distinctBy { "${it.id}:${it.entrypoint}:${it.message}" },
             )
             markInitializationCompleted()
-            diagnosticLogger.event(
-                category = "native_mod",
-                event = "safe_mode_active",
-                level = "warn",
-                details = mapOf(
-                    "suspected_mod_id" to suspectedModId,
-                    "discovered_count" to discovery.manifests.size,
-                ),
-            )
-            return
-        }
-        if (discovery.manifests.isEmpty()) {
-            _state.value = AetherNativeModState(
-                discovered = emptyList(),
-                failures = discovery.failures,
-            )
-            markInitializationCompleted()
             return
         }
 
-        preferences.edit()
-            .putBoolean(PreferenceStartupInProgress, true)
-            .putString(PreferenceLastLoadingMod, "")
-            .commit()
-        _state.value = AetherNativeModState(
-            isInitializing = true,
-            discovered = discovery.manifests.map(AetherNativeModManifest::descriptor),
-            failures = discovery.failures,
-        )
-
+        var startupGuardActive = false
         val loaded = mutableListOf<AetherLoadedNativeMod>()
-        val failures = discovery.failures.toMutableList()
-        discovery.manifests.forEach { manifest ->
+        val failures = importedDiscovery.failures.toMutableList()
+        fun startLoading(manifests: List<AetherNativeModManifest>) {
+            if (manifests.isEmpty()) return
+            if (!startupGuardActive) {
+                synchronized(lock) {
+                    initializationCompleted = false
+                }
+                preferences.edit()
+                    .putBoolean(PreferenceStartupInProgress, true)
+                    .putString(PreferenceLastLoadingMod, "")
+                    .commit()
+                startupGuardActive = true
+            }
+            _state.value = AetherNativeModState(
+                isInitializing = true,
+                discovered = manifests.map(AetherNativeModManifest::descriptor),
+                loaded = loaded.toList(),
+                failures = failures.toList(),
+            )
+        }
+        fun finishLoadingPhase() {
+            if (!startupGuardActive) return
+            startupGuardActive = false
+            markInitializationCompleted()
+        }
+
+        startLoading(importedDiscovery.manifests)
+        importedDiscovery.manifests.forEach { manifest ->
+            loadManifest(manifest, loaded, failures)
+        }
+        if (importedDiscovery.manifests.isNotEmpty()) {
+            _state.value = _state.value.copy(
+                loaded = loaded.toList(),
+                failures = failures.toList(),
+            )
+            finishLoadingPhase()
+        }
+
+        val completeDiscovery = discoverNativeMods()
+        val importedPaths = importedDiscovery.manifests
+            .map { it.packageRoot.canonicalPath }
+            .toSet()
+        val additionalManifests = completeDiscovery.manifests.filter { manifest ->
+            manifest.packageRoot.canonicalPath !in importedPaths
+        }
+        failures += completeDiscovery.failures
+        if (additionalManifests.isNotEmpty()) {
+            startLoading(completeDiscovery.manifests)
+        }
+        additionalManifests.forEach { manifest ->
             loadManifest(manifest, loaded, failures)
         }
         preferences.edit()
@@ -383,10 +483,11 @@ class AetherNativeModManager(
             )
             .apply()
         _state.value = AetherNativeModState(
-            discovered = discovery.manifests.map(AetherNativeModManifest::descriptor),
+            discovered = completeDiscovery.manifests.map(AetherNativeModManifest::descriptor),
             loaded = loaded,
-            failures = failures,
+            failures = failures.distinctBy { "${it.id}:${it.entrypoint}:${it.message}" },
         )
+        finishLoadingPhase()
         markInitializationCompleted()
     }
 
@@ -571,7 +672,9 @@ class AetherNativeModManager(
             .apply()
     }
 
-    private suspend fun discoverNativeMods(): NativeModDiscovery {
+    private suspend fun discoverNativeMods(
+        includeInstalledPackages: Boolean = true,
+    ): NativeModDiscovery {
         val loadOptions = piExtensionStateRepository.loadOptions()
         val disabledPaths = loadOptions.disabledExtensionPaths
         val root = alpineRuntime.resolveManagedGuestPath(
@@ -584,7 +687,7 @@ class AetherNativeModManager(
             ?.listFiles()
             .orEmpty()
             .filter(File::isDirectory)
-        val installedPackageRoots = runCatching {
+        val installedPackageRoots = if (includeInstalledPackages) runCatching {
             val packages = piKernelBridge.listExtensionPackages().optJSONArray("packages")
                 ?: return@runCatching emptyList<File>()
             buildList {
@@ -606,7 +709,7 @@ class AetherNativeModManager(
                 throwable = throwable,
                 level = "warn",
             )
-        }.getOrDefault(emptyList())
+        }.getOrDefault(emptyList()) else emptyList()
         (importedPackageRoots + installedPackageRoots)
             .distinctBy { it.canonicalPath }
             .sortedBy { it.name.lowercase(Locale.US) }

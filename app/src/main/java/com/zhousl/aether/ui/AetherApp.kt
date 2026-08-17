@@ -67,11 +67,13 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -85,8 +87,10 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -118,6 +122,7 @@ import com.zhousl.aether.data.AppLanguage
 import com.zhousl.aether.data.AppSettings
 import com.zhousl.aether.data.AutomaticModelPurpose
 import com.zhousl.aether.data.ProviderModelOption
+import com.zhousl.aether.data.PiExtensionUiRequest
 import com.zhousl.aether.data.availableModelOptions
 import com.zhousl.aether.data.isOnboardingComplete
 import com.zhousl.aether.data.resolveAutomaticModelKey
@@ -139,7 +144,9 @@ import com.zhousl.aether.ui.theme.AetherSurfaceHigh
 import com.zhousl.aether.ui.theme.AetherSurfaceHigher
 import com.zhousl.aether.ui.theme.AetherTheme
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -225,18 +232,17 @@ fun AetherApp(
 ) {
     val uiState = viewModel.uiState.collectAsStateWithLifecycle().value
     val context = LocalContext.current
+    val applicationLanguage = AetherLocaleManager.currentApplicationLanguage()
+    val effectiveLanguage = applicationLanguage ?: uiState.settings.language
     val appRuntime = remember(context) {
         (context.applicationContext as AetherApplication).runtime
     }
     val extensionManager = appRuntime.aetherAppExtensionManager
     val extensionState = extensionManager.state.collectAsStateWithLifecycle().value
+    val piExtensionUiRequest = extensionManager.piUiRequest.collectAsStateWithLifecycle().value
     val nativeModState = appRuntime.nativeModManager.state.collectAsStateWithLifecycle().value
     val nativeComponents =
         appRuntime.modKernel.components.registrations.collectAsStateWithLifecycle().value
-    var selectedExtensionPageId by rememberSaveable { mutableStateOf<String?>(null) }
-    val selectedExtensionPage = extensionState.snapshot.pages.firstOrNull {
-        it.id == selectedExtensionPageId
-    }
     val extensionContext = remember(uiState) {
         uiState.toAetherExtensionContext()
     }
@@ -257,17 +263,19 @@ fun AetherApp(
             onAction = { extensionId, action, args ->
                 extensionManager.invokeAction(extensionId, action, args)
             },
-            onOpenPage = { pageId ->
-                selectedExtensionPageId = pageId
-            },
         )
     }
 
-    LaunchedEffect(uiState.settings.language) {
-        AetherLocaleManager.applyIfChanged(context, uiState.settings.language)
+    LaunchedEffect(uiState.settings.language, applicationLanguage) {
+        if (applicationLanguage == null) {
+            AetherLocaleManager.applyIfChanged(uiState.settings.language)
+        } else if (applicationLanguage != uiState.settings.language) {
+            viewModel.updateAppLanguage(applicationLanguage)
+        }
     }
 
-    LaunchedEffect(extensionManager, extensionContext.toString()) {
+    LaunchedEffect(extensionManager, extensionContext.toString(), uiState.alpineSetupState.isReady) {
+        if (!uiState.alpineSetupState.isReady) return@LaunchedEffect
         extensionManager.start(extensionContext)
         extensionManager.updateContext(extensionContext)
     }
@@ -285,27 +293,19 @@ fun AetherApp(
         }
     }
 
-    if (selectedExtensionPage != null) {
-        BackHandler {
-            selectedExtensionPageId = null
-        }
-    }
-
     LaunchedEffect(uiState.currentScreen) {
         if (uiState.currentScreen == AppScreen.Settings) {
             viewModel.refreshUsageStatisticsSnapshots()
         }
     }
 
-    val localizedContext = remember(context, uiState.settings.language) {
-        AetherLocaleManager.localizedContext(context, uiState.settings.language)
-    }
-
     CompositionLocalProvider(
-        LocalContext provides localizedContext,
         LocalAetherExtensionUiController provides extensionController,
     ) {
-        AetherTheme(themeMode = uiState.settings.themeMode, accent = uiState.settings.accent) {
+        AetherTheme(
+            themeMode = uiState.settings.themeMode,
+            language = effectiveLanguage,
+        ) {
             Surface(
                 modifier = Modifier.fillMaxSize(),
                 color = MaterialTheme.colorScheme.background,
@@ -316,36 +316,127 @@ fun AetherApp(
                         modifier = Modifier.fillMaxSize(),
                     ) {
                         AetherAppContent(
-                            viewModel = viewModel,
-                            uiState = uiState,
-                            nativeModState = nativeModState,
-                            onNotificationPermissionRequested = onNotificationPermissionRequested,
-                        )
-                    }
-                    selectedExtensionPage?.let { page ->
-                        AetherExtensionPageScreen(
-                            page = page,
-                            onBack = { selectedExtensionPageId = null },
+                                viewModel = viewModel,
+                                uiState = uiState,
+                                language = effectiveLanguage,
+                                nativeModState = nativeModState,
+                                onNotificationPermissionRequested = onNotificationPermissionRequested,
+                                drawerOpenedEventRegistered =
+                                    "drawer.opened" in extensionState.snapshot.eventNames,
+                                onDrawerOpened = {
+                                    extensionManager.emitEvent(
+                                        event = "drawer.opened",
+                                        context = extensionContext,
+                                    )
+                                },
                         )
                     }
                     AetherExtensionOverlaySlot(Modifier.fillMaxSize())
                 }
+            }
+            piExtensionUiRequest?.let { request ->
+                PiExtensionUiDialog(
+                    request = request,
+                    onResult = { value ->
+                        extensionManager.respondToPiExtensionUiRequest(request.callId, value)
+                    },
+                )
             }
         }
     }
 }
 
 @Composable
+private fun PiExtensionUiDialog(
+    request: PiExtensionUiRequest,
+    onResult: (Any?) -> Unit,
+) {
+    var input by remember(request.callId) { mutableStateOf("") }
+    val dismissValue: Any? = if (request.method == "pi_extension_confirm") false else null
+    AlertDialog(
+        onDismissRequest = { onResult(dismissValue) },
+        containerColor = AetherSurface,
+        titleContentColor = AetherOnSurface,
+        textContentColor = AetherOnSurfaceVariant,
+        title = { Text(request.title) },
+        text = {
+            when (request.method) {
+                "pi_extension_select" -> Column {
+                    request.options.forEach { option ->
+                        TextButton(
+                            modifier = Modifier.fillMaxWidth(),
+                            onClick = { onResult(option) },
+                        ) {
+                            Text(option, modifier = Modifier.fillMaxWidth())
+                        }
+                    }
+                }
+
+                "pi_extension_input" -> OutlinedTextField(
+                    value = input,
+                    onValueChange = { input = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    placeholder = request.placeholder.takeIf(String::isNotBlank)?.let { placeholder ->
+                        { Text(placeholder) }
+                    },
+                    singleLine = true,
+                )
+
+                else -> Text(request.message)
+            }
+        },
+        confirmButton = {
+            if (request.method != "pi_extension_select") {
+                TextButton(
+                    onClick = {
+                        onResult(
+                            if (request.method == "pi_extension_confirm") true else input,
+                        )
+                    },
+                ) {
+                    Text(stringResource(R.string.common_done))
+                }
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = { onResult(dismissValue) }) {
+                Text(stringResource(R.string.common_cancel))
+            }
+        },
+    )
+}
+
+@Composable
 private fun AetherAppContent(
     viewModel: AetherViewModel,
     uiState: AetherUiState,
+    language: AppLanguage,
     nativeModState: AetherNativeModState,
     onNotificationPermissionRequested: () -> Unit,
+    drawerOpenedEventRegistered: Boolean,
+    onDrawerOpened: () -> Unit,
 ) {
     val reduceMotion = LocalReduceMotion.current
     val drawerState = rememberDrawerState(initialValue = androidx.compose.material3.DrawerValue.Closed)
+    val latestOnDrawerOpened by rememberUpdatedState(onDrawerOpened)
+    val drawerOpenedEventGate = remember { AetherDrawerOpenedEventGate() }
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
+
+    LaunchedEffect(drawerState, drawerOpenedEventRegistered) {
+        snapshotFlow { drawerState.currentValue to drawerState.targetValue }
+            .distinctUntilChanged()
+            .collect { (currentValue, targetValue) ->
+                val shouldDispatchDrawerOpened = drawerOpenedEventGate.onDrawerSnapshotChanged(
+                    currentOpen = currentValue == DrawerValue.Open,
+                    targetOpen = targetValue == DrawerValue.Open,
+                    eventRegistered = drawerOpenedEventRegistered,
+                )
+                if (shouldDispatchDrawerOpened) {
+                    latestOnDrawerOpened()
+                }
+            }
+    }
 
     val lifecycleOwner = LocalLifecycleOwner.current
     val clipboardManager = LocalClipboardManager.current
@@ -358,7 +449,19 @@ private fun AetherAppContent(
     val activeProviderConfig = uiState.providerConfigs.firstOrNull { it.isEnabled }
         ?: uiState.providerConfigs.firstOrNull()
     val currentSessionExecution = uiState.sessionExecutionStates[uiState.currentSessionId]
-    val currentMessages = activeSession?.messages.orEmpty()
+    val activeStreamingResponseGroupId = currentSessionExecution
+        ?.takeIf { it.isRunning }
+        ?.activeResponseGroupId
+    val sessionMessages = activeSession?.messages.orEmpty()
+    val currentMessages = remember(sessionMessages, activeStreamingResponseGroupId) {
+        if (activeStreamingResponseGroupId == null) {
+            sessionMessages
+        } else {
+            sessionMessages.filterNot { message ->
+                message.isIncomplete && message.responseGroupId == activeStreamingResponseGroupId
+            }
+        }
+    }
     val selectedSkillIds = activeSession?.selectedSkillIds ?: uiState.draftSelectedSkillIds
     val selectedMcpServerIds = activeSession?.activeMcpServerIds ?: uiState.draftSelectedMcpServerIds
     val effectiveTermuxSetupState = effectiveTermuxSetupState(
@@ -415,13 +518,18 @@ private fun AetherAppContent(
             viewModel.consumePendingUpdateInstallUri()
         }
     }
+    LaunchedEffect(uiState.settings.privacyPolicyAccepted) {
+        if (uiState.settings.privacyPolicyAccepted) {
+            onNotificationPermissionRequested()
+        }
+    }
     var pendingSaveTarget by remember { mutableStateOf<PendingSaveTarget?>(null) }
     var pendingSessionExportId by remember { mutableStateOf<String?>(null) }
     var pendingSkillZipCompletion by remember { mutableStateOf<((Boolean) -> Unit)?>(null) }
     var pendingTermuxPermissionSource by remember { mutableStateOf("unknown") }
+    var pendingTermuxPermissionGrantedAction by remember { mutableStateOf<(() -> Unit)?>(null) }
+    var didAutoRequestTermuxPermission by rememberSaveable { mutableStateOf(false) }
     var showAppDataExportWarning by remember { mutableStateOf(false) }
-    var showNotificationPermissionRationale by remember { mutableStateOf(false) }
-    var pendingDeleteSessionId by rememberSaveable { mutableStateOf<String?>(null) }
     val onPickedDocuments: (List<Uri>) -> Unit = { uris ->
         uris.forEach { uri ->
             runCatching {
@@ -569,7 +677,9 @@ private fun AetherAppContent(
         contract = ActivityResultContracts.RequestPermission(),
         onResult = { granted ->
             val source = pendingTermuxPermissionSource
+            val onGranted = pendingTermuxPermissionGrantedAction
             pendingTermuxPermissionSource = "unknown"
+            pendingTermuxPermissionGrantedAction = null
             viewModel.trackPermissionResult(
                 permission = "termux_run_command",
                 granted = granted,
@@ -587,16 +697,62 @@ private fun AetherAppContent(
                 ),
                 Toast.LENGTH_SHORT,
             ).show()
+            if (granted) {
+                onGranted?.invoke()
+            }
         },
     )
-    fun requestTermuxPermission(source: String) {
+    fun requestTermuxPermission(
+        source: String,
+        onGranted: (() -> Unit)? = null,
+    ) {
         viewModel.trackTermuxSetupStarted(source)
         viewModel.trackPermissionRequested(
             permission = "termux_run_command",
             source = source,
         )
         pendingTermuxPermissionSource = source
+        pendingTermuxPermissionGrantedAction = onGranted
         termuxPermissionLauncher.launch(TermuxContract.RunCommandPermission)
+    }
+
+    fun runRootSetupAfterTermuxPermission(
+        source: String,
+        action: () -> Unit,
+    ) {
+        if (shouldRequestTermuxPermissionBeforeRootSetup(uiState.termuxSetupState.issue)) {
+            requestTermuxPermission(source = source, onGranted = action)
+        } else {
+            action()
+        }
+    }
+
+    LaunchedEffect(
+        uiState.isStartupRouteResolved,
+        uiState.settings.privacyPolicyAccepted,
+        uiState.termuxSetupState.issue,
+        uiState.rootSetupState.issue,
+    ) {
+        if (
+            shouldAutoRequestTermuxPermission(
+                isStartupRouteResolved = uiState.isStartupRouteResolved,
+                privacyPolicyAccepted = uiState.settings.privacyPolicyAccepted,
+                setupIssue = uiState.termuxSetupState.issue,
+                didAutoRequest = didAutoRequestTermuxPermission,
+            )
+        ) {
+            didAutoRequestTermuxPermission = true
+            requestTermuxPermission(
+                source = if (shouldResumeRootSetupAfterTermuxPermission(uiState.rootSetupState.issue)) {
+                    "root_setup_termux_installed_permission"
+                } else {
+                    "termux_detected_permission_missing"
+                },
+                onGranted = viewModel::configureLocalAccessWithRoot.takeIf {
+                    shouldResumeRootSetupAfterTermuxPermission(uiState.rootSetupState.issue)
+                },
+            )
+        }
     }
 
     fun startTermuxSetupAction(
@@ -647,7 +803,7 @@ private fun AetherAppContent(
                     pendingSessionExportId = session.id
                     sessionExportLauncher.launch("${session.title.ifBlank { "aether-session" }}.json")
                 },
-                onDeleteSession = { sessionId -> pendingDeleteSessionId = sessionId },
+                onDeleteSession = viewModel::deleteSession,
                 onSettingsSelected = {
                     scope.launch {
                         drawerState.close()
@@ -751,11 +907,16 @@ private fun AetherAppContent(
                             if (uiState.developerAlpineSetupPreviewState != null) {
                                 viewModel.restartDeveloperAlpineSetupPreview()
                             } else {
-                                viewModel.refreshAlpineSetup()
+                                viewModel.refreshAlpineSetup(startPiIfReady = true)
                             }
                         },
                         onRefreshRootSetup = viewModel::refreshRootSetup,
-                        onConfigureWithRoot = viewModel::configureLocalAccessWithRoot,
+                        onConfigureWithRoot = {
+                            runRootSetupAfterTermuxPermission(
+                                source = "onboarding_root_setup_termux_permission",
+                                action = viewModel::configureLocalAccessWithRoot,
+                            )
+                        },
                         onSaveAgentModeAuthorization = { enabled, method ->
                             viewModel.saveOnboardingAgentModeAuthorization(enabled, method)
                             if (enabled && method == AgentModeAuthorizationMethod.Shizuku) {
@@ -910,14 +1071,13 @@ private fun AetherAppContent(
                         uiState.settings.autoCleanOldCommandHistory,
                     oldCommandHistoryRetentionHours =
                         uiState.settings.oldCommandHistoryRetentionHours,
-                    termuxLiveOutputEnabled = uiState.settings.termuxLiveOutputEnabled,
                     termuxEnvironmentVariables = uiState.settings.termuxEnvironmentVariables,
                     agentModeAuthorizationEnabled = uiState.settings.agentModeAuthorizationEnabled,
                     agentModeAuthorizationMethod = uiState.settings.agentModeAuthorizationMethod,
                     agentModeAuthorizationState = uiState.agentModeAuthorizationState,
                     rootSetupState = uiState.rootSetupState,
                     rootSetupProgressReturnPage = uiState.rootSetupProgressReturnPage,
-                    language = uiState.settings.language,
+                    language = language,
                     themeMode = uiState.settings.themeMode,
                     accent = uiState.settings.accent,
                     defaultChatModelKey = uiState.settings.defaultChatModelKey,
@@ -937,6 +1097,7 @@ private fun AetherAppContent(
                     developerTermuxReadyOverride = uiState.developerTermuxReadyOverride,
                     installedSkills = uiState.installedSkills,
                     installedPiExtensions = uiState.installedPiExtensions,
+                    hasLoadedInstalledPiExtensions = uiState.hasLoadedInstalledPiExtensions,
                     nativeModState = nativeModState,
                     piExtensionCatalog = uiState.piExtensionCatalog,
                     isLoadingPiExtensions = uiState.isLoadingPiExtensions,
@@ -953,7 +1114,7 @@ private fun AetherAppContent(
                     onSave = viewModel::saveSettings,
                     onUpdateLanguage = { language ->
                         viewModel.updateAppLanguage(language)
-                        AetherLocaleManager.applyIfChanged(context, language)
+                        AetherLocaleManager.apply(language)
                     },
                     onUpdateThemeMode = viewModel::updateAppThemeMode,
                     onUpdateAccent = viewModel::updateAppAccent,
@@ -1005,9 +1166,6 @@ private fun AetherAppContent(
                     onToggleScheduledTaskEnabled = viewModel::setScheduledTaskEnabled,
                     onRemoveScheduledTask = viewModel::removeScheduledTask,
                     onRequestTermuxPermission = { requestTermuxPermission("settings_termux_permission") },
-                    onRequestNotificationPermission = {
-                        showNotificationPermissionRationale = true
-                    },
                     onImportAppData = {
                         appDataImportLauncher.launch(arrayOf("application/json", "text/*", "*/*"))
                     },
@@ -1039,7 +1197,12 @@ private fun AetherAppContent(
                     onShouldShowAlpineChromeKeyboard = viewModel::shouldShowAlpineChromeKeyboard,
                     onSetDefaultRuntime = viewModel::setDefaultRuntime,
                     onRefreshRootSetup = viewModel::refreshRootSetup,
-                    onStartRootSetupFromSettings = viewModel::startRootSetupFromSettings,
+                    onStartRootSetupFromSettings = { returnPage ->
+                        runRootSetupAfterTermuxPermission(
+                            source = "settings_root_setup_termux_permission",
+                            action = { viewModel.startRootSetupFromSettings(returnPage) },
+                        )
+                    },
                     onDismissRootSetupProgress = viewModel::dismissRootSetupProgress,
                     onRequestShizukuPermission = viewModel::requestShizukuPermission,
                     onRefreshAgentModeAuthorization = viewModel::refreshAgentModeAuthorization,
@@ -1067,59 +1230,6 @@ private fun AetherAppContent(
             }
         }
 
-        if (showNotificationPermissionRationale) {
-            AlertDialog(
-                onDismissRequest = { showNotificationPermissionRationale = false },
-                containerColor = AetherSurface,
-                titleContentColor = AetherOnSurface,
-                textContentColor = AetherOnSurfaceVariant,
-                title = { Text(stringResource(R.string.notification_permission_title)) },
-                text = { Text(stringResource(R.string.notification_permission_message)) },
-                confirmButton = {
-                    TextButton(
-                        onClick = {
-                            showNotificationPermissionRationale = false
-                            onNotificationPermissionRequested()
-                        },
-                    ) {
-                        Text(stringResource(R.string.notification_permission_allow))
-                    }
-                },
-                dismissButton = {
-                    TextButton(onClick = { showNotificationPermissionRationale = false }) {
-                        Text(stringResource(R.string.common_later))
-                    }
-                },
-            )
-        }
-        pendingDeleteSessionId?.let { sessionId ->
-            AlertDialog(
-                onDismissRequest = { pendingDeleteSessionId = null },
-                containerColor = AetherSurface,
-                titleContentColor = AetherOnSurface,
-                textContentColor = AetherOnSurfaceVariant,
-                title = { Text(stringResource(R.string.chat_delete_session_title)) },
-                text = { Text(stringResource(R.string.chat_delete_session_message)) },
-                confirmButton = {
-                    TextButton(
-                        onClick = {
-                            pendingDeleteSessionId = null
-                            viewModel.deleteSession(sessionId)
-                        },
-                    ) {
-                        Text(
-                            stringResource(R.string.common_delete),
-                            color = MaterialTheme.colorScheme.error,
-                        )
-                    }
-                },
-                dismissButton = {
-                    TextButton(onClick = { pendingDeleteSessionId = null }) {
-                        Text(stringResource(R.string.common_cancel))
-                    }
-                },
-            )
-        }
         if (uiState.isStartupRouteResolved && !uiState.settings.privacyPolicyAccepted) {
             PrivacyPolicyConsentDialog(
                 onOpenPolicy = { openPrivacyPolicy(context) },
@@ -1198,7 +1308,7 @@ private fun PrivacyPolicyConsentDialog(
                     tag = PrivacyPolicyAnnotationTag,
                     annotation = AetherPrivacyPolicyUrl,
                 )
-                withStyle(SpanStyle(color = AetherPrimary)) {
+                withStyle(SpanStyle(color = Color(0xFF3B82F6))) {
                     append(policyText)
                 }
                 pop()
@@ -1375,6 +1485,24 @@ private fun requestApkInstall(
         Toast.makeText(context, context.getString(R.string.app_unable_to_open_apk_installer), Toast.LENGTH_SHORT).show()
     }
 }
+
+internal fun shouldAutoRequestTermuxPermission(
+    isStartupRouteResolved: Boolean,
+    privacyPolicyAccepted: Boolean,
+    setupIssue: TermuxSetupIssue,
+    didAutoRequest: Boolean,
+): Boolean = isStartupRouteResolved &&
+    privacyPolicyAccepted &&
+    setupIssue == TermuxSetupIssue.PermissionMissing &&
+    !didAutoRequest
+
+internal fun shouldRequestTermuxPermissionBeforeRootSetup(
+    setupIssue: TermuxSetupIssue,
+): Boolean = setupIssue == TermuxSetupIssue.PermissionMissing
+
+internal fun shouldResumeRootSetupAfterTermuxPermission(
+    rootSetupIssue: com.zhousl.aether.data.RootSetupIssue,
+): Boolean = rootSetupIssue == com.zhousl.aether.data.RootSetupIssue.TermuxNotInstalled
 
 private fun normalizeAssistantLink(rawLink: String): String {
     val trimmed = rawLink.trim().removeSurrounding("<", ">")

@@ -6,6 +6,7 @@ import android.provider.OpenableColumns
 import android.view.Surface
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import java.io.FileOutputStream
 import com.zhousl.aether.BuildConfig
 import com.zhousl.aether.R
 import com.zhousl.aether.aetherRuntime
@@ -27,7 +28,9 @@ import com.zhousl.aether.data.CurrentOnboardingVersion
 import com.zhousl.aether.data.DiagnosticRedactor
 import com.zhousl.aether.data.InstalledSkill
 import com.zhousl.aether.data.InstalledPiExtension
+import com.zhousl.aether.data.PiExtensionInstallKind
 import com.zhousl.aether.data.PiExtensionCatalogEntry
+import com.zhousl.aether.data.PiDiscoveredSkillSource
 import com.zhousl.aether.data.ProviderModelCatalogClient
 import com.zhousl.aether.data.thinkingCatalogKey
 import com.zhousl.aether.data.LlmProviderConfig
@@ -57,6 +60,7 @@ import com.zhousl.aether.data.ScheduledTaskSchedule
 import com.zhousl.aether.data.TermuxEnvironmentVariable
 import com.zhousl.aether.data.normalizeTermuxEnvironmentVariables
 import com.zhousl.aether.data.SessionFollowUpMode
+import com.zhousl.aether.data.SessionExecutionState
 import com.zhousl.aether.data.SessionTurnEvent
 import com.zhousl.aether.data.SessionTurnOutcome
 import com.zhousl.aether.data.SessionTurnRequest
@@ -74,6 +78,7 @@ import com.zhousl.aether.data.LlmMessage
 import com.zhousl.aether.data.LlmTextPart
 import com.zhousl.aether.data.ProviderAuthMethod
 import com.zhousl.aether.data.pi.PiCompletionClient
+import com.zhousl.aether.data.pi.PiKernelBridge
 import com.zhousl.aether.data.pi.PiCoreSetupActivity
 import com.zhousl.aether.data.pi.PiCoreSetupPhase
 import com.zhousl.aether.data.pi.PiCoreSetupState
@@ -82,6 +87,7 @@ import com.zhousl.aether.data.pi.PiProviderAuthState
 import com.zhousl.aether.data.pi.toProviderPayloadJson
 import com.zhousl.aether.data.pi.toPiOAuthPrompt
 import com.zhousl.aether.data.pi.toPiProviderEnvironmentVariables
+import com.zhousl.aether.data.pi.toPiModelConfig
 import com.zhousl.aether.data.isProviderSetupValid
 import com.zhousl.aether.data.isNightlyUpdateNewer
 import com.zhousl.aether.data.isVersionNewer
@@ -119,6 +125,8 @@ import org.json.JSONObject
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.Base64
+import java.util.Locale
+import java.util.UUID
 
 private const val FollowUpTourAutoOpenDelayMillis = 2_500L
 private const val AppUpdateCheckIntervalMillis = 3L * 24L * 60L * 60L * 1000L
@@ -128,13 +136,10 @@ private const val MaxSetupOutputChars = 48_000
 private const val SessionTitleSystemPrompt =
     "Generate a concise chat title for this conversation. Return only the title, in the user's language when possible, with no quotes, no emoji, and at most 6 words."
 private const val CompactCommand = "/compact"
-private const val CompactingMaxInputChars = 120_000
 // Pi Coding Agent defaults: compact before the model loses the 16K response reserve.
 private const val ContextWindowTokens = 128_000L
 private const val AutoCompactionReserveTokens = 16_384L
 private const val MaxInlineImageAttachmentBytes = 5 * 1024 * 1024
-private const val SessionCompactingSystemPrompt =
-    "You are Qing's conversation compactor. Summarize the provided conversation so a future assistant can continue seamlessly. Preserve user goals, constraints, decisions, important facts, open tasks, files/paths mentioned, tool results, errors, and next steps. Do not invent details. Return only the compacted context."
 
 internal fun shouldAutoCompactContext(
     usage: LlmTokenUsage?,
@@ -153,6 +158,14 @@ internal fun shouldAutoCompactContext(
     return totalTokens + trailingEstimate > contextWindow - reserveTokens
 }
 
+internal fun mergeImportedPiExtensions(
+    current: List<InstalledPiExtension>,
+    imported: List<InstalledPiExtension>,
+): List<InstalledPiExtension> =
+    (current.filter { it.kind != PiExtensionInstallKind.Imported } + imported)
+        .distinctBy(InstalledPiExtension::id)
+        .sortedBy { it.name.lowercase(Locale.US) }
+
 class AetherViewModel(
     application: Application,
 ) : AndroidViewModel(application) {
@@ -164,6 +177,7 @@ class AetherViewModel(
     private val extensionsRepository = runtime.extensionsRepository
     private val sessionExecutionManager = runtime.sessionExecutionManager
     private val piCompletionClient: PiCompletionClient = runtime.piCompletionClient
+    private val piKernelBridge: PiKernelBridge = runtime.piKernelBridge
     private val bashTool = runtime.bashTool
     private val rootSetupController = runtime.rootSetupController
     private val workspaceFileBridge = runtime.workspaceFileBridge
@@ -183,6 +197,8 @@ class AetherViewModel(
     private var lastTrackedTermuxDetectedIssue: TermuxSetupIssue? = null
     private var pendingTermuxSetupSource: String? = null
     private var lastModelCatalogRequestKey: String = ""
+    private var didInitializeStartupDraftModel = false
+    private var didReceiveInitialChatState = false
     private val _uiState = MutableStateFlow(AetherUiState())
     private val _transientMessages = MutableSharedFlow<UiText>(extraBufferCapacity = 4)
     private var didEvaluateWorkspaceMode = false
@@ -199,8 +215,10 @@ class AetherViewModel(
         refreshTermuxSetup()
         refreshAlpineSetup(startPiIfReady = false)
         refreshRootSetup()
+        refreshImportedPiExtensions()
 
         viewModelScope.launch {
+            settingsRepository.initializeLanguageIfNeeded()
             settingsRepository.settings.collect { settings ->
                 if (settings.privacyPolicyAccepted) {
                     runtime.initializePostHog()
@@ -223,6 +241,7 @@ class AetherViewModel(
                         current.copy(settings = settings)
                     }
                 }
+                initializeStartupDraftModelIfReady()
                 syncTermuxSettings()
                 bashTool.setEnvironmentVariables(settings.termuxEnvironmentVariables)
                 bashTool.setManagedBashRunCleanupPolicy(
@@ -244,6 +263,8 @@ class AetherViewModel(
             chatStateStore.state.collect { persisted ->
                 if (!didReceiveChatState && persisted.sessions.isEmpty() && persisted.currentSessionId == DraftSessionId) {
                     didReceiveChatState = true
+                    didReceiveInitialChatState = true
+                    initializeStartupDraftModelIfReady()
                     return@collect
                 }
                 didReceiveChatState = true
@@ -263,6 +284,8 @@ class AetherViewModel(
                         pendingStatusDetail = currentExecution?.pendingStatusDetail.orEmpty(),
                     )
                 }
+                didReceiveInitialChatState = true
+                initializeStartupDraftModelIfReady()
             }
         }
 
@@ -351,6 +374,7 @@ class AetherViewModel(
         viewModelScope.launch {
             settingsRepository.providerConfigs.collect { configs ->
                 _uiState.update { current -> current.copy(providerConfigs = configs) }
+                initializeStartupDraftModelIfReady()
                 refreshModelCatalogInfo(configs)
             }
         }
@@ -386,9 +410,49 @@ class AetherViewModel(
             return
         }
         viewModelScope.launch {
+            if (_uiState.value.modelCatalogInfo.isEmpty()) {
+                val cached = settingsRepository.loadModelCatalogCache()
+                    .filterKeys(options.mapTo(mutableSetOf(), ProviderModelOption::key)::contains)
+                if (cached.isNotEmpty() && requestKey == lastModelCatalogRequestKey) {
+                    _uiState.update { current -> current.copy(modelCatalogInfo = cached) }
+                }
+            }
+            val thinkingCacheKeys = options.mapTo(mutableSetOf()) { option ->
+                thinkingCatalogKey(option.piProviderId, option.modelId)
+            }
+            val cachedThinkingLevels = settingsRepository.loadThinkingCatalogCache()
+                .filterKeys(thinkingCacheKeys::contains)
+            if (cachedThinkingLevels.isNotEmpty() && requestKey == lastModelCatalogRequestKey) {
+                _uiState.update { current ->
+                    current.copy(
+                        thinkingLevelsByProviderModel = current.thinkingLevelsByProviderModel + cachedThinkingLevels,
+                    )
+                }
+            }
             val modelInfo = ModelCatalogClient.fetchModelInfo(options)
-            if (requestKey == lastModelCatalogRequestKey) {
+            if (modelInfo.isNotEmpty()) {
+                settingsRepository.saveModelCatalogCache(modelInfo)
+            }
+            if (modelInfo.isNotEmpty() && requestKey == lastModelCatalogRequestKey) {
                 _uiState.update { current -> current.copy(modelCatalogInfo = modelInfo) }
+            }
+
+            // Populate the effort cache during startup as well as when the model
+            // picker is opened. Cached values are already applied above, so an
+            // unavailable network never delays the initial picker state.
+            val publicThinkingLevels = ProviderModelCatalogClient.fetchPublicThinkingLevels(options)
+            if (publicThinkingLevels.isNotEmpty()) {
+                settingsRepository.saveThinkingCatalogCache(publicThinkingLevels)
+                if (requestKey == lastModelCatalogRequestKey) {
+                    _uiState.update { state ->
+                        state.copy(
+                            thinkingLevelsByProviderModel =
+                                state.thinkingLevelsByProviderModel + publicThinkingLevels,
+                            thinkingLevelClampsByProviderModel =
+                                state.thinkingLevelClampsByProviderModel - publicThinkingLevels.keys,
+                        )
+                    }
+                }
             }
         }
     }
@@ -605,6 +669,8 @@ class AetherViewModel(
                 }
                 if (startPiIfReady) {
                     refreshPiCoreSetup()
+                } else {
+                    viewModelScope.launch { syncPiDiscoveredSkills() }
                 }
             } else {
                 _uiState.update {
@@ -804,6 +870,7 @@ class AetherViewModel(
                         )
                     )
                 }
+                syncPiDiscoveredSkills()
             },
             onFailure = { throwable ->
                 if (throwable is CancellationException) throw throwable
@@ -822,6 +889,35 @@ class AetherViewModel(
                 }
             },
         )
+    }
+
+    private suspend fun syncPiDiscoveredSkills() {
+        runCatching {
+            val response = piKernelBridge.listDiscoveredSkills()
+            val skills = response.optJSONArray("skills") ?: return@runCatching
+            val discovered = buildList {
+                for (index in 0 until skills.length()) {
+                    val item = skills.optJSONObject(index) ?: continue
+                    val guestFilePath = item.optString("file_path").trim()
+                    val guestBaseDir = item.optString("base_dir").trim()
+                    if (guestFilePath.isBlank() || guestBaseDir.isBlank()) continue
+                    val hostFile = runtime.alpineRuntime.resolveWorkspaceHostPath(guestFilePath)?.hostFile
+                        ?: runtime.alpineRuntime.resolveGuestPath(guestFilePath)
+                    val hostRoot = runtime.alpineRuntime.resolveWorkspaceHostPath(guestBaseDir)?.hostFile
+                        ?: runtime.alpineRuntime.resolveGuestPath(guestBaseDir)
+                    if (!hostFile.isFile || !hostRoot.isDirectory) continue
+                    add(
+                        PiDiscoveredSkillSource(
+                            guestFilePath = guestFilePath,
+                            guestBaseDir = guestBaseDir,
+                            hostFile = hostFile,
+                            hostRoot = hostRoot,
+                        )
+                    )
+                }
+            }
+            skillManager.syncPiDiscoveredSkills(discovered).getOrThrow()
+        }
     }
 
     fun resetAlpineRuntime() {
@@ -1438,9 +1534,7 @@ class AetherViewModel(
     }
 
     fun saveOnboardingTavilyApiKey(value: String) {
-        viewModelScope.launch {
-            settingsRepository.updateTavilyApiKey(value.trim())
-        }
+        // Legacy onboarding callbacks are ignored; Web Tools are no longer part of Aether.
     }
 
     fun saveOnboardingAgentModeAuthorization(
@@ -1514,7 +1608,9 @@ class AetherViewModel(
             .filterNotNull()
             .firstOrNull(sessionExecutionManager::isSessionRunning)
             ?: return
-        sessionExecutionManager.pauseSession(sessionId)
+        val finalizedSession = sessionExecutionManager.pauseSession(sessionId) ?: return
+        val executionStates = sessionExecutionManager.executionStates.value
+        _uiState.update { current -> current.withFinalizedPausedSession(finalizedSession, executionStates) }
     }
 
     fun openSettings() {
@@ -1582,6 +1678,7 @@ class AetherViewModel(
         selectedSkillIds: List<String>,
     ) {
         _uiState.update {
+            val inheritedModelKey = currentConversationModelKey(it)
             val enabledSkillIds = it.installedSkills
                 .filter(InstalledSkill::isEnabled)
                 .map(InstalledSkill::id)
@@ -1591,7 +1688,7 @@ class AetherViewModel(
                 currentSessionId = DraftSessionId,
                 draftInput = "",
                 draftAttachments = emptyList(),
-                draftSelectedModelKey = resolveDefaultChatModelKey(it.settings, it.providerConfigs),
+                draftSelectedModelKey = inheritedModelKey,
                 draftSelectedSkillIds = selectedSkillIds.filter(enabledSkillIds::contains),
                 draftSelectedMcpServerIds = emptyList(),
                 draftAgentModeEnabled = false,
@@ -1605,6 +1702,51 @@ class AetherViewModel(
         }
         persistCurrentSessionId(DraftSessionId)
         captureAnalyticsEvent(event = "conversation started")
+    }
+
+    private fun initializeStartupDraftModelIfReady() {
+        if (didInitializeStartupDraftModel) return
+        var sessionToPersist: Pair<String, String>? = null
+        _uiState.update { current ->
+            val options = current.providerConfigs.availableModelOptions()
+            if (
+                !current.isStartupRouteResolved ||
+                !didReceiveInitialChatState ||
+                options.isEmpty()
+            ) return@update current
+            didInitializeStartupDraftModel = true
+            val defaultModelKey = resolveDefaultChatModelKey(current.settings, current.providerConfigs)
+            if (current.currentSessionId == DraftSessionId) {
+                current.copy(draftSelectedModelKey = defaultModelKey)
+            } else {
+                sessionToPersist = current.currentSessionId to defaultModelKey
+                current.copy(
+                    sessions = current.sessions.map { session ->
+                        if (session.id == current.currentSessionId) {
+                            session.copy(selectedModelKey = defaultModelKey)
+                        } else {
+                            session
+                        }
+                    },
+                )
+            }
+        }
+        sessionToPersist?.let { (sessionId, defaultModelKey) ->
+            persistSessionMutation(sessionId) { session ->
+                if (session.selectedModelKey == defaultModelKey) null
+                else session.copy(selectedModelKey = defaultModelKey)
+            }
+        }
+    }
+
+    private fun currentConversationModelKey(state: AetherUiState): String {
+        val options = state.providerConfigs.availableModelOptions()
+        val selectedKey = state.sessions
+            .firstOrNull { it.id == state.currentSessionId }
+            ?.selectedModelKey
+            ?: state.draftSelectedModelKey
+        return selectedKey.takeIf { key -> options.any { it.key == key } }
+            ?: resolveDefaultChatModelKey(state.settings, state.providerConfigs)
     }
 
     fun selectSession(sessionId: String) {
@@ -1740,6 +1882,10 @@ class AetherViewModel(
         viewModelScope.launch {
             val didExport = withContext(Dispatchers.IO) {
                 val session = runtime.chatRepository.getSessionWithMessages(sessionId) ?: return@withContext false
+                val piSession = runCatching { piKernelBridge.exportSessionJsonl(sessionId) }.getOrNull()
+                val piPath = piSession?.optString("exported_path").orEmpty()
+                val piJsonl = piPath.takeIf(String::isNotBlank)
+                    ?.let { path -> runCatching { java.io.File(path).readText(Charsets.UTF_8) }.getOrNull() }
                 writeTextToUri(
                     uri = destinationUri,
                     text = JSONObject().apply {
@@ -1747,6 +1893,11 @@ class AetherViewModel(
                         put("exportType", "session")
                         put("exportedAtMillis", System.currentTimeMillis())
                         put("session", session.copy(messages = syncActiveBranches(session.messages)).toJson())
+                        put("piSession", JSONObject().apply {
+                            put("sessionId", sessionId)
+                            put("jsonlPath", piPath)
+                            put("jsonl", piJsonl ?: "")
+                        })
                     }.toString(2),
                 )
             }
@@ -1806,6 +1957,27 @@ class AetherViewModel(
             }
             result
                 .onSuccess { imported ->
+                    imported.piSessions.forEach { (sessionId, jsonl) ->
+                        runCatching {
+                            val importedPi = piKernelBridge.importSessionJsonl(sessionId, jsonl)
+                            val path = importedPi.optString("session_file")
+                            runtime.chatRepository.upsertAgentSessionMetadata(
+                                chatSessionId = sessionId,
+                                piSessionId = sessionId,
+                                jsonlPath = path,
+                                runtime = _uiState.value.settings.defaultRuntimeId?.storageValue.orEmpty(),
+                                migrationVersion = 2,
+                            )
+                        }.onFailure { throwable ->
+                            diagnosticLogger.exception(
+                                category = "pi_bridge",
+                                event = "import_session_jsonl_failed",
+                                throwable = throwable,
+                                level = "warn",
+                                sessionId = sessionId,
+                            )
+                        }
+                    }
                     settingsRepository.replaceImportedSettings(
                         settings = imported.settings,
                         providerConfigs = imported.providerConfigs,
@@ -2027,6 +2199,7 @@ class AetherViewModel(
         val snapshot = _uiState.value
         var request: SessionTurnRequest? = null
         var updatedSessionForPersistence: ChatSession? = null
+        var piBranchMessageId: String? = null
 
         _uiState.update { current ->
             val sessionIndex = current.sessions.indexOfFirst { it.id == sessionId }
@@ -2043,6 +2216,7 @@ class AetherViewModel(
             if (trimmedMessages.lastOrNull()?.author != MessageAuthor.User) {
                 return@update current
             }
+            piBranchMessageId = trimmedMessages.last().id
 
             request = SessionTurnRequest(
                 sessionId = sessionId,
@@ -2087,7 +2261,10 @@ class AetherViewModel(
                 moveToFront = true,
             )
         }
-        sessionExecutionManager.startTurn(turnRequest)
+        viewModelScope.launch {
+            navigatePiBranch(sessionId, piBranchMessageId)
+            sessionExecutionManager.startTurn(turnRequest)
+        }
     }
 
     fun retryUserMessage(
@@ -2099,6 +2276,7 @@ class AetherViewModel(
         val snapshot = _uiState.value
         var request: SessionTurnRequest? = null
         var updatedSessionForPersistence: ChatSession? = null
+        var piBranchMessageId: String? = null
 
         _uiState.update { current ->
             val sessionIndex = current.sessions.indexOfFirst { it.id == sessionId }
@@ -2108,6 +2286,8 @@ class AetherViewModel(
             val userMessage = session.messages.firstOrNull {
                 it.id == messageId && it.author == MessageAuthor.User
             } ?: return@update current
+            val userMessageIndex = session.messages.indexOfFirst { it.id == messageId }
+            piBranchMessageId = session.messages.take(userMessageIndex).lastOrNull()?.id
 
             val retryMessage = userMessage.copy(
                 id = "user-${System.currentTimeMillis()}",
@@ -2163,7 +2343,52 @@ class AetherViewModel(
                 moveToFront = true,
             )
         }
-        sessionExecutionManager.startTurn(turnRequest)
+        viewModelScope.launch {
+            navigatePiBranch(sessionId, piBranchMessageId, resetWhenMissing = true)
+            sessionExecutionManager.startTurn(turnRequest)
+        }
+    }
+
+    private suspend fun navigatePiBranch(
+        sessionId: String,
+        aetherMessageId: String?,
+        resetWhenMissing: Boolean = false,
+    ) {
+        val settings = _uiState.value.settings
+        val workspaceDirectory = workspaceFileBridge.workspaceDirectory(
+            sessionId = sessionId,
+            mode = settings.agentWorkspaceMode,
+        )
+        val metadata = runtime.chatRepository.getAgentSessionMetadata(sessionId)
+        val entryId = aetherMessageId?.let { messageId ->
+            runtime.chatRepository.getAgentMessageEntryIds(sessionId, messageId).lastOrNull()
+        }
+        runCatching {
+            piKernelBridge.navigateSession(
+                sessionId = sessionId,
+                entryId = entryId.orEmpty(),
+                reset = entryId == null && resetWhenMissing,
+                sessionPayload = JSONObject().apply {
+                    put("session_file", metadata?.jsonlPath.orEmpty())
+                    put("workspace_directory", workspaceDirectory)
+                    put("termux_workspace_directory", workspaceDirectory)
+                    put("runtime", metadata?.runtime ?: settings.defaultRuntimeId?.storageValue.orEmpty())
+                    put("platform", "android")
+                    put("workspace_trusted", true)
+                    put("model_config", settings.toPiModelConfig().toJson())
+                    put("system_prompt", "")
+                    put("host_tools", JSONArray())
+                },
+            )
+        }.onFailure { throwable ->
+            diagnosticLogger.exception(
+                category = "pi_bridge",
+                event = "navigate_session_branch_failed",
+                throwable = throwable,
+                level = "warn",
+                sessionId = sessionId,
+            )
+        }
     }
 
     fun switchUserMessageBranch(
@@ -2211,7 +2436,6 @@ class AetherViewModel(
         agentWorkspaceMode: AgentWorkspaceMode,
         autoCleanOldCommandHistory: Boolean,
         oldCommandHistoryRetentionHours: Int,
-        termuxLiveOutputEnabled: Boolean,
         termuxEnvironmentVariables: List<TermuxEnvironmentVariable>,
         agentModeAuthorizationEnabled: Boolean,
         agentModeAuthorizationMethod: AgentModeAuthorizationMethod,
@@ -2267,7 +2491,6 @@ class AetherViewModel(
                     oldCommandHistoryRetentionHours = normalizeOldCommandHistoryRetentionHours(
                         oldCommandHistoryRetentionHours
                     ),
-                    termuxLiveOutputEnabled = termuxLiveOutputEnabled,
                     termuxEnvironmentVariables = normalizeTermuxEnvironmentVariables(termuxEnvironmentVariables),
                     agentModeAuthorizationEnabled = agentModeAuthorizationEnabled,
                     agentModeAuthorizationMethod = agentModeAuthorizationMethod,
@@ -2397,46 +2620,20 @@ class AetherViewModel(
             onResolved(levels.isNotEmpty())
             return
         }
-        val config = current.providerConfigs.firstOrNull { it.id == option.providerConfigId }
-            ?: return onResolved(false)
-        val definition = com.zhousl.aether.data.PiProviderCatalog.resolve(config.piProviderId)
-        if (!definition.isBuiltIn) {
-            onResolved(false)
-            return
-        }
-
         viewModelScope.launch {
-            val result = ProviderModelCatalogClient.fetchPiThinkingLevels(
-                config = config,
-                piKernelBridge = runtime.piKernelBridge,
-                startPiBridgeIfNeeded = false,
-            )
-            if (result.error != null) {
-                onResolved(false)
-                return@launch
+            val publicThinkingLevels = ProviderModelCatalogClient.fetchPublicThinkingLevels(listOf(option))
+            if (publicThinkingLevels.isNotEmpty()) {
+                settingsRepository.saveThinkingCatalogCache(publicThinkingLevels)
+                _uiState.update { state ->
+                    state.copy(
+                        thinkingLevelsByProviderModel =
+                            state.thinkingLevelsByProviderModel + publicThinkingLevels,
+                        thinkingLevelClampsByProviderModel =
+                            state.thinkingLevelClampsByProviderModel - publicThinkingLevels.keys,
+                    )
+                }
             }
-            _uiState.update { state ->
-                state.copy(
-                    thinkingLevelsByProviderModel = state.thinkingLevelsByProviderModel +
-                        result.thinkingLevelsByModel.mapKeys { (modelId, _) ->
-                            thinkingCatalogKey(config.piProviderId, modelId)
-                        },
-                    thinkingLevelClampsByProviderModel = state.thinkingLevelClampsByProviderModel +
-                        result.thinkingLevelClampsByModel.mapKeys { (modelId, _) ->
-                            thinkingCatalogKey(config.piProviderId, modelId)
-                        },
-                )
-            }
-            val selectedModelId = option.modelId.substringAfterLast('/').trim()
-            onResolved(
-                result.thinkingLevelsByModel.entries
-                    .firstOrNull { (modelId, _) ->
-                        modelId.substringAfterLast('/').trim() == selectedModelId
-                    }
-                    ?.value
-                    .orEmpty()
-                    .isNotEmpty(),
-            )
+            onResolved(publicThinkingLevels[cacheKey].orEmpty().isNotEmpty())
         }
     }
 
@@ -2451,28 +2648,16 @@ class AetherViewModel(
         val option = current.providerConfigs.availableModelOptions()
             .firstOrNull { it.key == selectedModelKey }
             ?: return
-        val config = current.providerConfigs.firstOrNull { it.id == option.providerConfigId }
-            ?: return
-        val definition = com.zhousl.aether.data.PiProviderCatalog.resolve(config.piProviderId)
-        if (!definition.isBuiltIn) return
-
         viewModelScope.launch {
-            val result = ProviderModelCatalogClient.fetchPiThinkingLevels(
-                config = config,
-                piKernelBridge = runtime.piKernelBridge,
-                startPiBridgeIfNeeded = false,
-            )
-            if (result.error != null) return@launch
+            val publicThinkingLevels = ProviderModelCatalogClient.fetchPublicThinkingLevels(listOf(option))
+            if (publicThinkingLevels.isEmpty()) return@launch
+            settingsRepository.saveThinkingCatalogCache(publicThinkingLevels)
             _uiState.update { state ->
                 state.copy(
-                    thinkingLevelsByProviderModel = state.thinkingLevelsByProviderModel +
-                        result.thinkingLevelsByModel.mapKeys { (modelId, _) ->
-                            thinkingCatalogKey(config.piProviderId, modelId)
-                        },
-                    thinkingLevelClampsByProviderModel = state.thinkingLevelClampsByProviderModel +
-                        result.thinkingLevelClampsByModel.mapKeys { (modelId, _) ->
-                            thinkingCatalogKey(config.piProviderId, modelId)
-                        },
+                    thinkingLevelsByProviderModel =
+                        state.thinkingLevelsByProviderModel + publicThinkingLevels,
+                    thinkingLevelClampsByProviderModel =
+                        state.thinkingLevelClampsByProviderModel - publicThinkingLevels.keys,
                 )
             }
         }
@@ -2486,19 +2671,10 @@ class AetherViewModel(
         viewModelScope.launch {
             val result = ProviderModelCatalogClient.fetchModels(
                 config = config,
-                piKernelBridge = runtime.piKernelBridge,
             )
             _uiState.update { current ->
                 current.copy(
                     isFetchingModels = false,
-                    thinkingLevelsByProviderModel = current.thinkingLevelsByProviderModel +
-                        result.thinkingLevelsByModel.mapKeys { (modelId, _) ->
-                            thinkingCatalogKey(config.piProviderId, modelId)
-                        },
-                    thinkingLevelClampsByProviderModel = current.thinkingLevelClampsByProviderModel +
-                        result.thinkingLevelClampsByModel.mapKeys { (modelId, _) ->
-                            thinkingCatalogKey(config.piProviderId, modelId)
-                        },
                 )
             }
             onComplete(result.models)
@@ -2737,7 +2913,10 @@ class AetherViewModel(
 
     fun removeSkill(skillId: String) {
         viewModelScope.launch {
-            skillManager.uninstallSkill(skillId)
+            val result = skillManager.uninstallSkill(skillId)
+            if (result.isSuccess) {
+                piKernelBridge.reloadAllExtensions(runtime.piExtensionStateRepository.loadOptions())
+            }
             captureAnalyticsEvent(
                 event = "skill removed",
                 properties = mapOf("skill_id" to skillId),
@@ -2751,12 +2930,19 @@ class AetherViewModel(
     ) {
         viewModelScope.launch {
             extensionsRepository.setSkillEnabled(skillId, enabled)
+            piKernelBridge.reloadAllExtensions(runtime.piExtensionStateRepository.loadOptions())
         }
     }
 
     fun refreshPiExtensions() {
         viewModelScope.launch {
             refreshPiExtensionState(loadCatalog = true)
+        }
+    }
+
+    private fun refreshImportedPiExtensions() {
+        viewModelScope.launch {
+            publishImportedPiExtensions(piExtensionManager.listImported())
         }
     }
 
@@ -2865,6 +3051,7 @@ class AetherViewModel(
 
     private suspend fun refreshPiExtensionState(loadCatalog: Boolean) {
         _uiState.update { it.copy(isLoadingPiExtensions = true) }
+        publishImportedPiExtensions(piExtensionManager.listImported())
         val installedResult = piExtensionManager.listInstalled()
         runtime.nativeModManager.refreshDiscovery()
         val catalogResult = if (loadCatalog) {
@@ -2875,6 +3062,7 @@ class AetherViewModel(
         _uiState.update { current ->
             current.copy(
                 installedPiExtensions = installedResult.getOrDefault(current.installedPiExtensions),
+                hasLoadedInstalledPiExtensions = true,
                 piExtensionCatalog = catalogResult?.getOrDefault(current.piExtensionCatalog)
                     ?: current.piExtensionCatalog,
                 isLoadingPiExtensions = false,
@@ -2888,6 +3076,19 @@ class AetherViewModel(
                     R.string.message_pi_extension_operation_failed,
                     throwable.userFacingMessage(),
                 )
+            )
+        }
+    }
+
+    private fun publishImportedPiExtensions(
+        result: Result<List<InstalledPiExtension>>,
+    ) {
+        _uiState.update { current ->
+            current.copy(
+                installedPiExtensions = result.getOrNull()?.let { imported ->
+                    mergeImportedPiExtensions(current.installedPiExtensions, imported)
+                } ?: current.installedPiExtensions,
+                hasLoadedInstalledPiExtensions = true,
             )
         }
     }
@@ -3402,8 +3603,16 @@ class AetherViewModel(
         operation: String,
         payload: JSONObject,
     ): AetherModOperationDecision {
+        val hasNativeInterceptors = modKernel.operations.hasInterceptors(operation)
+        val eventName = "operation:$operation"
+        val hasScriptInterceptors =
+            eventName in aetherAppExtensionManager.state.value.snapshot.eventNames
+        if (!hasNativeInterceptors && !hasScriptInterceptors) {
+            return AetherModOperationDecision(payload = payload)
+        }
+
         val context = buildAetherExtensionHostState(_uiState.value)
-        val nativeDecision = if (modKernel.operations.hasInterceptors(operation)) {
+        val nativeDecision = if (hasNativeInterceptors) {
             modKernel.operations.intercept(
                 operation = operation,
                 payload = payload,
@@ -3414,8 +3623,7 @@ class AetherViewModel(
         }
         if (nativeDecision.cancelled) return nativeDecision
 
-        val eventName = "operation:$operation"
-        if (eventName !in aetherAppExtensionManager.state.value.snapshot.eventNames) {
+        if (!hasScriptInterceptors) {
             return nativeDecision
         }
         val scriptDecision = aetherAppExtensionManager.dispatchEvent(
@@ -3640,6 +3848,31 @@ class AetherViewModel(
                 }
             }
             JSONObject().put("submitted", true)
+        }
+
+        "app.appendCustomMessage" -> {
+            val type = args.optString("type").trim()
+            require(type.isNotBlank()) { "Custom messages require a type." }
+            val text = args.optString("text")
+            val payload = args.optJSONObject("payload") ?: JSONObject()
+            val sessionId = _uiState.value.currentSessionId
+            val message = ChatMessage(
+                id = "aether-custom-${UUID.randomUUID()}",
+                author = MessageAuthor.Agent,
+                text = text,
+                createdAtMillis = System.currentTimeMillis(),
+                assistantActionsHidden = true,
+                providerPayloadJson = JSONObject()
+                    .put("aether_custom_type", type)
+                    .put("aether_custom_payload", payload)
+                    .toString(),
+            )
+            withContext(Dispatchers.Main.immediate) {
+                updateSession(sessionId) { session ->
+                    session.copy(messages = session.messages + message, preview = text)
+                }
+            }
+            JSONObject().put("appended", true).put("type", type)
         }
 
         "app.newChat" -> {
@@ -4080,15 +4313,17 @@ class AetherViewModel(
                     showStarterPromptHint = false,
                 )
             }
-            aetherAppExtensionManager.emitEvent(
-                event = "message_sent",
-                data = JSONObject()
-                    .put("session_id", targetSessionId)
-                    .put("message_id", userMessage.id)
-                    .put("text", userMessage.text)
-                    .put("mode", runningFollowUpMode.name.lowercase()),
-                context = buildAetherExtensionHostState(_uiState.value),
-            )
+            if ("message_sent" in aetherAppExtensionManager.state.value.snapshot.eventNames) {
+                aetherAppExtensionManager.emitEvent(
+                    event = "message_sent",
+                    data = JSONObject()
+                        .put("session_id", targetSessionId)
+                        .put("message_id", userMessage.id)
+                        .put("text", userMessage.text)
+                        .put("mode", runningFollowUpMode.name.lowercase()),
+                    context = buildAetherExtensionHostState(_uiState.value),
+                )
+            }
             return
         }
 
@@ -4102,6 +4337,8 @@ class AetherViewModel(
         var requestModelKey = ""
         var shouldGenerateSessionTitle = false
         var sessionForPersistence: ChatSession? = null
+        var editedMessagePredecessorId: String? = null
+        var isEditingExistingMessage = false
 
         _uiState.update { current ->
             val updatedSessions = current.sessions.toMutableList()
@@ -4118,6 +4355,11 @@ class AetherViewModel(
                         it.id == current.editingMessageId && it.author == MessageAuthor.User
                     }
                     if (editingMessageIndex >= 0) {
+                        isEditingExistingMessage = true
+                        editedMessagePredecessorId = editingSession.messages
+                            .take(editingMessageIndex)
+                            .lastOrNull()
+                            ?.id
                         val branchedMessages = createEditedMessageBranch(
                             messages = editingSession.messages,
                             messageId = current.editingMessageId,
@@ -4236,16 +4478,29 @@ class AetherViewModel(
                 settings = turnRequest.settings,
             )
         }
-        sessionExecutionManager.startTurn(turnRequest)
-        aetherAppExtensionManager.emitEvent(
-            event = "message_sent",
-            data = JSONObject()
-                .put("session_id", targetSessionId)
-                .put("message_id", userMessage.id)
-                .put("text", userMessage.text)
-                .put("mode", "new_turn"),
-            context = buildAetherExtensionHostState(_uiState.value),
-        )
+        if (isEditingExistingMessage) {
+            viewModelScope.launch {
+                navigatePiBranch(
+                    sessionId = targetSessionId,
+                    aetherMessageId = editedMessagePredecessorId,
+                    resetWhenMissing = true,
+                )
+                sessionExecutionManager.startTurn(turnRequest)
+            }
+        } else {
+            sessionExecutionManager.startTurn(turnRequest)
+        }
+        if ("message_sent" in aetherAppExtensionManager.state.value.snapshot.eventNames) {
+            aetherAppExtensionManager.emitEvent(
+                event = "message_sent",
+                data = JSONObject()
+                    .put("session_id", targetSessionId)
+                    .put("message_id", userMessage.id)
+                    .put("text", userMessage.text)
+                    .put("mode", "new_turn"),
+                context = buildAetherExtensionHostState(_uiState.value),
+            )
+        }
     }
 
     private fun handleTurnEvent(
@@ -4253,17 +4508,6 @@ class AetherViewModel(
     ) {
         captureTurnCompleted(event)
         val isSuccessfulAssistantReply = event.outcome == SessionTurnOutcome.Success
-        if (
-            isSuccessfulAssistantReply &&
-            shouldAutoCompactContext(event.tokenUsage, event.tokenUsageSource, assistantText = "")
-        ) {
-            viewModelScope.launch {
-                while (sessionExecutionManager.isSessionRunning(event.sessionId)) {
-                    delay(25)
-                }
-                compactSession(event.sessionId, manual = false)
-            }
-        }
         if (
             shouldMarkOnboardingCompleted(
                 settings = _uiState.value.settings,
@@ -4290,13 +4534,15 @@ class AetherViewModel(
             }
             current.copy(unviewedCompletedSessionIds = unviewedCompletedSessionIds)
         }
-        aetherAppExtensionManager.emitEvent(
-            event = "turn_complete",
-            data = JSONObject()
-                .put("session_id", event.sessionId)
-                .put("outcome", event.outcome.name.lowercase()),
-            context = buildAetherExtensionHostState(_uiState.value),
-        )
+        if ("turn_complete" in aetherAppExtensionManager.state.value.snapshot.eventNames) {
+            aetherAppExtensionManager.emitEvent(
+                event = "turn_complete",
+                data = JSONObject()
+                    .put("session_id", event.sessionId)
+                    .put("outcome", event.outcome.name.lowercase()),
+                context = buildAetherExtensionHostState(_uiState.value),
+            )
+        }
     }
 
     private suspend fun buildPendingDraftAttachment(
@@ -4665,8 +4911,15 @@ class AetherViewModel(
         sessionId: String,
         sharedWorkspaceFilePaths: Collection<String> = emptyList(),
     ) {
+        val agentSession = runCatching {
+            runtime.chatRepository.getAgentSessionMetadata(sessionId)
+        }.getOrNull()
         runCatching {
-            runtime.piKernelBridge.closeSession(sessionId)
+            runtime.piKernelBridge.closeSession(
+                sessionId = sessionId,
+                sessionFile = agentSession?.jsonlPath.orEmpty(),
+                deleteFile = true,
+            )
         }.onFailure { throwable ->
             diagnosticLogger.exception(
                 category = "pi_bridge",
@@ -5311,13 +5564,6 @@ class AetherViewModel(
             emitTransientMessage(uiString(R.string.message_not_enough_conversation_to_compact))
             return
         }
-        val compactInput = buildCompactConversationInput(session)
-        if (compactInput.isBlank()) {
-            if (!manual) return
-            emitTransientMessage(uiString(R.string.message_no_text_to_compact))
-            return
-        }
-
         _uiState.update { current ->
             if (manual) {
                 current.copy(
@@ -5336,45 +5582,29 @@ class AetherViewModel(
 
         viewModelScope.launch {
             try {
-                val providerConfigs = _uiState.value.providerConfigs
-                val compactSettings = resolveModelSettings(
-                    baseSettings = snapshot.settings,
-                    providerConfigs = providerConfigs,
-                    preferredModelKey = resolveDefaultCompactingModelKey(snapshot.settings, providerConfigs),
-                    fallbackModelKey = resolveDefaultChatModelKey(snapshot.settings, providerConfigs),
+                val metadata = runtime.chatRepository.getAgentSessionMetadata(sessionId)
+                val settings = snapshot.settings
+                piKernelBridge.compactSession(
+                    sessionId = sessionId,
+                    sessionPayload = JSONObject().apply {
+                        put("session_file", metadata?.jsonlPath.orEmpty())
+                        put("workspace_directory", workspaceFileBridge.workspaceDirectory(sessionId, settings.agentWorkspaceMode))
+                        put("termux_workspace_directory", workspaceFileBridge.workspaceDirectory(sessionId, settings.agentWorkspaceMode))
+                        put("runtime", metadata?.runtime ?: settings.defaultRuntimeId?.storageValue.orEmpty())
+                        put("platform", "android")
+                        put("model_config", settings.toPiModelConfig().toJson())
+                        put("system_prompt", "")
+                        put("host_tools", JSONArray())
+                    },
                 )
-                if (!compactSettings.isProviderSetupValid()) {
-                    emitTransientMessage(uiString(R.string.message_configure_provider_before_compacting))
-                    return@launch
-                }
-
-                val compaction = compactConversation(
-                    settings = compactSettings,
-                    session = session,
-                    compactInput = compactInput,
-                ).getOrElse { throwable ->
-                    emitTransientMessage(uiString(R.string.message_compaction_failed, throwable.userFacingMessage()))
-                    return@launch
-                }
-
                 val now = System.currentTimeMillis()
-                val compactedMessages = session.messages + listOf(
-                    ChatMessage(
-                        id = "compact-context-$now",
-                        author = MessageAuthor.User,
-                        text = buildCompactedContextMessage(compaction.summary),
-                        createdAtMillis = now,
-                        providerPayloadJson = compaction.providerPayloadJson,
-                        displayKind = MessageDisplayKind.HiddenContext,
-                    ),
-                    ChatMessage(
-                        id = "compact-status-$now",
-                        author = MessageAuthor.Agent,
-                        text = "Context compacted",
-                        createdAtMillis = now + 1,
-                        assistantActionsHidden = true,
-                        displayKind = MessageDisplayKind.CompactStatus,
-                    ),
+                val compactedMessages = session.messages + ChatMessage(
+                    id = "compact-status-$now",
+                    author = MessageAuthor.Agent,
+                    text = "Context compacted",
+                    createdAtMillis = now,
+                    assistantActionsHidden = true,
+                    displayKind = MessageDisplayKind.CompactStatus,
                 )
                 val updatedSession = session.withMessages(compactedMessages)
                 _uiState.update { current ->
@@ -5386,6 +5616,9 @@ class AetherViewModel(
                     current.copy(sessions = updatedSessions)
                 }
                 persistSessionSnapshot(updatedSession, currentSessionId = sessionId)
+            } catch (throwable: Throwable) {
+                if (throwable is CancellationException) throw throwable
+                emitTransientMessage(uiString(R.string.message_compaction_failed, throwable.userFacingMessage()))
             } finally {
                 _uiState.update { current ->
                     if (current.compactingSessionId == sessionId) {
@@ -5397,88 +5630,6 @@ class AetherViewModel(
             }
         }
     }
-
-    private suspend fun compactConversation(
-        settings: AppSettings,
-        @Suppress("UNUSED_PARAMETER") session: ChatSession,
-        compactInput: String,
-    ): Result<CompactedConversation> {
-        val piResult = piCompletionClient.completeOnce(
-            settings = settings,
-            systemPrompt = SessionCompactingSystemPrompt,
-            messages = listOf(
-                LlmMessage(
-                    role = "user",
-                    contentParts = listOf(LlmTextPart(compactInput)),
-                )
-            ),
-            disableReasoning = true,
-        )
-        val completion = piResult.getOrNull()
-        val summary = completion?.assistantText?.trim().orEmpty()
-        if (summary.isBlank()) {
-            return Result.failure(
-                piResult.exceptionOrNull()
-                    ?: IllegalStateException("empty model response")
-            )
-        }
-        return Result.success(
-            CompactedConversation(
-                summary = summary,
-                providerPayloadJson = completion?.toProviderPayloadJson().orEmpty(),
-            )
-        )
-    }
-
-    private fun buildCompactConversationInput(session: ChatSession): String {
-        val raw = buildString {
-            appendLine("Conversation to compact:")
-            session.messages
-                .filter { it.displayKind != MessageDisplayKind.CompactStatus }
-                .forEachIndexed { index, message ->
-                    appendLine()
-                    appendLine("## ${index + 1}. ${message.author.name}")
-                    appendLine(formatMessageForCompaction(message))
-                }
-        }.trim()
-        return raw.takeLast(CompactingMaxInputChars)
-    }
-
-    private fun formatMessageForCompaction(message: ChatMessage): String = buildString {
-        if (message.text.isNotBlank()) {
-            appendLine(message.text.trim())
-        }
-        message.reasoningTrace?.let { trace ->
-            val summary = trace.chunks
-                .mapNotNull { chunk -> chunk.detail.ifBlank { chunk.title }.takeIf(String::isNotBlank) }
-                .joinToString("\n")
-            if (summary.isNotBlank()) {
-                if (isNotEmpty()) appendLine()
-                appendLine("Reasoning summary:")
-                appendLine(summary)
-            }
-        }
-        if (message.attachments.isNotEmpty()) {
-            if (isNotEmpty()) appendLine()
-            appendLine("Attachments:")
-            message.attachments.forEach { attachment ->
-                appendLine("- ${attachment.name} (${attachment.mimeType}) ${attachment.workspacePath}".trimEnd())
-            }
-        }
-        if (message.toolInvocations.isNotEmpty()) {
-            if (isNotEmpty()) appendLine()
-            appendLine("Tool activity:")
-            message.toolInvocations.forEach { invocation ->
-                appendLine("- ${invocation.toolName}: ${invocation.argumentsJson.take(600)}")
-                if (invocation.outputJson.isNotBlank()) {
-                    appendLine("  output: ${invocation.outputJson.take(1200)}")
-                }
-            }
-        }
-    }.trim().ifBlank { "[Empty message]" }
-
-    private fun buildCompactedContextMessage(summary: String): String =
-        "This conversation was compacted. Continue from this retained context:\n\n$summary"
 
     private fun String.sanitizeGeneratedSessionTitle(): String =
         lineSequence()
@@ -5531,9 +5682,6 @@ class AetherViewModel(
             return if (toolInvocations.size == 1) {
                 when (toolInvocations.first().toolName.lowercase()) {
                     "bash" -> "Ran bash command"
-                    "fetch_bash_output" -> "Fetched bash output"
-                    "kill_bash" -> "Stopped bash command"
-                    "sleep" -> "Waited"
                     else -> "Used ${toolInvocations.first().toolName}"
                 }
             } else {
@@ -5690,6 +5838,9 @@ class AetherViewModel(
     ) {
         viewModelScope.launch {
             val result = installBlock()
+            if (result.isSuccess) {
+                piKernelBridge.reloadAllExtensions(runtime.piExtensionStateRepository.loadOptions())
+            }
             result
                 .onSuccess { installedSkill ->
                     emitTransientMessage(uiString(R.string.message_installed_skill, installedSkill.name))
@@ -5788,9 +5939,15 @@ class AetherViewModel(
         uri: Uri,
         text: String,
     ): Boolean = runCatching {
-        getApplication<Application>().contentResolver.openOutputStream(uri)?.use { output ->
+        val resolver = getApplication<Application>().contentResolver
+        // Open with "rwt" so the destination is truncated before writing. The default "w"
+        // mode only truncates when the document provider declares truncation support, and
+        // providers that ignore mode entirely (or stream via FUSE) can otherwise leave the
+        // exported file at 0 bytes.
+        resolver.openOutputStream(uri, "rwt")?.use { output ->
             output.write(text.toByteArray(Charsets.UTF_8))
             output.flush()
+            (output as? FileOutputStream)?.fd?.sync()
         } ?: return false
         true
     }.getOrDefault(false)
@@ -6052,11 +6209,26 @@ class AetherViewModel(
         }
     }
 
-    private fun buildFullAppExportJson(
+    private suspend fun buildFullAppExportJson(
         snapshot: AetherUiState,
         sessions: List<ChatSession>,
-    ): JSONObject =
-        JSONObject().apply {
+    ): JSONObject {
+        val piSessions = JSONArray()
+        sessions.forEach { session ->
+            runCatching { piKernelBridge.exportSessionJsonl(session.id) }
+                .getOrNull()
+                ?.let { exported ->
+                    val path = exported.optString("exported_path")
+                    val jsonl = path.takeIf(String::isNotBlank)
+                        ?.let { filePath -> runCatching { java.io.File(filePath).readText(Charsets.UTF_8) }.getOrNull() }
+                    piSessions.put(JSONObject().apply {
+                        put("sessionId", session.id)
+                        put("jsonlPath", path)
+                        put("jsonl", jsonl ?: "")
+                    })
+                }
+        }
+        return JSONObject().apply {
             put("schemaVersion", 2)
             put("exportType", "app")
             put("exportedAtMillis", System.currentTimeMillis())
@@ -6065,19 +6237,28 @@ class AetherViewModel(
             put("sessions", JSONArray(serializeChatSessions(sessions.map { it.copy(activeSkills = emptyList()) })))
             put("currentSessionId", snapshot.currentSessionId)
             put("skillBundles", skillManager.exportSkillBundles(snapshot.installedSkills))
-            put("mcpServers", JSONArray(serializeMcpServerConfigs(snapshot.mcpServers)))
+            put("piSessions", piSessions)
         }
+    }
 
     private fun parseFullAppImport(
         json: JSONObject,
         installedSkills: List<InstalledSkill>,
     ): ImportedAppData {
-        val mcpServers = parseMcpServerConfigs(json.optJSONArray("mcpServers")?.toString().orEmpty())
         val sessions = sanitizeImportedSessions(
             sessions = parseChatSessions(json.optJSONArray("sessions")?.toString().orEmpty()),
             installedSkillIds = installedSkills.map { it.id }.toSet(),
-            mcpServerIds = mcpServers.map { it.id }.toSet(),
+            mcpServerIds = emptySet(),
         )
+        val piSessions = buildMap {
+            val entries = json.optJSONArray("piSessions") ?: JSONArray()
+            for (index in 0 until entries.length()) {
+                val item = entries.optJSONObject(index) ?: continue
+                val id = item.optString("sessionId").trim()
+                val jsonl = item.optString("jsonl")
+                if (id.isNotBlank() && jsonl.isNotBlank()) put(id, jsonl)
+            }
+        }
         return ImportedAppData(
             settings = parseImportedSettings(json.optJSONObject("settings")),
             providerConfigs = parseProviderConfigs(json.optJSONArray("providerConfigs")?.toString().orEmpty()),
@@ -6086,7 +6267,8 @@ class AetherViewModel(
                 .takeIf { id -> id == DraftSessionId || sessions.any { it.id == id } }
                 ?: DraftSessionId,
             installedSkills = installedSkills,
-            mcpServers = mcpServers,
+            mcpServers = emptyList(),
+            piSessions = piSessions,
         )
     }
 
@@ -6127,11 +6309,6 @@ class AetherViewModel(
         put("customHeaders", customHeaders.toJsonArray())
         put("reasoningEffort", reasoningEffort)
         put("systemPrompt", systemPrompt)
-        put("tavilyApiKey", tavilyApiKey)
-        put("tavilyBaseUrl", tavilyBaseUrl)
-        put("searchBackend", searchBackend.storageValue)
-        put("searxngBaseUrl", searxngBaseUrl)
-        put("searxngApiKey", searxngApiKey)
         put("llmInactivityReconnectTimeoutSeconds", llmInactivityReconnectTimeoutSeconds)
         put("keepTasksRunningInBackground", keepTasksRunningInBackground)
         put("notifyOnTaskCompletion", notifyOnTaskCompletion)
@@ -6151,7 +6328,6 @@ class AetherViewModel(
                 }
             },
         )
-        put("termuxLiveOutputEnabled", termuxLiveOutputEnabled)
         put("enabledRuntimeIds", JSONArray().apply { enabledRuntimeIds.forEach { put(it.storageValue) } })
         put("defaultRuntimeId", defaultRuntimeId?.storageValue ?: JSONObject.NULL)
         put("alpineSetupCompleted", alpineSetupCompleted)
@@ -6180,7 +6356,6 @@ class AetherViewModel(
         put("defaultTitleModelKey", defaultTitleModelKey)
         put("defaultNamingModelKey", defaultNamingModelKey)
         put("defaultCompactingModelKey", defaultCompactingModelKey)
-        put("defaultSelectedSkillIds", JSONArray(defaultSelectedSkillIds))
         put("onboardingSeenVersion", onboardingSeenVersion)
         put("onboardingCompletedVersion", onboardingCompletedVersion)
         put("privacyPolicyAccepted", privacyPolicyAccepted)
@@ -6220,15 +6395,6 @@ class AetherViewModel(
                 json.optString("reasoningEffort", defaults.reasoningEffort),
             ),
             systemPrompt = json.optString("systemPrompt", defaults.systemPrompt),
-            tavilyApiKey = json.optString("tavilyApiKey", defaults.tavilyApiKey),
-            tavilyBaseUrl = normalizeTavilyBaseUrl(
-                json.optString("tavilyBaseUrl", defaults.tavilyBaseUrl)
-            ),
-            searchBackend = SearchBackend.fromStorage(json.optString("searchBackend")),
-            searxngBaseUrl = normalizeSearXngBaseUrl(
-                json.optString("searxngBaseUrl", defaults.searxngBaseUrl)
-            ),
-            searxngApiKey = json.optString("searxngApiKey", defaults.searxngApiKey),
             llmInactivityReconnectTimeoutSeconds = normalizeLlmInactivityReconnectTimeoutSeconds(
                 json.optInt(
                     "llmInactivityReconnectTimeoutSeconds",
@@ -6256,10 +6422,6 @@ class AetherViewModel(
             ),
             termuxEnvironmentVariables = parseImportedTermuxEnvironmentVariables(
                 json.optJSONArray("termuxEnvironmentVariables")
-            ),
-            termuxLiveOutputEnabled = json.optBoolean(
-                "termuxLiveOutputEnabled",
-                defaults.termuxLiveOutputEnabled,
             ),
             autoCleanOldCommandHistory = json.optBoolean(
                 "autoCleanOldCommandHistory",
@@ -6394,11 +6556,6 @@ class AetherViewModel(
         val preview: String,
     )
 
-    private data class CompactedConversation(
-        val summary: String,
-        val providerPayloadJson: String = "",
-    )
-
     private data class AttachmentMetadata(
         val displayName: String,
         val mimeType: String,
@@ -6429,6 +6586,30 @@ class AetherViewModel(
         val currentSessionId: String,
         val installedSkills: List<InstalledSkill>,
         val mcpServers: List<McpServerConfig>,
+        val piSessions: Map<String, String> = emptyMap(),
+    )
+}
+
+internal fun AetherUiState.withFinalizedPausedSession(
+    finalizedSession: ChatSession,
+    executionStates: Map<String, SessionExecutionState>,
+): AetherUiState {
+    val currentExecution = executionStates[currentSessionId]
+    val updatedSessions = if (sessions.any { it.id == finalizedSession.id }) {
+        sessions.map { if (it.id == finalizedSession.id) finalizedSession else it }
+    } else {
+        listOf(finalizedSession) + sessions
+    }
+    return copy(
+        sessions = updatedSessions,
+        sessionExecutionStates = executionStates,
+        isSending = currentExecution?.isRunning == true,
+        pendingResponseSessionId = currentExecution?.sessionId,
+        pendingToolInvocations = currentExecution?.pendingToolInvocations.orEmpty(),
+        pendingResponseBlocks = currentExecution?.pendingResponseBlocks.orEmpty(),
+        pendingAssistantText = currentExecution?.pendingAssistantText.orEmpty(),
+        pendingStatusText = currentExecution?.pendingStatusText.orEmpty(),
+        pendingStatusDetail = currentExecution?.pendingStatusDetail.orEmpty(),
     )
 }
 

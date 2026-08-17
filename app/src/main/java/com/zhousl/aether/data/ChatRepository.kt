@@ -5,10 +5,13 @@ import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
-import androidx.room.withTransaction
+import androidx.room.immediateTransaction
+import androidx.room.useWriterConnection
 import com.zhousl.aether.data.chatdb.ChatHistoryDao
 import com.zhousl.aether.data.chatdb.ChatHistoryDatabase
 import com.zhousl.aether.data.chatdb.AndroidChatHistoryDatabaseFactory
+import com.zhousl.aether.data.chatdb.ChatAgentMessageRefEntity
+import com.zhousl.aether.data.chatdb.ChatAgentSessionEntity
 import com.zhousl.aether.data.chatdb.ChatMessageEntity
 import com.zhousl.aether.data.chatdb.ChatMessageSummaryEntity
 import com.zhousl.aether.data.chatdb.ChatSessionEntity
@@ -54,7 +57,7 @@ internal fun shouldStartNewMessageJsonBatch(currentBytes: Long, nextBytes: Long)
     currentBytes > 0L && nextBytes > MessageJsonBatchByteLimit - currentBytes
 
 
-private val Context.chatDataStore by preferencesDataStore(name = "aether_chats")
+internal val Context.chatDataStore by preferencesDataStore(name = "aether_chats")
 
 data class PersistedChatState(
     val sessions: List<ChatSession> = emptyList(),
@@ -66,22 +69,71 @@ data class ChatUsageStatisticsSnapshot(
     val statistics: ChatUsageStatistics,
 )
 
+data class AssistantResponseCheckpointTarget(
+    val sessionId: String,
+    val responseGroupId: String,
+)
+
+data class AssistantResponseCheckpoint(
+    val target: AssistantResponseCheckpointTarget,
+    val fromPosition: Int,
+    val messages: List<ChatMessage>,
+) {
+    init {
+        require(fromPosition >= 0) { "fromPosition must be non-negative" }
+        require(messages.isNotEmpty()) { "messages must not be empty" }
+        require(messages.all { it.responseGroupId == target.responseGroupId }) {
+            "checkpoint messages must belong to the target response"
+        }
+    }
+}
+
 enum class PersistedChatWriteIntent {
     SyncSnapshot,
     DeleteSession,
     ReplaceFromImport,
 }
 
+interface ChatStatePersistence {
+    val chatState: Flow<PersistedChatState>
+
+    suspend fun updateChatState(
+        sessions: List<ChatSession>,
+        currentSessionId: String,
+        writeIntent: PersistedChatWriteIntent = PersistedChatWriteIntent.SyncSnapshot,
+    )
+
+    suspend fun upsertAssistantResponseCheckpoints(
+        checkpoints: List<AssistantResponseCheckpoint>,
+    )
+}
+
+private data class AssistantResponseCheckpointUpsert(
+    val sessionId: String,
+    val responseGroupId: String,
+    val fromPosition: Int,
+    val messages: List<ChatMessage>,
+)
+
+// BundledSQLiteDriver databases use Room's connection-based transaction API.
+private suspend fun <R> ChatHistoryDatabase.withTransaction(
+    block: suspend () -> R,
+): R = useWriterConnection { connection ->
+    connection.immediateTransaction {
+        block()
+    }
+}
+
 class ChatRepository(
     private val context: Context,
     private val database: ChatHistoryDatabase = AndroidChatHistoryDatabaseFactory.getInstance(context),
-) {
+) : ChatStatePersistence {
     private val chatHistoryDao: ChatHistoryDao = database.chatHistoryDao()
     private val restoredMessageCache = mutableMapOf<ChatMessageCacheKey, LoadedChatMessage>()
     private val restoredMessageCacheMutex = Mutex()
 
     @OptIn(ExperimentalCoroutinesApi::class)
-    val chatState: Flow<PersistedChatState> = flow {
+    override val chatState: Flow<PersistedChatState> = flow {
         migrateLegacyChatStateIfNeeded()
         emitAll(
             combine(
@@ -145,10 +197,10 @@ class ChatRepository(
         )
     }
 
-    suspend fun updateChatState(
+    override suspend fun updateChatState(
         sessions: List<ChatSession>,
         currentSessionId: String,
-        writeIntent: PersistedChatWriteIntent = PersistedChatWriteIntent.SyncSnapshot,
+        writeIntent: PersistedChatWriteIntent,
     ) {
         migrateLegacyChatStateIfNeeded()
         replaceChatStateBatched(
@@ -163,6 +215,18 @@ class ChatRepository(
             preferences[ROOM_MIGRATION_COMPLETE] = true
         }
     }
+
+    suspend fun updateChatState(
+        sessions: List<ChatSession>,
+        currentSessionId: String,
+    ) {
+        updateChatState(
+            sessions = sessions,
+            currentSessionId = currentSessionId,
+            writeIntent = PersistedChatWriteIntent.SyncSnapshot,
+        )
+    }
+
     suspend fun getSessionWithMessages(sessionId: String): ChatSession? {
         migrateLegacyChatStateIfNeeded()
         return restoredMessageCacheMutex.withLock {
@@ -226,6 +290,61 @@ class ChatRepository(
         database.withTransaction {
             chatHistoryDao.upsertSession(session.toSessionEntity(sortOrder))
         }
+    }
+
+    suspend fun upsertAgentSessionMetadata(
+        chatSessionId: String,
+        piSessionId: String,
+        jsonlPath: String,
+        runtime: String,
+        migrationVersion: Int = 1,
+    ) {
+        if (chatSessionId.isBlank() || piSessionId.isBlank() || jsonlPath.isBlank()) return
+        migrateLegacyChatStateIfNeeded()
+        database.withTransaction {
+            chatHistoryDao.upsertAgentSession(
+                ChatAgentSessionEntity(
+                    chatSessionId = chatSessionId,
+                    piSessionId = piSessionId,
+                    jsonlPath = jsonlPath,
+                    runtime = runtime,
+                    migrationVersion = migrationVersion,
+                    updatedAtMillis = System.currentTimeMillis(),
+                )
+            )
+        }
+    }
+
+    suspend fun getAgentSessionMetadata(chatSessionId: String): ChatAgentSessionEntity? {
+        migrateLegacyChatStateIfNeeded()
+        return database.withTransaction { chatHistoryDao.getAgentSession(chatSessionId) }
+    }
+
+    suspend fun getAgentMessageEntryIds(chatSessionId: String, messageId: String): List<String> {
+        migrateLegacyChatStateIfNeeded()
+        return database.withTransaction {
+            chatHistoryDao.getAgentMessageRefs(chatSessionId, messageId).map { it.piEntryId }
+        }
+    }
+
+    suspend fun upsertAgentMessageRefs(
+        chatSessionId: String,
+        aetherMessageIds: List<String>,
+        piEntryIds: List<String>,
+    ) {
+        if (aetherMessageIds.isEmpty() || piEntryIds.isEmpty()) return
+        migrateLegacyChatStateIfNeeded()
+        val refs = aetherMessageIds.flatMap { messageId ->
+            piEntryIds.mapIndexed { ordinal, entryId ->
+                ChatAgentMessageRefEntity(
+                    chatSessionId = chatSessionId,
+                    aetherMessageId = messageId,
+                    piEntryId = entryId,
+                    ordinal = ordinal,
+                )
+            }
+        }
+        database.withTransaction { chatHistoryDao.upsertAgentMessageRefs(refs) }
     }
 
     suspend fun upsertMessageSnapshot(
@@ -339,6 +458,87 @@ class ChatRepository(
             messages = messages,
             startPosition = fromPosition,
         )
+    }
+
+    override suspend fun upsertAssistantResponseCheckpoints(
+        checkpoints: List<AssistantResponseCheckpoint>,
+    ) {
+        if (checkpoints.isEmpty()) return
+        val upserts = checkpoints
+            .associateBy { it.target }
+            .values
+            .map { checkpoint ->
+                AssistantResponseCheckpointUpsert(
+                    sessionId = checkpoint.target.sessionId,
+                    responseGroupId = checkpoint.target.responseGroupId,
+                    fromPosition = checkpoint.fromPosition,
+                    messages = checkpoint.messages,
+                )
+            }
+
+        upserts.forEach { upsert ->
+            invalidateRestoredMessagesFromPosition(
+                sessionId = upsert.sessionId,
+                fromPosition = upsert.fromPosition,
+            )
+        }
+        database.withTransaction {
+            upserts.forEach { upsert ->
+                if (chatHistoryDao.getSession(upsert.sessionId) == null) return@forEach
+                val previousMessageCount = chatHistoryDao.getMessageCountForResponseGroup(
+                    sessionId = upsert.sessionId,
+                    responseGroupId = upsert.responseGroupId,
+                    fromPosition = upsert.fromPosition,
+                )
+                val previousSessionMessageCount = chatHistoryDao.getMessageCountForSession(upsert.sessionId)
+                val parkedMessageIds = chatHistoryDao.getMessageIdsToParkOutsideResponseGroup(
+                    sessionId = upsert.sessionId,
+                    responseGroupId = upsert.responseGroupId,
+                    fromPosition = upsert.fromPosition,
+                    toPosition = previousSessionMessageCount,
+                )
+                chatHistoryDao.parkMessagesFromPositionOutsideResponseGroup(
+                    sessionId = upsert.sessionId,
+                    responseGroupId = upsert.responseGroupId,
+                    fromPosition = upsert.fromPosition,
+                    toPosition = previousSessionMessageCount,
+                )
+                chatHistoryDao.deleteWorkspaceFileRefsForResponseGroup(
+                    sessionId = upsert.sessionId,
+                    responseGroupId = upsert.responseGroupId,
+                    fromPosition = upsert.fromPosition,
+                )
+                chatHistoryDao.deleteMessagesForResponseGroup(
+                    sessionId = upsert.sessionId,
+                    responseGroupId = upsert.responseGroupId,
+                    fromPosition = upsert.fromPosition,
+                )
+                chatHistoryDao.upsertMessages(
+                    upsert.messages.mapIndexed { index, message ->
+                        ChatMessageEntityMapper.toEntity(
+                            sessionId = upsert.sessionId,
+                            position = upsert.fromPosition + index,
+                            message = message,
+                        )
+                    }
+                )
+                if (parkedMessageIds.isNotEmpty()) {
+                    chatHistoryDao.restoreParkedMessagesOutsideResponseGroup(
+                        sessionId = upsert.sessionId,
+                        responseGroupId = upsert.responseGroupId,
+                        fromPosition = upsert.fromPosition,
+                        toPosition = previousSessionMessageCount,
+                        checkpointEndPosition = upsert.fromPosition + upsert.messages.size,
+                        parkedMessageIds = parkedMessageIds,
+                        positionDelta = upsert.messages.size - previousMessageCount,
+                    )
+                }
+                replaceWorkspaceFileRefsForMessagesInTransaction(
+                    sessionId = upsert.sessionId,
+                    messages = upsert.messages,
+                )
+            }
+        }
     }
 
     private suspend fun ChatHistoryDao.upsertMessagesChunked(
@@ -739,6 +939,7 @@ private fun ChatMessageSummaryEntity.toMessageEntity(messageJson: String): ChatM
     responseGroupId = responseGroupId,
     displayKind = displayKind,
     messageSchemaVersion = messageSchemaVersion,
+    isIncomplete = isIncomplete,
 )
 
 private val ChatMessageSummaryEntity.cacheKey: ChatMessageCacheKey
@@ -753,6 +954,7 @@ private val ChatMessageSummaryEntity.cacheKey: ChatMessageCacheKey
         displayKind = displayKind,
         messageSchemaVersion = messageSchemaVersion,
         messageJsonLength = messageJsonLength,
+        isIncomplete = isIncomplete,
     )
 
 private data class ChatMessageCacheKey(
@@ -766,6 +968,7 @@ private data class ChatMessageCacheKey(
     val displayKind: String?,
     val messageSchemaVersion: Int,
     val messageJsonLength: Int?,
+    val isIncomplete: Boolean,
 )
 
 private data class LoadedChatMessage(
@@ -784,9 +987,6 @@ private fun ChatSession.toSessionEntity(sortOrder: Long): ChatSessionEntity = Ch
     title = title,
     preview = preview,
     hasCustomTitle = hasCustomTitle,
-    selectedSkillIdsJson = JSONArray().apply { selectedSkillIds.forEach(::put) }.toString(),
-    activeSkillsJson = serializeActiveSkillContexts(activeSkills),
-    activeMcpServerIdsJson = JSONArray().apply { activeMcpServerIds.forEach(::put) }.toString(),
     agentModeEnabled = agentModeEnabled,
     chromeEnabled = chromeEnabled,
     selectedModelKey = selectedModelKey,
@@ -823,7 +1023,6 @@ private fun ChatSessionEntity.toChatSession(
     stats: ChatSessionMessageStatsEntity? = null,
 ): ChatSession {
     val orderedMessages = messages.sortedBy { it.position }.map { it.message }
-    val activeSkills = parseActiveSkillContexts(activeSkillsJson)
     return ChatSession(
         id = id,
         title = title,
@@ -832,9 +1031,9 @@ private fun ChatSessionEntity.toChatSession(
         messages = orderedMessages,
         messageCount = stats?.messageCount ?: orderedMessages.size,
         lastMessageAtMillis = stats?.lastMessageAtMillis ?: orderedMessages.maxOfOrNull { it.createdAtMillis },
-        selectedSkillIds = parseStringList(selectedSkillIdsJson).ifEmpty { activeSkills.map { it.skillId } },
-        activeSkills = activeSkills,
-        activeMcpServerIds = parseStringList(activeMcpServerIdsJson),
+        selectedSkillIds = emptyList(),
+        activeSkills = emptyList(),
+        activeMcpServerIds = emptyList(),
         agentModeEnabled = agentModeEnabled,
         chromeEnabled = chromeEnabled,
         selectedModelKey = selectedModelKey,
@@ -872,11 +1071,9 @@ internal fun parseChatSessionsForMigration(rawValue: String): LegacyChatSessions
                             preview = session.optString("preview"),
                             hasCustomTitle = session.optBoolean("hasCustomTitle", false),
                             messages = parseMessages(session.optJSONArrayOrThrow("messages", sessionIndex)),
-                            selectedSkillIds = parseStringList(session.optJSONArray("selectedSkillIds")).ifEmpty {
-                                parseActiveSkillContexts(session.optString("activeSkillsJson")).map { it.skillId }
-                            },
-                            activeSkills = parseActiveSkillContexts(session.optString("activeSkillsJson")),
-                            activeMcpServerIds = parseStringList(session.optJSONArray("activeMcpServerIds")),
+                            selectedSkillIds = emptyList(),
+                            activeSkills = emptyList(),
+                            activeMcpServerIds = emptyList(),
                             agentModeEnabled = session.optBoolean("agentModeEnabled", false),
                             chromeEnabled = session.optBoolean("chromeEnabled", false),
                             selectedModelKey = session.optString("selectedModelKey"),
@@ -931,10 +1128,7 @@ internal fun ChatSession.toJson(): JSONObject = JSONObject().apply {
     put("agentModeEnabled", agentModeEnabled)
     put("chromeEnabled", chromeEnabled)
     put("selectedModelKey", selectedModelKey)
-    put("selectedSkillIds", JSONArray().apply { selectedSkillIds.forEach(::put) })
     put("messages", JSONArray().apply { syncActiveBranches(messages).forEach { put(it.toJson()) } })
-    put("activeSkillsJson", serializeActiveSkillContexts(activeSkills))
-    put("activeMcpServerIds", JSONArray().apply { activeMcpServerIds.forEach(::put) })
 }
 
 private fun parseMessages(messages: JSONArray?): List<ChatMessage> {
@@ -971,6 +1165,9 @@ internal fun parseMessage(message: JSONObject, messageIndex: Int): ChatMessage =
     branchGroup = parseBranchGroup(message.optJSONObject("branchGroup")),
     responseGroupId = message.optString("responseGroupId").ifBlank { null },
     assistantActionsHidden = message.optBoolean("assistantActionsHidden"),
+    isIncomplete = message.optBoolean("isIncomplete"),
+    statusText = message.optString("statusText"),
+    statusDetail = message.optString("statusDetail"),
     providerPayloadJson = message.optString("providerPayloadJson"),
     displayKind = parseMessageDisplayKind(message.optString("displayKind")),
     usageStatistics = parseUsageStatistics(message.optJSONObject("usageStatistics")),
@@ -993,6 +1190,11 @@ internal fun ChatMessage.toJson(): JSONObject = JSONObject().apply {
     if (assistantActionsHidden) {
         put("assistantActionsHidden", true)
     }
+    if (isIncomplete) {
+        put("isIncomplete", true)
+    }
+    statusText.takeIf { it.isNotBlank() }?.let { put("statusText", it) }
+    statusDetail.takeIf { it.isNotBlank() }?.let { put("statusDetail", it) }
     providerPayloadJson.takeIf { it.isNotBlank() }?.let {
         put("providerPayloadJson", it)
     }

@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
@@ -31,6 +32,7 @@ import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Switch
@@ -44,6 +46,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.runtime.withFrameNanos
@@ -51,6 +54,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.BlurredEdgeTreatment
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.onFocusChanged
@@ -60,12 +65,12 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import com.zhousl.aether.ui.theme.AetherBackground
 import com.zhousl.aether.ui.theme.AetherOnSurface
 import com.zhousl.aether.ui.theme.AetherOnSurfaceVariant
 import com.zhousl.aether.ui.theme.AetherOnPrimary
 import com.zhousl.aether.ui.theme.AetherPrimary
-import com.zhousl.aether.ui.theme.AetherScrim
+import com.zhousl.aether.ui.theme.AetherSettingsBackground
+import com.zhousl.aether.ui.theme.AetherSettingsIcon
 import com.zhousl.aether.ui.theme.AetherSurface
 import com.zhousl.aether.ui.theme.AetherSurfaceHigh
 import com.zhousl.aether.platform.currentPlatformCapabilities
@@ -76,6 +81,7 @@ import kotlinx.coroutines.launch
 private const val SharedSettingsPageTransitionDuration = 320
 private val SharedSettingsPageTransitionEasing =
     CubicBezierEasing(0.22f, 0.84f, 0.18f, 1f)
+private val HeaderControlHalo = Color(0x18000000)
 
 /**
  * Popup content is hosted in a separate native window on iOS. Mount that window for a complete
@@ -168,16 +174,16 @@ internal fun <T> SharedSettingsPageTransition(
     targetState: T,
     depth: (T) -> Int,
     label: String,
+    stateKey: (T) -> Any = { it.toString() },
     content: @Composable (T) -> Unit,
 ) {
     val richMotion = LocalSharedSettingsRichMotion.current
     val reduceMotion = LocalReduceMotion.current
+    val stateHolder = rememberSaveableStateHolder()
     AnimatedContent(
         targetState = targetState,
         transitionSpec = {
-            if (reduceMotion) {
-                return@AnimatedContent fadeIn(tween(80)) togetherWith fadeOut(tween(60))
-            }
+            if (reduceMotion) return@AnimatedContent fadeIn(tween(80)) togetherWith fadeOut(tween(60))
             if (!currentPlatformCapabilities.layeredScreenTransitions && !richMotion) {
                 return@AnimatedContent fadeIn(tween(120)) togetherWith
                     fadeOut(tween(80))
@@ -211,7 +217,9 @@ internal fun <T> SharedSettingsPageTransition(
         },
         label = label,
     ) { currentState ->
-        content(currentState)
+        stateHolder.SaveableStateProvider(stateKey(currentState)) {
+            content(currentState)
+        }
     }
 }
 
@@ -227,30 +235,40 @@ fun HeaderCircleButton(
     iconSize: Dp = 22.dp,
     containerColor: Color = Color.White,
     iconTint: Color = AetherOnSurface,
+    showHalo: Boolean = true,
 ) {
-    Box(
-        modifier = modifier
-            .size(size)
-            .shadow(12.dp, CircleShape, ambientColor = AetherScrim, spotColor = AetherScrim)
-            .clip(CircleShape)
-            .background(if (enabled) containerColor else containerColor.copy(alpha = 0.55f))
-            .clickable(enabled = enabled, onClick = onClick),
-        contentAlignment = Alignment.Center,
-    ) {
-        when {
-            iconPainter != null -> Icon(
-                painter = iconPainter,
-                contentDescription = contentDescription,
-                tint = if (enabled) iconTint else iconTint.copy(alpha = 0.4f),
-                modifier = Modifier.size(iconSize),
+    Box(modifier = modifier.size(size)) {
+        if (showHalo) {
+            Box(
+                modifier = Modifier.matchParentSize()
+                    .offset(y = 4.dp)
+                    .blur(14.dp, edgeTreatment = BlurredEdgeTreatment.Unbounded)
+                    .clip(CircleShape)
+                    .background(HeaderControlHalo),
             )
+        }
+        Box(
+            modifier = Modifier.matchParentSize()
+                .clip(CircleShape)
+                .background(if (enabled) containerColor else containerColor.copy(alpha = 0.55f))
+                .clickable(enabled = enabled, onClick = onClick),
+            contentAlignment = Alignment.Center,
+        ) {
+            when {
+                iconPainter != null -> Icon(
+                    painter = iconPainter,
+                    contentDescription = contentDescription,
+                    tint = if (enabled) iconTint else iconTint.copy(alpha = 0.4f),
+                    modifier = Modifier.size(iconSize),
+                )
 
-            icon != null -> Icon(
-                imageVector = icon,
-                contentDescription = contentDescription,
-                tint = if (enabled) iconTint else iconTint.copy(alpha = 0.4f),
-                modifier = Modifier.size(iconSize),
-            )
+                icon != null -> Icon(
+                    imageVector = icon,
+                    contentDescription = contentDescription,
+                    tint = if (enabled) iconTint else iconTint.copy(alpha = 0.4f),
+                    modifier = Modifier.size(iconSize),
+                )
+            }
         }
     }
 }
@@ -261,7 +279,7 @@ fun SettingsCardGroup(content: @Composable () -> Unit) {
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(16.dp))
-            .background(AetherSurfaceHigh),
+            .background(AetherSurface),
     ) {
         content()
     }
@@ -278,10 +296,11 @@ internal fun SharedSettingsActionButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
+    isLoading: Boolean = false,
 ) {
     Button(
         onClick = onClick,
-        enabled = enabled,
+        enabled = enabled && !isLoading,
         modifier = modifier,
         shape = RoundedCornerShape(14.dp),
         colors = ButtonDefaults.buttonColors(
@@ -289,12 +308,15 @@ internal fun SharedSettingsActionButton(
             contentColor = AetherOnPrimary,
         ),
     ) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelLarge,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
+        if (isLoading) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(18.dp),
+                strokeWidth = 2.dp,
+                color = AetherOnPrimary,
+            )
+            Spacer(Modifier.width(8.dp))
+        }
+        Text(text = label, style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 
@@ -329,7 +351,7 @@ internal fun SharedSettingsSubtleActionButton(
 @Composable
 internal fun SharedActionPreviewPill(label: String) {
     Row(
-        modifier = Modifier.clip(RoundedCornerShape(999.dp)).background(AetherBackground)
+        modifier = Modifier.clip(RoundedCornerShape(999.dp)).background(AetherSettingsBackground)
             .padding(horizontal = 10.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -374,7 +396,7 @@ internal fun SharedSettingsChoiceRow(
         modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp))
             .background(
                 if (selected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.78f)
-                else AetherBackground
+                else AetherSettingsBackground
             )
             .clickable(onClick = onClick).padding(horizontal = 14.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -431,7 +453,7 @@ fun SettingsNavRow(
             Icon(
                 imageVector = icon,
                 contentDescription = null,
-                tint = AetherOnSurfaceVariant,
+                tint = AetherSettingsIcon,
                 modifier = Modifier.size(24.dp),
             )
         },
@@ -457,7 +479,7 @@ fun SettingsNavRow(
             Icon(
                 painter = iconPainter,
                 contentDescription = null,
-                tint = AetherOnSurfaceVariant,
+                tint = AetherSettingsIcon,
                 modifier = Modifier.size(24.dp),
             )
         },
@@ -482,7 +504,7 @@ private fun SettingsNavRowContent(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(enabled = enabled, onClick = onClick)
+            .clickable(onClick = onClick)
             .padding(horizontal = 16.dp, vertical = 15.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {

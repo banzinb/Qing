@@ -74,6 +74,7 @@ import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Cloud
+import androidx.compose.material.icons.rounded.Compress
 import androidx.compose.material.icons.rounded.Extension
 import androidx.compose.material.icons.rounded.Image
 import androidx.compose.material.icons.rounded.Menu
@@ -103,6 +104,7 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.produceState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.draw.BlurredEdgeTreatment
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
@@ -131,13 +133,15 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.PlatformTextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.style.LineHeightStyle
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -155,6 +159,7 @@ import com.zhousl.aether.R
 import com.zhousl.aether.data.InstalledSkill
 import com.zhousl.aether.data.AppLanguage
 import com.zhousl.aether.data.AgentModeDisplayState
+import com.zhousl.aether.data.AlpineChromeViewerUrl
 import com.zhousl.aether.data.McpServerConfig
 import com.zhousl.aether.data.McpTransportConfig
 import com.zhousl.aether.data.ModelCatalogInfo
@@ -165,15 +170,12 @@ import com.zhousl.aether.data.SessionFollowUpMode
 import com.zhousl.aether.data.quickActionLabel
 import com.zhousl.aether.data.thinkingCatalogKey
 import com.zhousl.aether.termux.TermuxSetupState
+import com.zhousl.aether.platform.PlatformWebView
 import com.zhousl.aether.ui.theme.AetherBackground
 import com.zhousl.aether.ui.theme.AetherBackgroundGradientTop
 import com.zhousl.aether.ui.theme.AetherOnSurface
 import com.zhousl.aether.ui.theme.AetherOnSurfaceVariant
-import com.zhousl.aether.ui.theme.AetherOnPrimaryContainer
-import com.zhousl.aether.ui.theme.AetherOnSecondaryContainer
 import com.zhousl.aether.ui.theme.AetherPrimary
-import com.zhousl.aether.ui.theme.AetherPrimaryContainer
-import com.zhousl.aether.ui.theme.AetherSecondaryContainer
 import com.zhousl.aether.ui.theme.AetherScrim
 import com.zhousl.aether.ui.theme.AetherSurface
 import com.zhousl.aether.ui.theme.AetherSurfaceHigh
@@ -510,6 +512,8 @@ fun ConversationScreen(
                                 "${invocation.id}:${invocation.isRunning}:${invocation.outputJson.length}:${invocation.startedAtMillis}:${invocation.completedAtMillis ?: 0L}:${invocation.timelineOrder}"
                             })
                         }
+                        is AssistantResponseBlock.Status ->
+                            "${block.id}:status:${block.text}:${block.detail}"
                     }
                 }
             )
@@ -561,14 +565,6 @@ fun ConversationScreen(
                 .padding(innerPadding)
         ) {
             if (messages.isEmpty()) {
-                ConversationEmptyState(
-                    modifier = Modifier.padding(
-                        top = topBarBodyHeight + 20.dp,
-                        bottom = composerBodyHeight + animatedImeBottom + 16.dp,
-                    ),
-                    inputFocused = composerFocused,
-                    onStarterPromptSelected = onInputChanged,
-                )
                 AetherExtensionSlot(
                     slot = AetherExtensionSlotChatEmpty,
                     modifier = Modifier
@@ -707,6 +703,7 @@ fun ConversationScreen(
                                         ReconnectingStatusCard(
                                             text = pendingStatusText,
                                             detail = pendingStatusDetail,
+                                            isRunning = true,
                                             modifier = Modifier.padding(top = 6.dp),
                                         )
                                     }
@@ -953,42 +950,51 @@ private fun ConversationModelSelector(
         modifier = modifier,
         contentAlignment = Alignment.CenterStart,
     ) {
-        Row(
-            modifier = Modifier
+        Box(
+            modifier = Modifier.height(38.dp)
                 .onGloballyPositioned { coordinates ->
                     val bounds = coordinates.boundsInWindow()
                     anchorHeightPx = bounds.height.toInt()
-                }
-                .height(38.dp)
-                .shadow(4.dp, RoundedCornerShape(999.dp), ambientColor = ChatGptControlShadow, spotColor = ChatGptControlShadow)
-                .clip(RoundedCornerShape(999.dp))
-                .background(AetherSurface.copy(alpha = 0.96f))
-                .clickable(enabled = options.isNotEmpty()) {
-                    onOpened()
-                    menuSelectedModelKey = selectedModelKey
-                    showingReasoningEffort = false
-                    expanded = true
                 },
-            verticalAlignment = Alignment.CenterVertically,
         ) {
-            if (selectedDisplay != null) {
-                SelectedModelDisplay(
-                    displayName = selectedDisplay,
-                    modifier = Modifier
-                        .widthIn(max = 240.dp)
-                        .padding(horizontal = 17.dp),
-                )
-            } else {
-                Text(
-                    text = fallbackLabel,
-                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Normal),
-                    color = AetherOnSurface,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier
-                        .widthIn(max = 220.dp)
-                        .padding(horizontal = 17.dp),
-                )
+            Box(
+                modifier = Modifier.matchParentSize()
+                    .offset(y = 4.dp)
+                    .blur(14.dp, edgeTreatment = BlurredEdgeTreatment.Unbounded)
+                    .clip(RoundedCornerShape(999.dp))
+                    .background(ChatGptControlShadow),
+            )
+            Row(
+                modifier = Modifier.height(38.dp)
+                    .clip(RoundedCornerShape(999.dp))
+                    .background(AetherSurface.copy(alpha = 0.96f))
+                    .clickable(enabled = options.isNotEmpty()) {
+                        onOpened()
+                        menuSelectedModelKey = selectedModelKey
+                        showingReasoningEffort = false
+                        expanded = true
+                },
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                if (selectedDisplay != null) {
+                    SelectedModelDisplay(
+                        displayName = selectedDisplay,
+                        modifier = Modifier
+                            .widthIn(max = 240.dp)
+                            .padding(horizontal = 17.dp),
+                    )
+                } else {
+                    Text(
+                        text = fallbackLabel,
+                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Normal),
+                        color = AetherOnSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier
+                            .widthIn(max = 220.dp)
+                            .padding(horizontal = 17.dp),
+                    )
+                }
             }
         }
 
@@ -1457,10 +1463,6 @@ private fun ConversationEmptyState(
         codeLabel = stringResource(R.string.chat_code_chip),
         helpWriteLabel = stringResource(R.string.chat_help_me_write_chip),
         summarizeFileLabel = stringResource(R.string.chat_summarize_file_chip),
-        analyzeImagePrompt = stringResource(R.string.chat_analyze_image_prompt),
-        codePrompt = stringResource(R.string.chat_code_prompt),
-        helpWritePrompt = stringResource(R.string.chat_help_write_prompt),
-        summarizeFilePrompt = stringResource(R.string.chat_summarize_file_prompt),
         inputFocused = inputFocused,
         onStarterPromptSelected = onStarterPromptSelected,
     )
@@ -1513,7 +1515,14 @@ private fun PendingAssistantTimeline(
         if (index >= 0) index else if (agentModePreviewVisible) blocks.size else -1
     }
     val agentModeOverlayText = if (agentModePreviewVisible) {
-        blocks.lastTextBlockAfterAgentMode().orEmpty()
+        blocks.lastTextBlockAfterAgentMode().orEmpty().ifBlank {
+            blocks.latestReasoningStatusAfterTool { it.isAgentModeDisplayInvocation() }
+        }
+    } else {
+        ""
+    }
+    val chromeOverlayText = if (chromePreviewVisible) {
+        blocks.latestReasoningStatusAfterTool { it.isChromeDisplayInvocation() }
     } else {
         ""
     }
@@ -1526,6 +1535,7 @@ private fun PendingAssistantTimeline(
                 contentDescription = stringResource(R.string.chrome_label),
                 pendingText = stringResource(R.string.chat_chrome_preview_pending),
                 useLiveSurface = false,
+                overlayText = chromeOverlayText,
                 onAttachSurface = {},
                 onDetachSurface = {},
             )
@@ -1586,6 +1596,7 @@ private fun PendingAssistantTimeline(
             contentDescription = stringResource(R.string.chrome_label),
             pendingText = stringResource(R.string.chat_chrome_preview_pending),
             useLiveSurface = false,
+            overlayText = chromeOverlayText,
             onAttachSurface = {},
             onDetachSurface = {},
         )
@@ -1635,6 +1646,7 @@ private fun PendingAssistantTimeline(
             is AssistantResponseBlock.Text -> block.text.isNotBlank()
             is AssistantResponseBlock.ToolGroup -> block.toolInvocations.isNotEmpty()
             is AssistantResponseBlock.Reasoning -> hasVisibleReasoningStatus(block.trace)
+            is AssistantResponseBlock.Status -> block.text.isNotBlank()
         }
     }
 
@@ -1741,6 +1753,11 @@ private fun PendingAssistantTimelineBlock(
                 )
             }
         }
+
+        is AssistantResponseBlock.Status -> ReconnectingStatusCard(
+            text = block.text,
+            detail = block.detail,
+        )
     }
 }
 
@@ -1748,19 +1765,21 @@ private fun AssistantResponseBlock.agentModeToolInvocations(): List<ChatToolInvo
     is AssistantResponseBlock.ToolGroup -> toolInvocations.filter { it.isAgentModeDisplayInvocation() }
     is AssistantResponseBlock.Reasoning -> trace.toolInvocations.filter { it.isAgentModeDisplayInvocation() }
     is AssistantResponseBlock.Text -> emptyList()
+    is AssistantResponseBlock.Status -> emptyList()
 }
 
 private fun AssistantResponseBlock.chromeToolInvocations(): List<ChatToolInvocation> = when (this) {
     is AssistantResponseBlock.ToolGroup -> toolInvocations.filter { it.isChromeDisplayInvocation() }
     is AssistantResponseBlock.Reasoning -> trace.toolInvocations.filter { it.isChromeDisplayInvocation() }
     is AssistantResponseBlock.Text -> emptyList()
+    is AssistantResponseBlock.Status -> emptyList()
 }
 
 private fun ChatToolInvocation.isAgentModeDisplayInvocation(): Boolean =
     toolName.equals("agent_display", ignoreCase = true)
 
 private fun ChatToolInvocation.isChromeDisplayInvocation(): Boolean =
-    toolName.equals("chrome", ignoreCase = true)
+    toolName.equals("chrome", ignoreCase = true) || toolName.equals("browser", ignoreCase = true)
 
 private fun List<AssistantResponseBlock>.firstAgentModeBlockIndex(): Int =
     indexOfFirst { it.agentModeToolInvocations().isNotEmpty() }
@@ -1776,6 +1795,28 @@ private fun List<AssistantResponseBlock>.lastTextBlockAfterAgentMode(): String? 
         ?.text
 }
 
+private fun List<AssistantResponseBlock>.latestReasoningStatusAfterTool(
+    predicate: (ChatToolInvocation) -> Boolean,
+): String {
+    val firstToolBlock = indexOfFirst { block ->
+        when (block) {
+            is AssistantResponseBlock.ToolGroup -> block.toolInvocations.any(predicate)
+            is AssistantResponseBlock.Reasoning -> block.trace.toolInvocations.any(predicate)
+            is AssistantResponseBlock.Text -> false
+            is AssistantResponseBlock.Status -> false
+        }
+    }
+    if (firstToolBlock < 0) return ""
+    return drop(firstToolBlock).asReversed().firstNotNullOfOrNull { block ->
+        val trace = (block as? AssistantResponseBlock.Reasoning)?.trace ?: return@firstNotNullOfOrNull null
+        trace.latestStatusText.ifBlank {
+            trace.chunks.lastOrNull { it.detail.isNotBlank() || it.title.isNotBlank() }
+                ?.let { it.detail.ifBlank(it::title) }
+                .orEmpty()
+        }.takeIf(String::isNotBlank)
+    }.orEmpty()
+}
+
 private fun List<AssistantResponseBlock>.visibleText(): String =
     filterIsInstance<AssistantResponseBlock.Text>()
         .joinToString("\n\n") { it.text }
@@ -1786,6 +1827,7 @@ private fun List<AssistantResponseBlock>.hasVisiblePendingWork(): Boolean =
             is AssistantResponseBlock.Text -> block.text.isNotBlank()
             is AssistantResponseBlock.ToolGroup -> block.toolInvocations.isNotEmpty()
             is AssistantResponseBlock.Reasoning -> hasVisibleReasoningStatus(block.trace)
+            is AssistantResponseBlock.Status -> block.text.isNotBlank()
         }
     }
 
@@ -1793,6 +1835,7 @@ private fun List<AssistantResponseBlock>.workStartedAtMillis(): Long? =
     flatMap { block ->
         when (block) {
             is AssistantResponseBlock.Text -> emptyList()
+            is AssistantResponseBlock.Status -> emptyList()
             is AssistantResponseBlock.ToolGroup -> block.toolInvocations.mapNotNull {
                 it.startedAtMillis.takeIf { timestamp -> timestamp > 0L }
             }
@@ -1964,10 +2007,8 @@ private fun CompactCommandSuggestion(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(22.dp))
-            .background(AetherSurfaceHigh.copy(alpha = 0.92f))
             .clickable(onClick = onClick)
-            .padding(horizontal = 14.dp, vertical = 10.dp),
+            .padding(horizontal = 14.dp, vertical = 11.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
@@ -1998,6 +2039,50 @@ private fun CompactCommandSuggestion(
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f),
+        )
+    }
+}
+
+@Composable
+private fun SlashCommandSuggestionRow(
+    suggestion: SlashCommandSuggestion,
+    detail: String,
+    input: String,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(22.dp))
+            .background(AetherSurfaceHigh.copy(alpha = 0.92f))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Icon(
+            imageVector = when (suggestion.icon) {
+                SlashCommandIcon.Skill -> Icons.Rounded.AutoAwesome
+                SlashCommandIcon.Extension -> Icons.Rounded.Extension
+                SlashCommandIcon.Command -> Icons.Rounded.Compress
+            },
+            contentDescription = null,
+            tint = AetherOnSurfaceVariant,
+            modifier = Modifier.size(18.dp),
+        )
+        Text(
+            text = slashHighlightedName(suggestion.command, input),
+            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium),
+            color = AetherOnSurface,
+        )
+        Text(
+            text = detail,
+            style = MaterialTheme.typography.bodyMedium,
+            color = AetherOnSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+            textAlign = TextAlign.End,
         )
     }
 }
@@ -2242,6 +2327,10 @@ private fun ConversationComposerBar(
     val followUpMenuVisibility = remember(conversationStateKey) { MutableTransitionState(false) }
     followUpMenuVisibility.targetState = followUpMenuExpanded
     var textFieldFocused by remember { mutableStateOf(false) }
+    var fieldValue by remember(conversationStateKey) { mutableStateOf(TextFieldValue(value, TextRange(value.length))) }
+    LaunchedEffect(value) {
+        if (value != fieldValue.text) fieldValue = TextFieldValue(value, TextRange(value.length))
+    }
     var measuredTextLineCount by remember { mutableIntStateOf(1) }
     var measuredTextHeight by remember { mutableStateOf(22.dp) }
     val density = LocalDensity.current
@@ -2285,10 +2374,19 @@ private fun ConversationComposerBar(
         else -> stringResource(R.string.chat_ask_aether)
     }
     val hasDraft = value.isNotBlank() || attachments.isNotEmpty()
-    val showCompactSuggestion = compactSuggestionText.isNotBlank() &&
-        attachments.isEmpty() &&
-        value.isNotBlank() &&
-        "/compact".startsWith(value.trim(), ignoreCase = true)
+    val slashSuggestions = remember(fieldValue.text) {
+        slashCommandSuggestions(fieldValue.text)
+    }
+    fun applySlashSuggestion(command: String) {
+        val typedLength = fieldValue.text.drop(1).takeWhile { !it.isWhitespace() }.length
+        val replaceEnd = (1 + typedLength).coerceAtMost(fieldValue.text.length)
+        val suffix = fieldValue.text.substring(replaceEnd)
+        val needsSpace = suffix.isEmpty() && slashSuggestions.firstOrNull { it.command == command }?.argumentHint?.isNotBlank() == true
+        val replacement = command + if (needsSpace) " " else ""
+        val next = replacement + suffix
+        fieldValue = TextFieldValue(next, TextRange(replacement.length))
+        onValueChange(next)
+    }
     val canSendDraft = attachments.all { it.workspaceState == AttachmentWorkspaceState.Ready }
     val showPauseButton = isSending && !hasDraft
     val showSubmitButton = !isSending || hasDraft
@@ -2402,7 +2500,7 @@ private fun ConversationComposerBar(
             )
         }
         AnimatedVisibility(
-            visible = showCompactSuggestion,
+            visible = attachments.isEmpty() && slashSuggestions.isNotEmpty(),
             enter = fadeIn(animationSpec = tween(durationMillis = 160, easing = ChatGptMotionEasing)) +
                 slideInVertically(
                     animationSpec = tween(durationMillis = 220, easing = ChatGptMotionEasing),
@@ -2414,10 +2512,23 @@ private fun ConversationComposerBar(
                     targetOffsetY = { it / 3 },
                 ),
         ) {
-            CompactCommandSuggestion(
-                onClick = { onValueChange("/compact") },
-                text = compactSuggestionText,
-            )
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 300.dp)
+                    .clip(RoundedCornerShape(18.dp))
+                    .background(AetherSurfaceHigh.copy(alpha = 0.98f))
+                    .padding(vertical = 4.dp),
+            ) {
+                items(slashSuggestions, key = { it.command }) { suggestion ->
+                    SlashCommandSuggestionRow(
+                        suggestion = suggestion,
+                        detail = if (suggestion.command == "/compact") compactSuggestionText else suggestion.description,
+                        input = fieldValue.text,
+                        onClick = { applySlashSuggestion(suggestion.command) },
+                    )
+                }
+            }
         }
         if (attachments.isNotEmpty()) {
             ComposerAttachmentTray(
@@ -2520,8 +2631,11 @@ private fun ConversationComposerBar(
                                 )
                             }
                             BasicTextField(
-                                value = value,
-                                onValueChange = onValueChange,
+                                value = fieldValue,
+                                onValueChange = { next ->
+                                    fieldValue = next
+                                    onValueChange(next.text)
+                                },
                                 enabled = true,
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -2611,8 +2725,8 @@ private fun ConversationComposerBar(
                                                 ComposerPlusMenuRow(
                                                     title = stringResource(R.string.branch_steer_current_run),
                                                     icon = Icons.Rounded.AutoAwesome,
-                                                    iconTint = AetherOnSecondaryContainer,
-                                                    iconContainerColor = AetherSecondaryContainer,
+                                                    iconTint = Color(0xFF8D6C2F),
+                                                    iconContainerColor = Color(0xFFFFF3DE),
                                                     onClick = {
                                                         followUpMenuExpanded = false
                                                         onSteerFollowUp()
@@ -2621,8 +2735,8 @@ private fun ConversationComposerBar(
                                                 ComposerPlusMenuRow(
                                                     title = stringResource(R.string.branch_queue_next_turn),
                                                     icon = Icons.Rounded.ArrowUpward,
-                                                    iconTint = AetherOnPrimaryContainer,
-                                                    iconContainerColor = AetherPrimaryContainer,
+                                                    iconTint = Color(0xFF2F6DA3),
+                                                    iconContainerColor = Color(0xFFEAF2FF),
                                                     onClick = {
                                                         followUpMenuExpanded = false
                                                         onQueueFollowUp()
@@ -2785,6 +2899,25 @@ private fun ConversationComposerBar(
                                             },
                                         )
                                     }
+                                    extensionUiController?.snapshot?.composerMenuItems.orEmpty().forEach { item ->
+                                        ComposerPlusMenuRow(
+                                            title = item.title,
+                                            icon = Icons.Rounded.Extension,
+                                            selected = item.selected,
+                                            iconTint = AetherPrimary,
+                                            iconContainerColor = AetherSurfaceHigh,
+                                            onClick = {
+                                                runAfterAttachmentMenuDismiss {
+                                                    extensionUiController?.onAction?.invoke(
+                                                        item.extensionId,
+                                                        item.action.ifBlank { item.localId },
+                                                        item.args,
+                                                    )
+                                                }
+                                            },
+                                        )
+                                    }
+                                    AetherExtensionSlot(AetherExtensionSlotChatComposerPlusMenu)
                                 }
                             }
                         }
@@ -2799,13 +2932,11 @@ private fun ConversationComposerBar(
 private fun ComposerPauseButton(
     onClick: () -> Unit,
 ) {
-    val stopDescription = stringResource(R.string.chat_stop_response)
     Box(
         modifier = Modifier
-            .size(44.dp)
+            .size(38.dp)
             .clip(CircleShape)
             .background(ChatGptPurple)
-            .semantics { contentDescription = stopDescription }
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
@@ -2834,7 +2965,7 @@ private fun ComposerSubmitButton(
     }
     Box(
         modifier = Modifier
-            .size(44.dp)
+            .size(38.dp)
             .clip(CircleShape)
             .background(buttonColor)
             .clickable(
@@ -2992,6 +3123,20 @@ private fun AgentModePreviewPanel(
                         displayState = displayState,
                         onAttachSurface = onAttachSurface,
                         onDetachSurface = onDetachSurface,
+                        modifier = Modifier
+                            .fillMaxHeight()
+                            .padding(10.dp)
+                            .aspectRatio(
+                                displayState.width.coerceAtLeast(1).toFloat() /
+                                    displayState.height.coerceAtLeast(1).toFloat(),
+                                matchHeightConstraintsFirst = true,
+                            )
+                            .clip(RoundedCornerShape(14.dp)),
+                    )
+                } else if (displayState.isActive && !useLiveSurface) {
+                    PlatformWebView(
+                        url = AlpineChromeViewerUrl,
+                        scrollEnabled = false,
                         modifier = Modifier
                             .fillMaxHeight()
                             .padding(10.dp)
@@ -3310,7 +3455,7 @@ private fun AgentModePreviewToolStatus(
         Icon(
             imageVector = when (toolInvocation.toolName.lowercase()) {
                 "agent_display" -> LucideIcons.MousePointer2
-                "chrome" -> Icons.Rounded.Public
+                "chrome", "browser" -> Icons.Rounded.Public
                 else -> Icons.Rounded.AutoAwesome
             },
             contentDescription = null,
@@ -3352,46 +3497,32 @@ private fun formatPendingToolTitle(
     toolName: String,
     isRunning: Boolean,
     arguments: JSONObject?,
-): String = when (toolName.lowercase()) {
+): String {
+    val context = LocalContext.current
+    (context.applicationContext as? com.zhousl.aether.AetherApplication)?.runtime?.modKernel?.toolTitles
+        ?.titleFor(toolName, isRunning)?.let { return it }
+    return when (toolName.lowercase()) {
     "bash" -> toolStatusLabel(isRunning, R.string.tool_title_bash_running, R.string.tool_title_bash_done)
-    "fetch_bash_output" -> toolStatusLabel(isRunning, R.string.tool_title_fetch_bash_output_running, R.string.tool_title_fetch_bash_output_done)
-    "kill_bash" -> toolStatusLabel(isRunning, R.string.tool_title_kill_bash_running, R.string.tool_title_kill_bash_done)
-    "sleep" -> toolStatusLabel(isRunning, R.string.tool_title_sleep_running, R.string.tool_title_sleep_done)
     "read" -> toolStatusLabel(isRunning, R.string.tool_title_read_running, R.string.tool_title_read_done)
     "edit" -> toolStatusLabel(isRunning, R.string.tool_title_edit_running, R.string.tool_title_edit_done)
     "write" -> toolStatusLabel(isRunning, R.string.tool_title_write_running, R.string.tool_title_write_done)
     "grep" -> toolStatusLabel(isRunning, R.string.tool_title_grep_running, R.string.tool_title_grep_done)
     "find" -> toolStatusLabel(isRunning, R.string.tool_title_find_running, R.string.tool_title_find_done)
     "ls" -> toolStatusLabel(isRunning, R.string.tool_title_ls_running, R.string.tool_title_ls_done)
-    "analyze_image" -> toolStatusLabel(isRunning, R.string.tool_title_analyze_image_running, R.string.tool_title_analyze_image_done)
-    "web_search", "tavily_search" -> formatArgumentDrivenToolTitle(
-        isRunning = isRunning,
-        runningVerbRes = R.string.tool_title_searching,
-        doneVerbRes = R.string.tool_title_searched,
-        subject = arguments?.optString("query").orEmpty(),
-        fallbackRes = R.string.tool_title_web_search_fallback,
-    )
-    "fetch_web_url" -> formatArgumentDrivenToolTitle(
-        isRunning = isRunning,
-        runningVerbRes = R.string.tool_title_fetching,
-        doneVerbRes = R.string.tool_title_fetched,
-        subject = arguments?.optString("url").orEmpty(),
-        fallbackRes = R.string.tool_title_web_page_fallback,
-    )
     "aether_config_get",
     "aether_config_set",
     "aether_skill_manage",
-    "aether_mcp_manage",
     "aether_termux_manage",
     "aether_agent_mode_manage",
     "aether_scheduled_task_manage",
     "aether_developer_manage" -> formatAetherToolTitle(toolName, isRunning, arguments)
     "agent_display" -> formatAgentDisplayToolTitle(isRunning, arguments)
-    "chrome" -> formatChromeToolTitle(isRunning, arguments)
+    "chrome", "browser" -> formatChromeToolTitle(isRunning, arguments)
     else -> if (isRunning) {
         stringResource(R.string.tool_title_using_tool, toolName)
     } else {
         stringResource(R.string.tool_title_used_tool, toolName)
+    }
     }
 }
 
@@ -3536,7 +3667,7 @@ private fun formatChromeToolTitle(
             )
         }
     }
-    "tap" -> toolStatusLabel(
+    "tap", "click" -> toolStatusLabel(
         isRunning,
         R.string.tool_title_tapping_chrome,
         R.string.tool_title_tapped_chrome,
@@ -3585,7 +3716,7 @@ private fun formatChromeToolTitle(
         R.string.tool_title_reloading_chrome,
         R.string.tool_title_reloaded_chrome,
     )
-    "evaluate" -> toolStatusLabel(
+    "evaluate", "execute_js", "get_text", "get_page_info", "find_elements", "get_readable", "get_backbone", "wait_for_dom_stable" -> toolStatusLabel(
         isRunning,
         R.string.tool_title_evaluating_chrome,
         R.string.tool_title_evaluated_chrome,
@@ -3650,7 +3781,7 @@ private fun ComposerActionChip(
         modifier = Modifier
             .widthIn(max = 220.dp)
             .clip(RoundedCornerShape(18.dp))
-            .background(AetherPrimaryContainer)
+            .background(Color(0xFFE8F1FF))
             .padding(start = 12.dp, end = 6.dp, top = 8.dp, bottom = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -3658,14 +3789,14 @@ private fun ComposerActionChip(
         Icon(
             imageVector = icon,
             contentDescription = null,
-            tint = AetherPrimary,
+            tint = Color(0xFF4F8CFF),
             modifier = Modifier.size(16.dp),
         )
         Text(
             text = label,
             modifier = Modifier.weight(1f, fill = false),
             style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Medium),
-            color = AetherOnPrimaryContainer,
+            color = Color(0xFF2E6FD5),
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
@@ -3678,7 +3809,7 @@ private fun ComposerActionChip(
             Icon(
                 imageVector = Icons.Rounded.Close,
                 contentDescription = stringResource(R.string.common_remove),
-                tint = AetherPrimary,
+                tint = Color(0xFF4F8CFF),
                 modifier = Modifier.size(14.dp),
             )
         }

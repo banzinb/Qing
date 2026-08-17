@@ -4,14 +4,14 @@ import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
-import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.enableEdgeToEdge
+import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import com.zhousl.aether.ui.AetherApp
 
-class MainActivity : ComponentActivity() {
+class MainActivity : AppCompatActivity() {
     private val notificationPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { }
@@ -20,7 +20,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
-            AetherApp(onNotificationPermissionRequested = ::requestNotificationPermission)
+            AetherApp(onNotificationPermissionRequested = ::maybeRequestNotificationPermission)
         }
     }
 
@@ -29,7 +29,7 @@ class MainActivity : ComponentActivity() {
         (application as AetherApplication).runtime.nativeModManager.notifyUiStable()
     }
 
-    private fun requestNotificationPermission() {
+    private fun maybeRequestNotificationPermission() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
         if (
             ContextCompat.checkSelfPermission(

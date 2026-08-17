@@ -3,7 +3,6 @@ package com.zhousl.aether.data
 import kotlinx.coroutines.runBlocking
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
-import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Test
@@ -18,46 +17,27 @@ class ProviderModelCatalogClientTest {
     }
 
     @Test
-    fun thinkingLevelsUsePiCatalogResults() {
-        assertEquals(emptyList<String>(), supportedThinkingLevels(JSONArray()))
-        assertEquals(
-            listOf("off", "low", "medium", "high", "xhigh", "max"),
-            supportedThinkingLevels(
-                JSONArray()
-                    .put("off")
-                    .put("low")
-                    .put("medium")
-                    .put("high")
-                    .put("xhigh")
-                    .put("max"),
-            ),
+    fun openAiCompatibleKimiK3UsesModelsDevMoonshotCatalog() {
+        val config = LlmProviderConfig(
+            providerId = "modal",
+            name = "Modal",
+            piProviderId = "openai-compatible",
+            apiKey = "test-key",
+            baseUrl = "https://example.modal.run/v1",
+            modelId = "kimi-k3",
+            cachedModels = listOf("kimi-k3"),
+            enabledModelIds = listOf("kimi-k3"),
         )
-        assertEquals(
-            listOf("minimal", "high", "xhigh"),
-            supportedThinkingLevels(
-                JSONArray()
-                    .put("minimal")
-                    .put("high")
-                    .put("xhigh")
-                    .put("high")
-                    .put("unknown"),
-            ),
+        val option = listOf(config).availableModelOptions().single()
+        val catalog = JSONObject(
+            """{"providers":{"moonshotai":{"models":{"kimi-k3":{"id":"kimi-k3","reasoning":true,"reasoning_options":[{"type":"toggle"},{"type":"effort","values":["low","high","max"]}]}}}}}""",
         )
-    }
 
-    @Test
-    fun thinkingLevelClampsUsePiCatalogResults() {
         assertEquals(
-            mapOf("off" to "off", "high" to "high", "xhigh" to "max", "max" to "max"),
-            piThinkingLevelClamps(
-                JSONObject()
-                    .put("off", "off")
-                    .put("high", "high")
-                    .put("xhigh", "max")
-                    .put("max", "max")
-                    .put("unknown", "high")
-                    .put("low", "unknown"),
-            ),
+            listOf("off", "low", "high", "max"),
+            publicCatalogThinkingLevels(catalog, listOf(option))[
+                thinkingCatalogKey("openai-compatible", "kimi-k3")
+            ],
         )
     }
 
@@ -98,57 +78,27 @@ class ProviderModelCatalogClientTest {
     }
 
     @Test
-    fun builtInProviderUsesPiCatalogInsteadOfAndroidCompatibilityPaths() = runBlocking {
-        val result = ProviderModelCatalogClient.fetchModels(
-            LlmProviderConfig(
-                providerId = "vertex",
-                name = "Vertex",
-                piProviderId = "google-vertex",
-                apiKey = "test-key",
-                baseUrl = "",
-                modelId = "gemini-2.5-flash",
-            )
+    fun builtInProviderModelsAreParsedFromModelsDev() {
+        val result = modelsDevProviderModels(
+            JSONObject(
+                """{"providers":{"google-vertex":{"models":{"gemini-new":{"id":"gemini-new"},"fallback-key":{}}}}}""",
+            ),
+            listOf("google-vertex"),
         )
 
         assertEquals(null, result.error)
-        assertEquals(listOf("gemini-2.5-flash"), result.models)
+        assertEquals(listOf("gemini-new", "fallback-key"), result.models)
     }
 
     @Test
-    fun builtInOpenAiApiKeyUsesLiveModelsEndpoint() {
-        val definition = PiProviderCatalog.resolve("openai")
-        val config = LlmProviderConfig(
-            providerId = "openai",
-            name = "OpenAI",
-            piProviderId = "openai",
-            apiKey = "test-key",
-            baseUrl = definition.defaultBaseUrl,
-            modelId = "",
-            authMethod = ProviderAuthMethod.ApiKey,
-        )
-
+    fun modelsDevProviderAliasesMatchAetherBuiltIns() {
         assertEquals(
-            true,
-            ProviderModelCatalogClient.shouldFetchModelsFromEndpoint(config, definition),
+            listOf("fireworks-ai"),
+            PiProviderCatalog.resolve("fireworks").modelsDevProviderIds(),
         )
-    }
-
-    @Test
-    fun openAiCodexOAuthKeepsProviderCatalog() {
-        val definition = PiProviderCatalog.resolve("openai-codex")
-        val config = LlmProviderConfig(
-            providerId = "openai-codex",
-            name = "OpenAI Codex",
-            piProviderId = "openai-codex",
-            apiKey = "",
-            baseUrl = definition.defaultBaseUrl,
-            modelId = "",
-            authMethod = ProviderAuthMethod.OAuth,
-        )
-
         assertEquals(
-            false,
-            ProviderModelCatalogClient.shouldFetchModelsFromEndpoint(config, definition),
+            listOf("kimi-for-coding"),
+            PiProviderCatalog.resolve("kimi-coding").modelsDevProviderIds(),
         )
     }
 
@@ -183,12 +133,17 @@ class ProviderModelCatalogClientTest {
     }
 
     @Test
-    fun failedLiveRequestDoesNotReturnBundledModels() = runBlocking {
+    fun failedProviderRequestFallsBackToModelsDev() = runBlocking {
         val server = MockWebServer()
         server.enqueue(
             MockResponse()
                 .setResponseCode(401)
                 .setBody("""{"error":{"message":"invalid key"}}""")
+        )
+        server.enqueue(
+            MockResponse()
+                .addHeader("Content-Type", "application/json")
+                .setBody("""{"providers":{"openai":{"models":{"gpt-fallback":{"id":"gpt-fallback"}}}}}""")
         )
         server.start()
 
@@ -202,11 +157,14 @@ class ProviderModelCatalogClientTest {
                     baseUrl = server.url("/v1").toString(),
                     modelId = "",
                     authMethod = ProviderAuthMethod.ApiKey,
-                )
+                ),
+                modelsDevUrl = server.url("/catalog.json").toString(),
             )
 
-            assertEquals(emptyList<String>(), result.models)
-            assertEquals("""{"error":{"message":"invalid key"}}""", result.error)
+            assertEquals(listOf("gpt-fallback"), result.models)
+            assertEquals(null, result.error)
+            assertEquals("/v1/models", server.takeRequest().path)
+            assertEquals("/catalog.json", server.takeRequest().path)
         } finally {
             server.shutdown()
         }

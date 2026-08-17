@@ -11,8 +11,15 @@ import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.unit.sp
-import com.zhousl.aether.data.AppAccent
+import com.zhousl.aether.data.AppLanguage
+import com.zhousl.aether.ui.theme.DarkAetherPalette
+import com.zhousl.aether.ui.theme.DarkHighContrastAetherPalette
+import com.zhousl.aether.ui.theme.LightAetherPalette
+import com.zhousl.aether.ui.theme.LightHighContrastAetherPalette
+import com.zhousl.aether.ui.theme.updateAetherPalette
 import com.zhousl.aether.data.AppThemeMode
 import com.zhousl.aether.platform.LocalReduceMotion
 import com.zhousl.aether.platform.rememberPlatformAccessibilityPreferences
@@ -32,6 +39,7 @@ private fun aetherLightColors(palette: AetherPalette) = lightColorScheme(
     background = palette.background,
     surface = palette.surface,
     surfaceVariant = palette.surfaceVariant,
+    surfaceContainerHighest = palette.surfaceVariant,
     onSurface = palette.onSurface,
     onSurfaceVariant = palette.onSurfaceVariant,
     tertiary = palette.tertiary,
@@ -51,6 +59,7 @@ private fun aetherDarkColors(palette: AetherPalette) = darkColorScheme(
     background = palette.background,
     surface = palette.surface,
     surfaceVariant = palette.surfaceVariant,
+    surfaceContainerHighest = palette.surfaceVariant,
     onSurface = palette.onSurface,
     onSurfaceVariant = palette.onSurfaceVariant,
     tertiary = palette.tertiary,
@@ -105,7 +114,7 @@ private val typography = Typography(
 @Composable
 internal fun SharedAetherTheme(
     themeMode: AppThemeMode = AppThemeMode.System,
-    accent: AppAccent = AppAccent.Teal,
+    language: AppLanguage = AppLanguage.English,
     content: @Composable () -> Unit,
 ) {
     val darkTheme = when (themeMode) {
@@ -114,9 +123,16 @@ internal fun SharedAetherTheme(
         AppThemeMode.Dark -> true
     }
     val accessibility = rememberPlatformAccessibilityPreferences()
-    val palette = paletteFor(darkTheme, accent, accessibility.increasedContrast)
-    SideEffect { updateAetherPalette(darkTheme, accent, accessibility.increasedContrast) }
-    CompositionLocalProvider(LocalReduceMotion provides accessibility.reduceMotion) {
+    SideEffect { updateAetherPalette(darkTheme, accessibility.increasedContrast) }
+    val layoutDirection = if (language == AppLanguage.Persian) {
+        LayoutDirection.Rtl
+    } else {
+        LayoutDirection.Ltr
+    }
+    CompositionLocalProvider(
+        LocalLayoutDirection provides layoutDirection,
+        LocalReduceMotion provides accessibility.reduceMotion,
+    ) {
         MaterialTheme(
             colorScheme = if (darkTheme) aetherDarkColors(palette) else aetherLightColors(palette),
             typography = typography,
