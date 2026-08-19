@@ -46,7 +46,8 @@ enum class SkillInstallKind(
     RemoteZip("remote_zip"),
     GitHub("github"),
     PiPackage("pi_package"),
-    PiDiscovered("pi_discovered");
+    PiDiscovered("pi_discovered"),
+    Bundled("bundled");
 
     companion object {
         fun fromStorage(value: String?): SkillInstallKind =

@@ -184,6 +184,16 @@ private fun sharedThemeDisplayName(themeMode: AppThemeMode): String = when (them
     AppThemeMode.Dark -> stringResource(Res.string.theme_dark)
 }
 
+
+
+@Composable
+private fun sharedAccentPreviewColor(accent: AppAccent): androidx.compose.ui.graphics.Color = when (accent) {
+    AppAccent.Azure -> QingAzureLight.primary
+    AppAccent.Teal -> QingTealLight.primary
+    AppAccent.Indigo -> QingIndigoLight.primary
+    AppAccent.Green -> QingGreenLight.primary
+}
+
 internal data class SharedSelectionOption(
     val title: String,
     val subtitle: String,

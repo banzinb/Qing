@@ -10,7 +10,11 @@ class AetherToolExecutorTest {
     @Test
     fun hostToolDefinitionsDoNotDuplicatePiNativeTools() {
         val definitions = AetherToolExecutor.hostToolDefinitions()
-        assertEquals(0, definitions.length())
+        val names = (0 until definitions.length())
+            .map { definitions.getJSONObject(it).getString("name") }
+        assertEquals(2, definitions.length())
+        assertTrue("fetch_web_url" in names)
+        assertTrue("web_search" in names)
     }
 
     @Test

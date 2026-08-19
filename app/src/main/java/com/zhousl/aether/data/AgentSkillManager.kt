@@ -28,6 +28,7 @@ import org.yaml.snakeyaml.constructor.SafeConstructor
 private const val SkillStorageDirectoryName = "agent-skills"
 private const val SkillTempDirectoryName = "agent-skills-tmp"
 private const val SkillFileName = "SKILL.md"
+private const val BundledSkillsAssetRoot = "skills"
 private const val MaxSkillArchiveBytes = 32L * 1024L * 1024L
 private const val MaxSkillExtractedBytes = 128L * 1024L * 1024L
 private const val MaxSkillEntryBytes = 16L * 1024L * 1024L
@@ -301,6 +302,63 @@ class AgentSkillManager(
         }
     }
 
+
+
+    suspend fun installBundledSkills(): Result<Int> = withContext(Dispatchers.IO) {
+        runCatching {
+            val bundleNames = context.assets.list(BundledSkillsAssetRoot).orEmpty()
+            bundleNames.sorted().sumOf { bundleName ->
+                runCatching { installBundledSkill(bundleName) }.getOrDefault(0)
+            }
+        }
+    }
+
+    private suspend fun installBundledSkill(bundleName: String): Int {
+        val assets = context.assets
+        val assetRoot = "$BundledSkillsAssetRoot/$bundleName"
+        val entries = runCatching { assets.list(assetRoot) }.getOrNull().orEmpty()
+        if (entries.none { it.equals(SkillFileName, ignoreCase = true) }) return 0
+        val workingDirectory = createTempDirectory()
+        return try {
+            val copiedRoot = workingDirectory.resolve(bundleName).apply { mkdirs() }
+            copyAssetDirectory(assets, assetRoot, copiedRoot)
+            val skillRoot = locateSkillRoot(copiedRoot)
+            val parsed = parseSkillDocument(File(skillRoot, SkillFileName))
+            val skillId = buildSkillId(parsed.name)
+            val currentSkills = extensionsRepository.extensionState.firstValue().installedSkills
+            val existing = currentSkills.firstOrNull { it.id == skillId }
+            if (existing == null && skillId in extensionsRepository.seededBundledSkillIds.first()) return 0
+            if (existing != null && existing.source.kind != SkillInstallKind.Bundled) {
+                extensionsRepository.markBundledSkillSeeded(skillId)
+                return 0
+            }
+            val checksum = sha256OfDirectory(skillRoot)
+            if (
+                existing != null &&
+                existing.checksumSha256 == checksum &&
+                validatedInstalledSkillRoot(existing) != null
+            ) {
+                extensionsRepository.markBundledSkillSeeded(skillId)
+                return 0
+            }
+            installParsedSkill(
+                sourceRoot = skillRoot,
+                source = SkillInstallSource(
+                    kind = SkillInstallKind.Bundled,
+                    label = "Qing preinstalled skill",
+                    uri = "bundled://skills/$bundleName",
+                    subpath = "",
+                ),
+                skillIdOverride = existing?.id ?: skillId,
+                installedAtMillis = existing?.installedAtMillis,
+                isEnabled = existing?.isEnabled ?: true,
+            )
+            extensionsRepository.markBundledSkillSeeded(skillId)
+            1
+        } finally {
+            workingDirectory.deleteRecursively()
+        }
+    }
     fun installedSkillsDirectory(): File = File(context.filesDir, SkillStorageDirectoryName).apply {
         mkdirs()
     }

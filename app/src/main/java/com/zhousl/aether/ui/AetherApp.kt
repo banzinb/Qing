@@ -304,6 +304,7 @@ fun AetherApp(
     ) {
         AetherTheme(
             themeMode = uiState.settings.themeMode,
+            accent = uiState.settings.accent,
             language = effectiveLanguage,
         ) {
             Surface(

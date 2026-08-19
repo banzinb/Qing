@@ -69,6 +69,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
 import com.zhousl.aether.shared.resources.Res
+import com.zhousl.aether.shared.resources.app_name
 import com.zhousl.aether.shared.resources.common_chat
 import com.zhousl.aether.shared.resources.common_delete
 import com.zhousl.aether.shared.resources.common_export
@@ -223,7 +224,7 @@ fun AetherConversationDrawer(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Text(
-                            text = "Aether",
+                            text = stringResource(Res.string.app_name),
                             style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Normal),
                             color = AetherOnSurface,
                             modifier = Modifier.padding(start = 6.dp),

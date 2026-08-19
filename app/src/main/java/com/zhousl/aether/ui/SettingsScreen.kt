@@ -181,6 +181,7 @@ import com.zhousl.aether.data.normalizeLlmInactivityReconnectTimeoutSeconds
 import com.zhousl.aether.data.normalizeOldCommandHistoryRetentionHours
 import com.zhousl.aether.data.normalizeSearXngBaseUrl
 import com.zhousl.aether.data.normalizeTavilyBaseUrl
+import com.zhousl.aether.data.platformDefaultSystemPrompt
 import com.zhousl.aether.data.quickActionLabel
 import com.zhousl.aether.data.resolveAutomaticModelKey
 import com.zhousl.aether.data.sortedForAutomaticModelPurpose
@@ -3032,6 +3033,13 @@ private fun PersonalizationPage(
         trailingIcon = Icons.Rounded.Check,
         onTrailingAction = onBack,
     ) {
+        Text(
+            text = stringResource(R.string.settings_personalization_description),
+            style = MaterialTheme.typography.bodySmall,
+            color = AetherOnSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 4.dp),
+        )
+        Spacer(Modifier.height(10.dp))
         SettingsCardGroup {
             ChatGptTextField(
                 label = stringResource(R.string.settings_custom_instructions),
@@ -3047,6 +3055,14 @@ private fun PersonalizationPage(
             style = MaterialTheme.typography.bodySmall,
             color = AetherOnSurfaceVariant,
             modifier = Modifier.padding(horizontal = 4.dp),
+        )
+        Spacer(Modifier.height(14.dp))
+        SettingsSubtleActionButton(
+            label = stringResource(R.string.settings_personalization_reset_default),
+            onClick = {
+                onSystemPromptChanged(TextFieldValue(platformDefaultSystemPrompt()))
+            },
+            modifier = Modifier.fillMaxWidth(),
         )
     }
 }
@@ -7444,7 +7460,7 @@ private fun AboutPage(
         Spacer(Modifier.height(24.dp))
 
         SettingsCardGroup {
-            AboutInfoRow(label = stringResource(R.string.settings_author), value = "Zhou-Shilin")
+            AboutInfoRow(label = stringResource(R.string.settings_author), value = "落尽秋")
             CardDivider()
             AboutInfoRow(label = stringResource(R.string.settings_version), value = releaseLabel)
             CardDivider()

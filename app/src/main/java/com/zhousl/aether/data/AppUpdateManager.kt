@@ -11,11 +11,11 @@ import okhttp3.Request
 import org.json.JSONObject
 
 private const val GithubLatestReleaseUrl =
-    "https://api.github.com/repos/Zhou-Shilin/Aether/releases/latest"
+    "https://api.github.com/repos/banzinb/Qing/releases/latest"
 private const val GithubLatestNightlyRunUrl =
-    "https://api.github.com/repos/Zhou-Shilin/Aether/actions/workflows/build-nightly-apk.yml/runs?branch=main&status=success&per_page=1"
+    "https://api.github.com/repos/banzinb/Qing/actions/workflows/build-nightly-apk.yml/runs?branch=main&status=success&per_page=1"
 private const val NightlyArtifactDownloadUrl =
-    "https://nightly.link/Zhou-Shilin/Aether/workflows/build-nightly-apk.yml/main/Aether-nightly.zip"
+    "https://nightly.link/banzinb/Qing/workflows/build-nightly-apk.yml/main/Qing-nightly.zip"
 private const val ApkMimeType = "application/vnd.android.package-archive"
 private const val ZipMimeType = "application/zip"
 

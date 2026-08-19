@@ -15,7 +15,7 @@ internal fun buildSharedPiAgentInstructions(
         append("\n\n")
     }
     append(
-        "You are running inside Aether on iOS. Pi AI provides model and provider access, " +
+        "You are running inside Qing on iOS. Pi AI provides model and provider access, " +
             "Pi Agent Core runs the agent loop, and Pi Coding Agent owns tools, Skills, Extensions, sessions, retry, and compaction. " +
             "Use available tools instead of guessing about local state. " +
             "The default workspace for this chat is $workspaceDirectory. " +

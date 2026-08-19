@@ -223,6 +223,10 @@ fun ConversationDrawer(
         extraContent = { dismissSearch ->
             AetherExtensionSlot(AetherExtensionSlotDrawer)
             AetherExtensionSlot(AetherExtensionSlotDrawerListEnd)
+            PcCodexDrawerLauncher(
+                onClick = onPcCodexSelected,
+                modifier = Modifier.padding(top = 10.dp),
+            )
         },
     )
 }
@@ -352,7 +356,7 @@ private fun LegacyConversationDrawer(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Text(
-                            text = "Aether",
+                            text = stringResource(R.string.app_name),
                             style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Normal),
                             color = AetherOnSurface,
                             modifier = Modifier.padding(start = 6.dp),

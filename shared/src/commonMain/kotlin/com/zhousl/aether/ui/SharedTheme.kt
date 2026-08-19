@@ -14,12 +14,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.unit.sp
+import com.zhousl.aether.data.AppAccent
 import com.zhousl.aether.data.AppLanguage
-import com.zhousl.aether.ui.theme.DarkAetherPalette
-import com.zhousl.aether.ui.theme.DarkHighContrastAetherPalette
-import com.zhousl.aether.ui.theme.LightAetherPalette
-import com.zhousl.aether.ui.theme.LightHighContrastAetherPalette
-import com.zhousl.aether.ui.theme.updateAetherPalette
 import com.zhousl.aether.data.AppThemeMode
 import com.zhousl.aether.platform.LocalReduceMotion
 import com.zhousl.aether.platform.rememberPlatformAccessibilityPreferences
@@ -114,6 +110,7 @@ private val typography = Typography(
 @Composable
 internal fun SharedAetherTheme(
     themeMode: AppThemeMode = AppThemeMode.System,
+    accent: AppAccent = AppAccent.Teal,
     language: AppLanguage = AppLanguage.English,
     content: @Composable () -> Unit,
 ) {
@@ -123,7 +120,8 @@ internal fun SharedAetherTheme(
         AppThemeMode.Dark -> true
     }
     val accessibility = rememberPlatformAccessibilityPreferences()
-    SideEffect { updateAetherPalette(darkTheme, accessibility.increasedContrast) }
+    val palette = paletteFor(darkTheme, accent, accessibility.increasedContrast)
+    SideEffect { updateAetherPalette(darkTheme, accent, accessibility.increasedContrast) }
     val layoutDirection = if (language == AppLanguage.Persian) {
         LayoutDirection.Rtl
     } else {

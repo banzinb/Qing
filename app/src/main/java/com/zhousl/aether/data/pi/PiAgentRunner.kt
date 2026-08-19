@@ -68,7 +68,7 @@ class PiAgentRunner(
         onStreamingStatus: suspend (StreamingStatus?) -> Unit = {},
         pollInjectedUserMessages: suspend () -> List<LlmMessage> = { emptyList() },
     ): Result<AetherAgentTurnResult> {
-        onStreamingStatus(StreamingStatus("Thinking", "Aether is working on this turn."))
+        onStreamingStatus(StreamingStatus("Thinking", "Qing is working on this turn."))
         diagnosticLogger.event(
             category = "pi_agent",
             event = "run_turn_start",

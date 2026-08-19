@@ -240,6 +240,7 @@ import com.zhousl.aether.data.pi.SharedMcpServerConfig
 import com.zhousl.aether.data.pi.SharedMcpTransport
 import com.zhousl.aether.data.pi.SharedToolRegistry
 import com.zhousl.aether.data.pi.SharedChromeManager
+import com.zhousl.aether.data.pi.SharedWebToolExecutor
 import com.zhousl.aether.data.pi.SharedBrowserDisplayState
 import com.zhousl.aether.data.pi.SharedCompositeHostTools
 import com.zhousl.aether.data.pi.SharedHostToolResult
@@ -918,6 +919,7 @@ fun AetherSharedApp(
     applyPlatformAppLanguage(sharedAppSettings.language)
     SharedAetherTheme(
         themeMode = sharedAppSettings.themeMode,
+        accent = sharedAppSettings.accent,
         language = sharedAppSettings.language,
     ) {
         val reduceMotion = LocalReduceMotion.current
@@ -1131,6 +1133,7 @@ fun AetherSharedApp(
                 listOf(
                     managementTools,
                     chromeManager,
+                    SharedWebToolExecutor(settings = { sharedAppSettings }),
                 )
             )
         }

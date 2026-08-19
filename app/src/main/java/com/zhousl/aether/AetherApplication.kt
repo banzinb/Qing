@@ -15,6 +15,7 @@ import com.zhousl.aether.data.AetherAppExtensionManager
 import com.zhousl.aether.data.AetherModKernel
 import com.zhousl.aether.data.AetherDiagnosticLogger
 import com.zhousl.aether.data.AetherToolExecutor
+import com.zhousl.aether.data.WebToolsClient
 import com.zhousl.aether.data.ChatRepository
 import com.zhousl.aether.data.PiExtensionManager
 import com.zhousl.aether.data.PiExtensionStateRepository
@@ -187,6 +188,7 @@ class AetherAppRuntime(
         modKernel = modKernel,
         loadOptionsProvider = piExtensionStateRepository::loadOptions,
     )
+    val webToolsClient = WebToolsClient()
     val piAgentRunner = PiAgentRunner(
         bridge = piKernelBridge,
         settingsRepository = settingsRepository,
@@ -197,6 +199,7 @@ class AetherAppRuntime(
         diagnosticLogger = diagnosticLogger,
         toolExecutor = AetherToolExecutor(
             runtimeRouter = runtimeRouter,
+            webToolsClient = webToolsClient,
             agentModeController = agentModeController,
         ),
     )

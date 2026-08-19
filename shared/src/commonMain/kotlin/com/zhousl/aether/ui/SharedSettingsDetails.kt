@@ -93,6 +93,7 @@ import com.zhousl.aether.data.SharedUsageStatisticsReport
 import com.zhousl.aether.data.normalizeLlmInactivityReconnectTimeoutSeconds
 import com.zhousl.aether.data.normalizeOldCommandHistoryRetentionHours
 import com.zhousl.aether.data.normalizeTavilyBaseUrl
+import com.zhousl.aether.data.platformDefaultSystemPrompt
 import com.zhousl.aether.platform.PlatformCapabilities
 import com.zhousl.aether.platform.PlatformServices
 import com.zhousl.aether.platform.platformAppVersion
@@ -155,6 +156,13 @@ internal fun SharedPersonalizationSettingsDetail(
         trailingIcon = Icons.Rounded.Check,
         onTrailingAction = ::persistAndBack,
     ) {
+        Text(
+            text = stringResource(Res.string.settings_personalization_description),
+            style = MaterialTheme.typography.bodySmall,
+            color = AetherOnSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 4.dp),
+        )
+        Spacer(Modifier.height(10.dp))
         SettingsCardGroup {
             SharedSettingsTextField(
                 label = stringResource(Res.string.settings_custom_instructions),
@@ -172,6 +180,16 @@ internal fun SharedPersonalizationSettingsDetail(
             style = MaterialTheme.typography.bodySmall,
             color = AetherOnSurfaceVariant,
             modifier = Modifier.padding(horizontal = 4.dp),
+        )
+        Spacer(Modifier.height(14.dp))
+        SharedSettingsSubtleActionButton(
+            label = stringResource(Res.string.settings_personalization_reset_default),
+            onClick = {
+                val defaultPrompt = platformDefaultSystemPrompt()
+                systemPrompt = defaultPrompt
+                onSave(settings.copy(systemPrompt = defaultPrompt))
+            },
+            modifier = Modifier.fillMaxWidth(),
         )
     }
 }
