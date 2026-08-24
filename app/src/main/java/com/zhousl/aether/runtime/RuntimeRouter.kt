@@ -7,6 +7,7 @@ import org.json.JSONObject
 class RuntimeRouter(
     private val termuxRuntime: LocalRuntime,
     private val alpineRuntime: LocalRuntime,
+    private val embeddedTermuxRuntime: LocalRuntime? = null,
 ) {
     fun runtimeFor(
         settings: AppSettings,
@@ -19,10 +20,17 @@ class RuntimeRouter(
                 ?: legacyDefault(settings)
             "termux" -> LocalRuntimeId.Termux
             "alpine" -> LocalRuntimeId.Alpine
+            "embedded_termux", "qing_termux" -> LocalRuntimeId.EmbeddedTermux
             else -> null
         } ?: return null
 
-        if (requested != "termux" && requested != "alpine" && settings.enabledRuntimeIds.isNotEmpty()) {
+        if (
+            requested != "termux" &&
+            requested != "alpine" &&
+            requested != "embedded_termux" &&
+            requested != "qing_termux" &&
+            settings.enabledRuntimeIds.isNotEmpty()
+        ) {
             if (runtimeId !in settings.enabledRuntimeIds) return null
         }
         return runtimeById(runtimeId)
@@ -31,6 +39,7 @@ class RuntimeRouter(
     fun runtimeById(runtimeId: LocalRuntimeId): LocalRuntime = when (runtimeId) {
         LocalRuntimeId.Termux -> termuxRuntime
         LocalRuntimeId.Alpine -> alpineRuntime
+        LocalRuntimeId.EmbeddedTermux -> embeddedTermuxRuntime ?: termuxRuntime
     }
 
     fun runtimeForRunId(runId: String): Pair<LocalRuntime, String>? {
@@ -51,6 +60,7 @@ class RuntimeRouter(
         return when (runtime.id) {
             LocalRuntimeId.Termux -> termuxWorkspaceDirectory
             LocalRuntimeId.Alpine -> runtime.workspaceRoot
+            LocalRuntimeId.EmbeddedTermux -> runtime.workspaceRoot
         }
     }
 
@@ -74,3 +84,4 @@ class RuntimeRouter(
 fun JSONObject.runtimeEnvironment(): String =
     optString("environment").trim()
         .ifBlank { optString("runtime").trim() }
+

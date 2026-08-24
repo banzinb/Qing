@@ -1036,6 +1036,102 @@ class AetherViewModel(
             runCatching { runtime.alpineRuntime.createTerminalLaunchSpec() }
         }
 
+    fun initializeTermuxEmbeddedRuntime(makeDefault: Boolean = true) {
+        viewModelScope.launch {
+            _uiState.update { current ->
+                current.copy(
+                    termuxEmbeddedSetupState = LocalRuntimeSetupState(
+                        runtimeId = LocalRuntimeId.EmbeddedTermux,
+                        issue = LocalRuntimeIssue.NotInstalled,
+                        detail = "正在安装内嵌 Termux（首次约 1-3 分钟）...",
+                    )
+                )
+            }
+            val setupState = withContext(Dispatchers.IO) {
+                val progressLog = StringBuilder()
+                runtime.termuxEmbeddedRuntime.initialize { progress ->
+                    if (progress.output.isNotBlank()) {
+                        progressLog.append(progress.output)
+                        if (progressLog.length > 6_000) {
+                            progressLog.delete(0, progressLog.length - 6_000)
+                        }
+                    }
+                    _uiState.update { current ->
+                        current.copy(
+                            termuxEmbeddedSetupState = current.termuxEmbeddedSetupState.copy(
+                                issue = LocalRuntimeIssue.NotInstalled,
+                                detail = progressLog.toString().takeLast(4_000),
+                            )
+                        )
+                    }
+                }
+            }
+            if (setupState.isReady) {
+                settingsRepository.updateSettings(
+                    _uiState.value.settings.withRuntimeEnabled(
+                        runtimeId = LocalRuntimeId.EmbeddedTermux,
+                        makeDefault = makeDefault,
+                    )
+                )
+            }
+            _uiState.update { current -> current.copy(termuxEmbeddedSetupState = setupState) }
+            emitTransientMessage(UiText.Raw(setupState.detail.ifBlank { "内嵌 Termux 状态已刷新。" }))
+        }
+    }
+
+    fun resetTermuxEmbeddedRuntime() {
+        viewModelScope.launch {
+            val resetState = withContext(Dispatchers.IO) {
+                runtime.termuxEmbeddedRuntime.reset()
+            }
+            val settings = _uiState.value.settings
+            settingsRepository.updateSettings(
+                settings.copy(
+                    embeddedTermuxSetupCompleted = false,
+                    enabledRuntimeIds = settings.enabledRuntimeIds - LocalRuntimeId.EmbeddedTermux,
+                    defaultRuntimeId = if (settings.defaultRuntimeId == LocalRuntimeId.EmbeddedTermux) {
+                        (settings.enabledRuntimeIds - LocalRuntimeId.EmbeddedTermux).firstOrNull()
+                    } else {
+                        settings.defaultRuntimeId
+                    },
+                )
+            )
+            _uiState.update { current -> current.copy(termuxEmbeddedSetupState = resetState) }
+            emitTransientMessage(UiText.Raw(resetState.detail.ifBlank { "内嵌 Termux 已重置。" }))
+        }
+    }
+
+    fun refreshTermuxEmbeddedSetup() {
+        viewModelScope.launch {
+            val setupState = withContext(Dispatchers.IO) {
+                runtime.termuxEmbeddedRuntime.inspectSetup()
+            }
+            if (setupState.isReady) {
+                val settings = _uiState.value.settings
+                if (LocalRuntimeId.EmbeddedTermux !in settings.enabledRuntimeIds) {
+                    settingsRepository.updateSettings(
+                        settings.withRuntimeEnabled(LocalRuntimeId.EmbeddedTermux)
+                    )
+                }
+            }
+            _uiState.update { current -> current.copy(termuxEmbeddedSetupState = setupState) }
+        }
+    }
+
+    suspend fun createTermuxEmbeddedTerminalLaunchSpec(): Result<AlpineTerminalLaunchSpec> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                runtime.termuxEmbeddedRuntime.createTerminalLaunchSpec().let { spec ->
+                    AlpineTerminalLaunchSpec(
+                        executable = spec.executable,
+                        arguments = spec.arguments,
+                        environment = spec.environment,
+                        workingDirectory = spec.workingDirectory,
+                    )
+                }
+            }
+        }
+
     suspend fun startAlpineChrome(): Result<Unit> =
         runtime.alpineChromeController.startBrowser()
 
@@ -2523,6 +2619,18 @@ class AetherViewModel(
     fun updateAppAccent(accent: AppAccent) {
         viewModelScope.launch {
             settingsRepository.updateAccent(accent)
+        }
+    }
+
+    fun updateAppPet(petId: String) {
+        viewModelScope.launch {
+            settingsRepository.updatePetId(petId)
+        }
+    }
+
+    fun updateAppPetVisible(petVisible: Boolean) {
+        viewModelScope.launch {
+            settingsRepository.updatePetVisible(petVisible)
         }
     }
 
@@ -6638,6 +6746,7 @@ private fun AppSettings.withRuntimeEnabled(
     return copy(
         termuxSetupCompleted = termuxSetupCompleted || runtimeId == LocalRuntimeId.Termux,
         alpineSetupCompleted = alpineSetupCompleted || runtimeId == LocalRuntimeId.Alpine,
+        embeddedTermuxSetupCompleted = embeddedTermuxSetupCompleted || runtimeId == LocalRuntimeId.EmbeddedTermux,
         enabledRuntimeIds = enabled,
         defaultRuntimeId = if (makeDefault) runtimeId else defaultRuntimeId,
     )

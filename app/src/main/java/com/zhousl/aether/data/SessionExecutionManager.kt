@@ -179,6 +179,7 @@ class SessionExecutionManager(
     private val piAgentRunner: PiAgentRunner,
 ) {
     private val skillRuntimeMirror = SkillRuntimeMirror(runtimeRouter)
+    private val skillUsageStore = SkillUsageStore(application)
     private val currentSettings = MutableStateFlow(AppSettings())
     private val currentProviderConfigs = MutableStateFlow<List<LlmProviderConfig>>(emptyList())
     private val currentExtensionsState = MutableStateFlow(AgentExtensionsState())
@@ -591,6 +592,18 @@ class SessionExecutionManager(
                         event = event,
                         reasoningTraceToolRoutingEnabled = reasoningTraceToolRoutingEnabled,
                     )
+                }
+                if (event.isRunning == false && event.outputJson != null) {
+                    val touchedSkillIds = resolvedActiveSkills
+                        .filter { skill ->
+                            val haystack = event.argumentsJson + "\n" + event.outputJson
+                            haystack.contains(skill.skillId) ||
+                                haystack.contains(skill.skillRootPath)
+                        }
+                        .map { it.skillId }
+                    if (touchedSkillIds.isNotEmpty()) {
+                        scope.launch { skillUsageStore.recordUsage(touchedSkillIds) }
+                    }
                 }
             }
 

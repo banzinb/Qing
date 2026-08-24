@@ -33,3 +33,17 @@ The iOS runtime starts from Alpine Linux 3.21 AArch64 minirootfs. Individual
 packages retain their own licenses. The build downloads the archive from the
 official Alpine CDN and verifies SHA-256
 `f31202c4070c4ef7de9e157e1bd01cb4da3a2150035d74ea5372c5e86f1efac1`.
+
+## Termux bootstrap (embedded runtime)
+
+The Android app embeds the official Termux bootstrap archive as
+`app/src/main/assets/runtimes/termux/bootstrap-aarch64.zip`
+(package variant `2026.02.12-r1+apt.android-7`, SHA-256
+`ea2aeba8819e517db711f8c32369e89e7c52cee73e07930ff91185e1ab93f4f3`).
+The bootstrap is Termux's packaging of its `termux-main` packages; Termux
+packages are distributed under the GNU General Public License v3.0 (or, for a
+few packages, other OSI-compatible licenses as declared by each package).
+Sources: https://github.com/termux/termux-packages
+The runtime also reuses the `proot`/`loader`/`libtalloc` binaries already
+bundled for the Alpine runtime (`app/src/main/assets/runtimes/alpine/arm64-v8a/`),
+built from the Alpine `proot` package (GPL-2.0+).

@@ -86,7 +86,8 @@ enum class AppAccent(
     Azure("azure"),
     Teal("teal"),
     Indigo("indigo"),
-    Green("green");
+    Green("green"),
+    Warm("warm");
 
     companion object {
         fun fromStorage(value: String?): AppAccent =
@@ -144,6 +145,10 @@ enum class LocalRuntimeId(
     Alpine(
         storageValue = "alpine",
         displayName = "Alpine",
+    ),
+    EmbeddedTermux(
+        storageValue = "embedded_termux",
+        displayName = "内嵌 Termux",
     );
 
     companion object {
@@ -192,6 +197,7 @@ data class AppSettings(
     val autoCleanOldCommandHistory: Boolean = true,
     val oldCommandHistoryRetentionHours: Int = DefaultOldCommandHistoryRetentionHours,
     val termuxSetupCompleted: Boolean = false,
+    val embeddedTermuxSetupCompleted: Boolean = false,
     val termuxSetupNoticeDismissed: Boolean = false,
     val termuxEnvironmentVariables: List<TermuxEnvironmentVariable> = emptyList(),
     val enabledRuntimeIds: Set<LocalRuntimeId> = emptySet(),
@@ -204,6 +210,8 @@ data class AppSettings(
     val language: AppLanguage = defaultAppLanguage(),
     val themeMode: AppThemeMode = AppThemeMode.System,
     val accent: AppAccent = AppAccent.Teal,
+    val petId: String = "qing-cat",
+    val petVisible: Boolean = true,
     val defaultChatModelKey: String = "",
     val defaultTitleModelKey: String = "",
     val defaultNamingModelKey: String = "",
@@ -804,3 +812,4 @@ private fun JsonObject.boolean(name: String, defaultValue: Boolean): Boolean =
 
 private fun JsonObject.long(name: String, defaultValue: Long): Long =
     this[name]?.jsonPrimitive?.longOrNull ?: defaultValue
+

@@ -35,6 +35,7 @@ import com.zhousl.aether.data.pi.PiKernelBridge
 import com.zhousl.aether.mod.AetherNativeModManager
 import com.zhousl.aether.runtime.AlpineRuntime
 import com.zhousl.aether.runtime.RuntimeRouter
+import com.zhousl.aether.runtime.TermuxEmbeddedRuntime
 import com.zhousl.aether.runtime.TermuxRuntime
 import com.zhousl.aether.termux.TermuxBashTool
 import com.zhousl.aether.termux.TermuxRuntimeOperations
@@ -123,6 +124,10 @@ class AetherAppRuntime(
         context = application,
         diagnosticLogger = diagnosticLogger,
     )
+    val termuxEmbeddedRuntime = TermuxEmbeddedRuntime(
+        context = application,
+        diagnosticLogger = diagnosticLogger,
+    )
     val piKernelBridge = PiKernelBridge(
         alpineRuntime = alpineRuntime,
         diagnosticLogger = diagnosticLogger,
@@ -143,6 +148,7 @@ class AetherAppRuntime(
     val runtimeRouter = RuntimeRouter(
         termuxRuntime = termuxRuntime,
         alpineRuntime = alpineRuntime,
+        embeddedTermuxRuntime = termuxEmbeddedRuntime,
     )
     val rootSetupController = RootSetupController(
         context = application,
@@ -158,6 +164,7 @@ class AetherAppRuntime(
         runtimeRouter = runtimeRouter,
         alpineRuntime = alpineRuntime,
         termuxFileBridge = workspaceFileBridge,
+        embeddedTermuxRuntime = termuxEmbeddedRuntime,
     )
     val agentModeController = AgentModeController(
         context = application,

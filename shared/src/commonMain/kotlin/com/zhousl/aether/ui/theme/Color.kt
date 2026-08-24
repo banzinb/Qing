@@ -217,11 +217,36 @@ val QingGreenDark = QingAccentColors(
     tertiary = Color(0xFF34C759),
 )
 
+val QingWarmLight = QingAccentColors(
+    primary = Color(0xFFE8A33D),
+    onPrimary = Color(0xFFFFFFFF),
+    primaryContainer = Color(0xFFFCE8C9),
+    onPrimaryContainer = Color(0xFF6B3E00),
+    secondary = Color(0xFFB5791E),
+    onSecondary = Color(0xFFFFFFFF),
+    secondaryContainer = Color(0xFFF7E0B6),
+    onSecondaryContainer = Color(0xFF5C3A00),
+    tertiary = Color(0xFFF5C26B),
+)
+
+val QingWarmDark = QingAccentColors(
+    primary = Color(0xFFF5C26B),
+    onPrimary = Color(0xFF5C3A00),
+    primaryContainer = Color(0xFF7A4E00),
+    onPrimaryContainer = Color(0xFFFFE7C2),
+    secondary = Color(0xFFE8B45E),
+    onSecondary = Color(0xFF4A2F00),
+    secondaryContainer = Color(0xFF6B4300),
+    onSecondaryContainer = Color(0xFFF8DFB4),
+    tertiary = Color(0xFFE8A33D),
+)
+
 fun accentColors(accent: AppAccent, darkTheme: Boolean): QingAccentColors = when (accent) {
     AppAccent.Azure -> if (darkTheme) QingAzureDark else QingAzureLight
     AppAccent.Teal -> if (darkTheme) QingTealDark else QingTealLight
     AppAccent.Indigo -> if (darkTheme) QingIndigoDark else QingIndigoLight
     AppAccent.Green -> if (darkTheme) QingGreenDark else QingGreenLight
+    AppAccent.Warm -> if (darkTheme) QingWarmDark else QingWarmLight
 }
 
 fun neutralPalette(darkTheme: Boolean, increasedContrast: Boolean): QingNeutralPalette = when {

@@ -265,6 +265,10 @@ data class AetherUiState(
     val alpineSetupState: LocalRuntimeSetupState = LocalRuntimeSetupState(
         runtimeId = com.zhousl.aether.data.LocalRuntimeId.Alpine,
     ),
+    val termuxEmbeddedSetupState: LocalRuntimeSetupState = LocalRuntimeSetupState(
+        runtimeId = com.zhousl.aether.data.LocalRuntimeId.EmbeddedTermux,
+        detail = "内嵌 Termux 尚未初始化。",
+    ),
     val alpinePackageInstallProgress: Map<String, AlpineSetupProgress> = emptyMap(),
     val developerTermuxReadyOverride: Boolean? = null,
     val rootSetupState: RootSetupState = RootSetupState(),

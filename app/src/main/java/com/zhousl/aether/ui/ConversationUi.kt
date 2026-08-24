@@ -30,6 +30,7 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
@@ -129,7 +130,9 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
@@ -180,10 +183,19 @@ import com.zhousl.aether.ui.theme.AetherScrim
 import com.zhousl.aether.ui.theme.AetherSurface
 import com.zhousl.aether.ui.theme.AetherSurfaceHigh
 import com.zhousl.aether.ui.theme.AetherSurfaceHigher
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.zhousl.aether.data.PetProfile
+import com.zhousl.aether.data.PetProfileStore
+import com.zhousl.aether.data.SettingsRepository
+import com.zhousl.aether.ui.pet.QingPet
+import com.zhousl.aether.ui.pet.QingPetCatalog
+import com.zhousl.aether.ui.pet.QingPetFloatingOverlay
+import com.zhousl.aether.ui.pet.QingPetMood
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
 import org.json.JSONObject
@@ -401,6 +413,55 @@ fun ConversationScreen(
     var composerBodyHeightPx by remember { mutableIntStateOf(0) }
     var pendingGenerationHeightPx by remember { mutableIntStateOf(0) }
     var composerFocused by remember { mutableStateOf(false) }
+
+    // --- Qing pet state machine ---
+    val petContext = LocalContext.current
+    val petProfileStore = remember(petContext) { PetProfileStore(petContext.applicationContext) }
+    val petProfile by petProfileStore.profile.collectAsStateWithLifecycle(initialValue = PetProfile())
+    val petSettingsRepository = remember(petContext) {
+        SettingsRepository(petContext.applicationContext)
+    }
+    val petId by petSettingsRepository.settings
+        .map { it.petId }
+        .collectAsStateWithLifecycle(initialValue = QingPetCatalog.DefaultPetId)
+    val petVisible by petSettingsRepository.settings
+        .map { it.petVisible }
+        .collectAsStateWithLifecycle(initialValue = true)
+    val pet = remember(petId) { QingPetCatalog.byId(petId) }
+    var petLookTarget by remember { mutableStateOf<Offset?>(null) }
+    var chatBoxGlobalOffset by remember { mutableStateOf(Offset.Zero) }
+    val petScope = rememberCoroutineScope()
+    var wasSending by remember { mutableStateOf(false) }
+    var petCelebration by remember { mutableStateOf<QingPetMood?>(null) }
+    val lastAgentMessage = remember(messages) {
+        messages.lastOrNull { it.author == MessageAuthor.Agent }
+    }
+    LaunchedEffect(isSending) {
+        if (wasSending && !isSending) {
+            val failed = lastAgentMessage?.isIncomplete == true
+            petCelebration = if (failed) QingPetMood.Failed else QingPetMood.Jumping
+            delay(1600)
+            if (!isSending) petCelebration = null
+        }
+        wasSending = isSending
+    }
+    val petMood = when {
+        petCelebration != null -> petCelebration!!
+        isSending && pendingToolInvocations.isNotEmpty() && pendingToolInvocations.none { it.isRunning } ->
+            QingPetMood.Review
+        isSending && pendingToolInvocations.isNotEmpty() -> QingPetMood.Running
+        isSending && pendingResponseBlocks.any { it is AssistantResponseBlock.Reasoning } -> QingPetMood.Waiting
+        isSending -> QingPetMood.Running
+        else -> QingPetMood.Idle
+    }
+    val onPetPetted: () -> Unit = {
+        petScope.launch { petProfileStore.recordPet() }
+        petCelebration = QingPetMood.Waving
+        petScope.launch {
+            delay(1200)
+            if (!isSending) petCelebration = null
+        }
+    }
     val density = LocalDensity.current
     val fallbackTopBarBodyHeight = with(density) {
         WindowInsets.statusBars.getTop(this).toDp() + 68.dp
@@ -563,6 +624,14 @@ fun ConversationScreen(
                     )
                 )
                 .padding(innerPadding)
+                .onGloballyPositioned { coordinates ->
+                    chatBoxGlobalOffset = coordinates.positionInWindow()
+                }
+                .pointerInput(Unit) {
+                    detectTapGestures { tapLocal ->
+                        petLookTarget = chatBoxGlobalOffset + tapLocal
+                    }
+                }
         ) {
             if (messages.isEmpty()) {
                 AetherExtensionSlot(
@@ -788,6 +857,24 @@ fun ConversationScreen(
                 onQueueFollowUp = onQueueFollowUp,
                 onSteerFollowUp = onSteerFollowUp,
             )
+
+            if (petVisible) {
+                QingPetFloatingOverlay(
+                    pet = pet,
+                    mood = petMood,
+                    level = petProfile.level,
+                    petCount = petProfile.petCount,
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(
+                            end = 14.dp,
+                            bottom = composerBodyHeight + animatedImeBottom + 6.dp,
+                        ),
+                    lookTarget = petLookTarget,
+                    lookInput = composerFocused && !isSending,
+                    onPetted = onPetPetted,
+                )
+            }
 
             previewAttachment?.let { attachment ->
                 AttachmentPreviewDialog(

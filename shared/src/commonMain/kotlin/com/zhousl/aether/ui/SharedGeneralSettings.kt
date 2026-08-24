@@ -48,6 +48,7 @@ import com.zhousl.aether.ui.theme.QingAzureLight
 import com.zhousl.aether.ui.theme.QingGreenLight
 import com.zhousl.aether.ui.theme.QingIndigoLight
 import com.zhousl.aether.ui.theme.QingTealLight
+import com.zhousl.aether.ui.theme.QingWarmLight
 import com.zhousl.aether.ui.theme.AetherSurface
 import org.jetbrains.compose.resources.stringResource
 
@@ -192,6 +193,7 @@ private fun sharedAccentPreviewColor(accent: AppAccent): androidx.compose.ui.gra
     AppAccent.Teal -> QingTealLight.primary
     AppAccent.Indigo -> QingIndigoLight.primary
     AppAccent.Green -> QingGreenLight.primary
+    AppAccent.Warm -> QingWarmLight.primary
 }
 
 internal data class SharedSelectionOption(

@@ -84,12 +84,14 @@ class SettingsRepository(
             ),
             termuxSetupCompleted = preferences[TERMUX_SETUP_COMPLETED] ?: false,
             termuxSetupNoticeDismissed = preferences[TERMUX_SETUP_NOTICE_DISMISSED] ?: false,
+            embeddedTermuxSetupCompleted = preferences[EMBEDDED_TERMUX_SETUP_COMPLETED] ?: false,
             termuxEnvironmentVariables = parseTermuxEnvironmentVariables(
                 preferences[TERMUX_ENVIRONMENT_VARIABLES].orEmpty()
             ),
             enabledRuntimeIds = resolveEnabledRuntimeIds(
                 rawValue = preferences[ENABLED_RUNTIME_IDS],
                 termuxSetupCompleted = preferences[TERMUX_SETUP_COMPLETED] ?: false,
+                embeddedTermuxSetupCompleted = preferences[EMBEDDED_TERMUX_SETUP_COMPLETED] ?: false,
                 alpineSetupCompleted = preferences[ALPINE_SETUP_COMPLETED] ?: false,
             ),
             defaultRuntimeId = resolveDefaultRuntimeId(
@@ -97,9 +99,11 @@ class SettingsRepository(
                 enabledRuntimeIds = resolveEnabledRuntimeIds(
                     rawValue = preferences[ENABLED_RUNTIME_IDS],
                     termuxSetupCompleted = preferences[TERMUX_SETUP_COMPLETED] ?: false,
+                    embeddedTermuxSetupCompleted = preferences[EMBEDDED_TERMUX_SETUP_COMPLETED] ?: false,
                     alpineSetupCompleted = preferences[ALPINE_SETUP_COMPLETED] ?: false,
                 ),
                 termuxSetupCompleted = preferences[TERMUX_SETUP_COMPLETED] ?: false,
+                embeddedTermuxSetupCompleted = preferences[EMBEDDED_TERMUX_SETUP_COMPLETED] ?: false,
                 alpineSetupCompleted = preferences[ALPINE_SETUP_COMPLETED] ?: false,
             ),
             alpineSetupCompleted = preferences[ALPINE_SETUP_COMPLETED] ?: false,
@@ -117,6 +121,8 @@ class SettingsRepository(
             language = AppLanguage.fromStorage(preferences[LANGUAGE]),
             themeMode = AppThemeMode.fromStorage(preferences[THEME_MODE]),
             accent = AppAccent.fromStorage(preferences[ACCENT]),
+            petId = preferences[PET_ID] ?: defaults.petId,
+            petVisible = preferences[PET_VISIBLE] ?: true,
             defaultChatModelKey = preferences[DEFAULT_CHAT_MODEL_KEY].orEmpty(),
             defaultTitleModelKey = preferences[DEFAULT_TITLE_MODEL_KEY].orEmpty(),
             defaultNamingModelKey = preferences[DEFAULT_NAMING_MODEL_KEY].orEmpty(),
@@ -367,6 +373,7 @@ class SettingsRepository(
                 normalizeOldCommandHistoryRetentionHours(settings.oldCommandHistoryRetentionHours)
             it[TERMUX_SETUP_COMPLETED] = settings.termuxSetupCompleted
             it[TERMUX_SETUP_NOTICE_DISMISSED] = settings.termuxSetupNoticeDismissed
+            it[EMBEDDED_TERMUX_SETUP_COMPLETED] = settings.embeddedTermuxSetupCompleted
             it[TERMUX_ENVIRONMENT_VARIABLES] =
                 serializeTermuxEnvironmentVariables(settings.termuxEnvironmentVariables)
             it[ENABLED_RUNTIME_IDS] = serializeRuntimeIds(settings.enabledRuntimeIds)
@@ -382,6 +389,8 @@ class SettingsRepository(
             it[LANGUAGE] = settings.language.storageValue
             it[THEME_MODE] = settings.themeMode.storageValue
             it[ACCENT] = settings.accent.storageValue
+            it[PET_ID] = settings.petId
+            it[PET_VISIBLE] = settings.petVisible
             it[DEFAULT_CHAT_MODEL_KEY] = settings.defaultChatModelKey
             it[DEFAULT_TITLE_MODEL_KEY] = settings.defaultTitleModelKey
             it[DEFAULT_NAMING_MODEL_KEY] = settings.defaultNamingModelKey
@@ -427,6 +436,14 @@ class SettingsRepository(
         context.dataStore.edit { it[ACCENT] = accent.storageValue }
     }
 
+    suspend fun updatePetId(petId: String) {
+        context.dataStore.edit { it[PET_ID] = petId }
+    }
+
+    suspend fun updatePetVisible(petVisible: Boolean) {
+        context.dataStore.edit { it[PET_VISIBLE] = petVisible }
+    }
+
     suspend fun updateSettings(settings: AppSettings) {
         context.dataStore.edit {
             it[PI_PROVIDER_ID] = settings.piProviderId
@@ -455,6 +472,7 @@ class SettingsRepository(
                 normalizeOldCommandHistoryRetentionHours(settings.oldCommandHistoryRetentionHours)
             it[TERMUX_SETUP_COMPLETED] = settings.termuxSetupCompleted
             it[TERMUX_SETUP_NOTICE_DISMISSED] = settings.termuxSetupNoticeDismissed
+            it[EMBEDDED_TERMUX_SETUP_COMPLETED] = settings.embeddedTermuxSetupCompleted
             it[TERMUX_ENVIRONMENT_VARIABLES] =
                 serializeTermuxEnvironmentVariables(settings.termuxEnvironmentVariables)
             it[ENABLED_RUNTIME_IDS] = serializeRuntimeIds(settings.enabledRuntimeIds)
@@ -470,6 +488,8 @@ class SettingsRepository(
             it[LANGUAGE] = settings.language.storageValue
             it[THEME_MODE] = settings.themeMode.storageValue
             it[ACCENT] = settings.accent.storageValue
+            it[PET_ID] = settings.petId
+            it[PET_VISIBLE] = settings.petVisible
             it[DEFAULT_CHAT_MODEL_KEY] = settings.defaultChatModelKey
             it[DEFAULT_TITLE_MODEL_KEY] = settings.defaultTitleModelKey
             it[DEFAULT_NAMING_MODEL_KEY] = settings.defaultNamingModelKey
@@ -551,6 +571,8 @@ class SettingsRepository(
             booleanPreferencesKey("termux_setup_completed")
         val TERMUX_SETUP_NOTICE_DISMISSED =
             booleanPreferencesKey("termux_setup_notice_dismissed")
+        val EMBEDDED_TERMUX_SETUP_COMPLETED =
+            booleanPreferencesKey("embedded_termux_setup_completed")
         val TERMUX_ENVIRONMENT_VARIABLES =
             stringPreferencesKey("termux_environment_variables")
         val ENABLED_RUNTIME_IDS =
@@ -570,6 +592,8 @@ class SettingsRepository(
         val LANGUAGE = stringPreferencesKey("language")
         val THEME_MODE = stringPreferencesKey("theme_mode")
         val ACCENT = stringPreferencesKey("accent")
+        val PET_ID = stringPreferencesKey("pet_id")
+        val PET_VISIBLE = booleanPreferencesKey("pet_visible")
         val DEFAULT_CHAT_MODEL_KEY = stringPreferencesKey("default_chat_model_key")
         val DEFAULT_TITLE_MODEL_KEY = stringPreferencesKey("default_title_model_key")
         val DEFAULT_NAMING_MODEL_KEY = stringPreferencesKey("default_naming_model_key")
@@ -684,11 +708,13 @@ fun normalizeAlpineEnvironmentVariables(
 private fun resolveEnabledRuntimeIds(
     rawValue: String?,
     termuxSetupCompleted: Boolean,
+    embeddedTermuxSetupCompleted: Boolean,
     alpineSetupCompleted: Boolean,
 ): Set<LocalRuntimeId> {
     val stored = parseRuntimeIds(rawValue.orEmpty())
     if (stored.isNotEmpty() || rawValue != null) return stored
     return buildSet {
+        if (embeddedTermuxSetupCompleted) add(LocalRuntimeId.EmbeddedTermux)
         if (termuxSetupCompleted) add(LocalRuntimeId.Termux)
         if (alpineSetupCompleted) add(LocalRuntimeId.Alpine)
     }
@@ -698,12 +724,15 @@ private fun resolveDefaultRuntimeId(
     rawValue: String?,
     enabledRuntimeIds: Set<LocalRuntimeId>,
     termuxSetupCompleted: Boolean,
+    embeddedTermuxSetupCompleted: Boolean,
     alpineSetupCompleted: Boolean,
 ): LocalRuntimeId? {
     LocalRuntimeId.fromStorage(rawValue)?.let { runtimeId ->
         if (runtimeId in enabledRuntimeIds) return runtimeId
     }
     return when {
+        embeddedTermuxSetupCompleted && LocalRuntimeId.EmbeddedTermux in enabledRuntimeIds ->
+            LocalRuntimeId.EmbeddedTermux
         termuxSetupCompleted && LocalRuntimeId.Termux in enabledRuntimeIds -> LocalRuntimeId.Termux
         alpineSetupCompleted && LocalRuntimeId.Alpine in enabledRuntimeIds -> LocalRuntimeId.Alpine
         else -> enabledRuntimeIds.firstOrNull()

@@ -2,6 +2,7 @@ package com.zhousl.aether.data.pi
 
 import com.zhousl.aether.data.AppSettings
 import com.zhousl.aether.data.LocalRuntimeId
+import com.zhousl.aether.ui.pet.QingPetCatalog
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
 import java.util.Locale
@@ -18,6 +19,11 @@ internal fun buildPiAgentInstructions(
     val configuredPrompt = expandDynamicPromptPlaceholders(settings.systemPrompt).trim()
     if (configuredPrompt.isNotBlank()) {
         append(configuredPrompt)
+        append("\n\n")
+    }
+    val petPersonality = QingPetCatalog.byId(settings.petId).personalityPrompt
+    if (petPersonality.isNotBlank()) {
+        append(petPersonality)
         append("\n\n")
     }
     append(

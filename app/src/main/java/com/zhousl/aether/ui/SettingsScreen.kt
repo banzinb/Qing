@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
@@ -115,6 +116,7 @@ import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.res.painterResource
@@ -157,6 +159,10 @@ import com.zhousl.aether.data.PiProviderCatalog
 import com.zhousl.aether.data.LocalRuntimeId
 import com.zhousl.aether.data.McpServerTestOperation
 import com.zhousl.aether.data.InstalledPiExtension
+import com.zhousl.aether.data.InstalledSkill
+import com.zhousl.aether.data.PetProfile
+import com.zhousl.aether.data.PetProfileStore
+import com.zhousl.aether.data.SkillUsageStore
 import com.zhousl.aether.data.PiExtensionCatalogEntry
 import com.zhousl.aether.data.PiExtensionInstallKind
 import com.zhousl.aether.data.PiPackageCompatibilityIssue
@@ -204,6 +210,11 @@ import com.zhousl.aether.ui.theme.AetherSurface
 import com.zhousl.aether.ui.theme.AetherSurfaceHigh
 import com.zhousl.aether.ui.theme.QingAzureLight
 import com.zhousl.aether.ui.theme.QingTealLight
+import com.zhousl.aether.ui.theme.QingWarmLight
+import com.zhousl.aether.ui.pet.PetDefinition
+import com.zhousl.aether.ui.pet.QingPet
+import com.zhousl.aether.ui.pet.QingPetCatalog
+import com.zhousl.aether.ui.pet.QingPetMood
 import com.zhousl.aether.ui.theme.QingIndigoLight
 import com.zhousl.aether.ui.theme.QingGreenLight
 import kotlinx.coroutines.delay
@@ -243,9 +254,12 @@ private enum class SettingsPage {
     Alpine,
     AlpineTerminal,
     AlpineChrome,
+    EmbeddedTermux,
+    EmbeddedTermuxTerminal,
     RuntimeDefaults,
     AgentMode,
     Statistics,
+    MyData,
     RootSetupProgress,
     Developer,
     About,
@@ -267,9 +281,11 @@ private fun SettingsPage.depth(): Int = when (this) {
     SettingsPage.ScheduledTasks,
     SettingsPage.Termux,
     SettingsPage.Alpine,
+    SettingsPage.EmbeddedTermux,
     SettingsPage.RuntimeDefaults,
     SettingsPage.AgentMode,
     SettingsPage.Statistics,
+    SettingsPage.MyData,
     SettingsPage.Developer,
     SettingsPage.About -> 1
     SettingsPage.DefaultModels,
@@ -283,6 +299,7 @@ private fun SettingsPage.depth(): Int = when (this) {
     SettingsPage.EditScheduledTask,
     SettingsPage.AlpineTerminal,
     SettingsPage.AlpineChrome,
+    SettingsPage.EmbeddedTermuxTerminal,
     SettingsPage.RootSetupProgress -> 2
     SettingsPage.ExtensionSettingsCategory -> 2
     SettingsPage.DefaultChatModel,
@@ -389,6 +406,7 @@ private fun settingsAccentPreviewColor(accent: AppAccent): Color = when (accent)
     AppAccent.Teal -> QingTealLight.primary
     AppAccent.Indigo -> QingIndigoLight.primary
     AppAccent.Green -> QingGreenLight.primary
+    AppAccent.Warm -> QingWarmLight.primary
 }
 
 @Composable
@@ -452,6 +470,8 @@ fun SettingsScreen(
     language: AppLanguage,
     themeMode: AppThemeMode,
     accent: AppAccent,
+    petId: String,
+    petVisible: Boolean,
     defaultChatModelKey: String,
     defaultTitleModelKey: String,
     defaultNamingModelKey: String,
@@ -510,6 +530,8 @@ fun SettingsScreen(
     onUpdateLanguage: (AppLanguage) -> Unit,
     onUpdateThemeMode: (AppThemeMode) -> Unit,
     onUpdateAccent: (AppAccent) -> Unit,
+    onUpdatePetId: (String) -> Unit,
+    onUpdatePetVisible: (Boolean) -> Unit,
     onUpsertProviderConfig: (LlmProviderConfig) -> Unit,
     onRemoveProviderConfig: (String) -> Unit,
     onSetProviderEnabled: (String, Boolean) -> Unit,
@@ -554,6 +576,11 @@ fun SettingsScreen(
     onInstallAlpinePackageProfile: (String) -> Unit,
     onCreateAlpineTerminalLaunchSpec: suspend () -> Result<AlpineTerminalLaunchSpec>,
     onStartAlpineChrome: suspend () -> Result<Unit>,
+    termuxEmbeddedSetupState: LocalRuntimeSetupState,
+    onInitializeTermuxEmbeddedRuntime: () -> Unit,
+    onResetTermuxEmbeddedRuntime: () -> Unit,
+    onRefreshTermuxEmbeddedSetup: () -> Unit,
+    onCreateTermuxEmbeddedTerminalLaunchSpec: suspend () -> Result<AlpineTerminalLaunchSpec>,
     onShouldShowAlpineChromeKeyboard: suspend (Int, Int) -> Result<Boolean>,
     onSetDefaultRuntime: (LocalRuntimeId) -> Unit,
     onRefreshRootSetup: () -> Unit,
@@ -634,6 +661,12 @@ fun SettingsScreen(
     var accentValue by rememberSaveable {
         mutableStateOf(accent)
     }
+    var petIdValue by rememberSaveable {
+        mutableStateOf(petId)
+    }
+    var petVisibleValue by rememberSaveable {
+        mutableStateOf(petVisible)
+    }
     LaunchedEffect(searchBackend) {
         searchBackendValue = searchBackend
     }
@@ -655,6 +688,12 @@ fun SettingsScreen(
     }
     LaunchedEffect(accent) {
         accentValue = accent
+    }
+    LaunchedEffect(petId) {
+        petIdValue = petId
+    }
+    LaunchedEffect(petVisible) {
+        petVisibleValue = petVisible
     }
     var defaultChatModelKeyValue by rememberSaveable { mutableStateOf(defaultChatModelKey) }
     var defaultTitleModelKeyValue by rememberSaveable { mutableStateOf(defaultTitleModelKey) }
@@ -783,6 +822,7 @@ fun SettingsScreen(
         SettingsPage.AddScheduledTask, SettingsPage.EditScheduledTask -> SettingsPage.ScheduledTasks
         SettingsPage.AlpineTerminal,
         SettingsPage.AlpineChrome -> SettingsPage.Alpine
+        SettingsPage.EmbeddedTermuxTerminal -> SettingsPage.EmbeddedTermux
         SettingsPage.RootSetupProgress -> rootSetupReturnPageValue()
         else -> SettingsPage.Hub
     }
@@ -851,6 +891,7 @@ fun SettingsScreen(
                 },
                 termuxReady = termuxSetupState.isReady,
                 alpineReady = alpineSetupState.isReady,
+                termuxEmbeddedReady = termuxEmbeddedSetupState.isReady,
                 defaultRuntimeId = defaultRuntimeId,
                 showRuntimeDefaults = termuxSetupState.isReady && alpineSetupState.isReady,
                 skillCount = installedSkills.size,
@@ -895,6 +936,17 @@ fun SettingsScreen(
                 onAccentSelected = {
                     accentValue = it
                     onUpdateAccent(it)
+                },
+                selectedPetVisible = petVisibleValue,
+                onPetVisibleChanged = onUpdatePetVisible,
+                selectedPetId = petIdValue,
+                onPetSelected = { pet ->
+                    petIdValue = pet.id
+                    onUpdatePetId(pet.id)
+                    themeModeValue = pet.recommendedThemeMode
+                    onUpdateThemeMode(pet.recommendedThemeMode)
+                    accentValue = pet.recommendedAccent
+                    onUpdateAccent(pet.recommendedAccent)
                 },
                 onBack = { currentPage = SettingsPage.Hub.name },
             )
@@ -1315,10 +1367,28 @@ fun SettingsScreen(
                 onBack = { currentPage = SettingsPage.Alpine.name },
             )
 
+            SettingsPage.EmbeddedTermux -> EmbeddedTermuxSettingsPage(
+                title = "内嵌 Termux",
+                setupState = termuxEmbeddedSetupState,
+                isDefaultRuntime = defaultRuntimeId == LocalRuntimeId.EmbeddedTermux,
+                onInitialize = onInitializeTermuxEmbeddedRuntime,
+                onReset = onResetTermuxEmbeddedRuntime,
+                onRefresh = onRefreshTermuxEmbeddedSetup,
+                onSetDefault = { onSetDefaultRuntime(LocalRuntimeId.EmbeddedTermux) },
+                onOpenTerminal = { currentPage = SettingsPage.EmbeddedTermuxTerminal.name },
+                onBack = { currentPage = SettingsPage.Hub.name },
+            )
+
+            SettingsPage.EmbeddedTermuxTerminal -> AlpineTerminalScreen(
+                createLaunchSpec = onCreateTermuxEmbeddedTerminalLaunchSpec,
+                onBack = { currentPage = SettingsPage.EmbeddedTermux.name },
+            )
+
             SettingsPage.RuntimeDefaults -> RuntimeDefaultsPage(
                 title = stringResource(R.string.settings_runtime_defaults),
                 termuxReady = termuxSetupState.isReady,
                 alpineReady = alpineSetupState.isReady,
+                termuxEmbeddedReady = termuxEmbeddedSetupState.isReady,
                 enabledRuntimeIds = enabledRuntimeIds,
                 defaultRuntimeId = defaultRuntimeId,
                 onSetDefaultRuntime = onSetDefaultRuntime,
@@ -1356,6 +1426,18 @@ fun SettingsScreen(
             SettingsPage.Statistics -> StatisticsSettingsPage(
                 title = stringResource(R.string.settings_statistics),
                 usageStatisticsSnapshots = usageStatisticsSnapshots,
+                onBack = { currentPage = SettingsPage.Hub.name },
+            )
+
+            SettingsPage.MyData -> MyDataSettingsPage(
+                title = stringResource(R.string.settings_my_data),
+                petId = petIdValue,
+                usageStatisticsSnapshots = usageStatisticsSnapshots,
+                installedSkills = installedSkills,
+                defaultRuntimeId = defaultRuntimeId,
+                alpineReady = alpineSetupState.isReady,
+                termuxReady = termuxSetupState.isReady,
+                termuxEmbeddedReady = termuxEmbeddedSetupState.isReady,
                 onBack = { currentPage = SettingsPage.Hub.name },
             )
 
@@ -1413,6 +1495,7 @@ private fun SettingsHub(
     reliabilitySummary: String,
     termuxReady: Boolean,
     alpineReady: Boolean,
+    termuxEmbeddedReady: Boolean,
     defaultRuntimeId: LocalRuntimeId?,
     showRuntimeDefaults: Boolean,
     skillCount: Int,
@@ -1471,6 +1554,17 @@ private fun SettingsHub(
                         title = stringResource(R.string.settings_general),
                         subtitle = generalSettingsSummary.ifBlank { stringResource(R.string.settings_general_hint) },
                         onClick = { onNavigate(SettingsPage.General) },
+                    )
+                }
+
+                Spacer(Modifier.height(16.dp))
+
+                SettingsCardGroup {
+                    SettingsNavRow(
+                        icon = LucideIcons.ChartNoAxesColumn,
+                        title = stringResource(R.string.settings_my_data),
+                        subtitle = stringResource(R.string.settings_my_data_hint),
+                        onClick = { onNavigate(SettingsPage.MyData) },
                     )
                 }
 
@@ -1552,6 +1646,13 @@ private fun SettingsHub(
                     title = "Alpine",
                     subtitle = if (alpineReady) { stringResource(R.string.settings_alpine_subtitle_ready) } else { stringResource(R.string.settings_alpine_subtitle_setup) },
                     onClick = { onNavigate(SettingsPage.Alpine) },
+                )
+                CardDivider()
+                SettingsNavRow(
+                    icon = Icons.Rounded.Terminal,
+                    title = "内嵌 Termux",
+                    subtitle = if (termuxEmbeddedReady) "开箱即用 · 已就绪" else "安装内置 Termux 运行时",
+                    onClick = { onNavigate(SettingsPage.EmbeddedTermux) },
                 )
                 CardDivider()
                 SettingsNavRow(
@@ -1784,6 +1885,207 @@ private fun StatisticsSettingsPage(
                 subtitle = stringResource(R.string.statistics_speed_subtitle),
             ) {
                 SpeedBarChart(points = report.recentSpeedSamples.takeLast(12))
+            }
+        }
+    }
+}
+
+
+// -----------------------------------------------------------------------------
+// My Data
+// -----------------------------------------------------------------------------
+
+@Composable
+private fun MyDataSettingsPage(
+    title: String,
+    petId: String,
+    usageStatisticsSnapshots: List<ChatUsageStatisticsSnapshot>,
+    installedSkills: List<InstalledSkill>,
+    defaultRuntimeId: LocalRuntimeId?,
+    alpineReady: Boolean,
+    termuxReady: Boolean,
+    termuxEmbeddedReady: Boolean,
+    onBack: () -> Unit,
+) {
+    val context = LocalContext.current
+    val petProfileStore = remember(context) { PetProfileStore(context.applicationContext) }
+    val petProfile by petProfileStore.profile.collectAsStateWithLifecycle(initialValue = PetProfile())
+    val skillUsageStore = remember(context) { SkillUsageStore(context.applicationContext) }
+    val skillUsage by skillUsageStore.usage.collectAsStateWithLifecycle(initialValue = emptyMap())
+    val pet = QingPetCatalog.byId(petId)
+    val report = remember(usageStatisticsSnapshots) { buildUsageStatisticsReport(usageStatisticsSnapshots) }
+
+    SubPageScaffold(title = title, onBack = onBack) {
+        SettingsCardGroup {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                QingPet(
+                    pet = pet,
+                    mood = QingPetMood.Idle,
+                    modifier = Modifier.size(64.dp),
+                )
+                Spacer(Modifier.width(16.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = pet.displayName,
+                            style = MaterialTheme.typography.titleMedium,
+                            color = AetherOnSurface,
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            text = stringResource(R.string.my_data_level, petProfile.level),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = AetherOnSurfaceVariant,
+                        )
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(8.dp)
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(AetherSurfaceHigh),
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth(petProfile.expProgress)
+                                .fillMaxHeight()
+                                .background(AetherPrimary),
+                        )
+                    }
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        text = stringResource(R.string.my_data_pet_total, petProfile.petCount),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = AetherOnSurfaceVariant,
+                    )
+                }
+            }
+        }
+
+        Spacer(Modifier.height(16.dp))
+
+        SettingsCardGroup {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp),
+            ) {
+                Text(
+                    text = stringResource(R.string.my_data_stats),
+                    style = MaterialTheme.typography.titleMedium,
+                    color = AetherOnSurface,
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    StatisticsMetricTile(
+                        label = stringResource(R.string.statistics_sessions),
+                        value = report.sessionCount.toString(),
+                        modifier = Modifier.weight(1f),
+                    )
+                    StatisticsMetricTile(
+                        label = stringResource(R.string.statistics_total_tokens),
+                        value = formatSettingsTokenCount(report.totalTokens),
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+            }
+        }
+
+        Spacer(Modifier.height(16.dp))
+
+        SettingsCardGroup {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Text(
+                    text = stringResource(R.string.my_data_skills),
+                    style = MaterialTheme.typography.titleMedium,
+                    color = AetherOnSurface,
+                )
+                if (installedSkills.isEmpty()) {
+                    Text(
+                        text = stringResource(R.string.my_data_skills_empty),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = AetherOnSurfaceVariant,
+                    )
+                } else {
+                    installedSkills.forEachIndexed { index, skill ->
+                        if (index > 0) CardDivider()
+                        val usage = skillUsage[skill.id]
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = skill.name,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = AetherOnSurface,
+                                )
+                                Text(
+                                    text = skill.description,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = AetherOnSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                            Spacer(Modifier.width(12.dp))
+                            Text(
+                                text = stringResource(R.string.my_data_skill_calls, usage?.calls ?: 0),
+                                style = MaterialTheme.typography.labelLarge,
+                                color = AetherPrimary,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        Spacer(Modifier.height(16.dp))
+
+        SettingsCardGroup {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Text(
+                    text = stringResource(R.string.my_data_env),
+                    style = MaterialTheme.typography.titleMedium,
+                    color = AetherOnSurface,
+                )
+                HistoryPeakRow(
+                    label = stringResource(R.string.my_data_runtime_default),
+                    value = defaultRuntimeId?.displayName
+                        ?: stringResource(R.string.my_data_runtime_unset),
+                )
+                HistoryPeakRow(
+                    label = "Alpine",
+                    value = if (alpineReady) {
+                        stringResource(R.string.settings_alpine_subtitle_ready)
+                    } else {
+                        stringResource(R.string.settings_alpine_subtitle_setup)
+                    },
+                )
+                HistoryPeakRow(
+                    label = stringResource(R.string.settings_termux),
+                    value = if (termuxReady) {
+                        stringResource(R.string.settings_connected)
+                    } else {
+                        stringResource(R.string.settings_setup_required)
+                    },
+                )
+                HistoryPeakRow(
+                    label = "内嵌 Termux",
+                    value = if (termuxEmbeddedReady) "开箱即用" else "未安装",
+                )
+                HistoryPeakRow(
+                    label = stringResource(R.string.my_data_version),
+                    value = settingsReleaseSummary(BuildConfig.VERSION_NAME),
+                )
             }
         }
     }
@@ -2342,9 +2644,94 @@ private fun GeneralSettingsPageV2(
     onThemeModeSelected: (AppThemeMode) -> Unit,
     selectedAccent: AppAccent,
     onAccentSelected: (AppAccent) -> Unit,
+    selectedPetId: String,
+    onPetSelected: (PetDefinition) -> Unit,
+    selectedPetVisible: Boolean,
+    onPetVisibleChanged: (Boolean) -> Unit,
     onBack: () -> Unit,
 ) {
     SubPageScaffold(title = stringResource(R.string.settings_general), onBack = onBack) {
+        SettingsCardGroup {
+            Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp)) {
+                Text(
+                    text = stringResource(R.string.settings_pet),
+                    style = MaterialTheme.typography.titleMedium,
+                    color = AetherOnSurface,
+                )
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    text = stringResource(R.string.settings_pet_description),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = AetherOnSurfaceVariant,
+                )
+                Spacer(Modifier.height(14.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    QingPetCatalog.pets.forEach { pet ->
+                        val selected = pet.id == selectedPetId
+                        Column(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(16.dp))
+                                .background(
+                                    if (selected) AetherPrimary.copy(alpha = 0.12f) else AetherSurfaceHigh
+                                )
+                                .then(
+                                    if (selected) {
+                                        Modifier.border(2.dp, AetherPrimary, RoundedCornerShape(16.dp))
+                                    } else {
+                                        Modifier
+                                    }
+                                )
+                                .clickable {
+                                    if (!selected) {
+                                        onPetSelected(pet)
+                                    }
+                                }
+                                .padding(vertical = 12.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                        ) {
+                            QingPet(
+                                pet = pet,
+                                mood = QingPetMood.Idle,
+                                modifier = Modifier.size(72.dp),
+                            )
+                            Spacer(Modifier.height(6.dp))
+                            Text(
+                                text = pet.displayName,
+                                style = MaterialTheme.typography.labelLarge,
+                                color = AetherOnSurface,
+                            )
+                        }
+                    }
+                }
+                Spacer(Modifier.height(14.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = stringResource(R.string.settings_pet_visible),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = AetherOnSurface,
+                        )
+                        Spacer(Modifier.height(2.dp))
+                        Text(
+                            text = stringResource(R.string.settings_pet_visible_description),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = AetherOnSurfaceVariant,
+                        )
+                    }
+                    Switch(
+                        checked = selectedPetVisible,
+                        onCheckedChange = onPetVisibleChanged,
+                    )
+                }
+            }
+        }
+
+        Spacer(Modifier.height(16.dp))
+
         SettingsCardGroup {
             SelectionDropdownField(
                 label = stringResource(R.string.settings_language),
@@ -6350,10 +6737,126 @@ private fun AlpineProfileRow(
 }
 
 @Composable
+private fun EmbeddedTermuxSettingsPage(
+    title: String,
+    setupState: LocalRuntimeSetupState,
+    isDefaultRuntime: Boolean,
+    onInitialize: () -> Unit,
+    onReset: () -> Unit,
+    onRefresh: () -> Unit,
+    onSetDefault: () -> Unit,
+    onOpenTerminal: () -> Unit,
+    onBack: () -> Unit,
+) {
+    LaunchedEffect(Unit) {
+        onRefresh()
+    }
+    SubPageScaffold(
+        title = title,
+        onBack = onBack,
+        trailingIcon = Icons.Rounded.Terminal,
+        trailingEnabled = setupState.isReady,
+        trailingContentDescription = stringResource(R.string.settings_open_terminal),
+        onTrailingAction = onOpenTerminal,
+    ) {
+        Text(
+            text = "青内置的 Termux 运行时：单 APK 自带完整 bash/apt/python 环境，无需另装 Termux。",
+            style = MaterialTheme.typography.bodySmall,
+            color = AetherOnSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 4.dp),
+        )
+
+        Spacer(Modifier.height(16.dp))
+
+        SettingsCardGroup {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text(
+                    text = stringResource(R.string.settings_runtime_status),
+                    style = MaterialTheme.typography.labelLarge,
+                    color = AetherOnSurface,
+                )
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    text = when (setupState.issue) {
+                        LocalRuntimeIssue.Ready -> "已就绪"
+                        LocalRuntimeIssue.NotInstalled -> "尚未安装"
+                        LocalRuntimeIssue.MissingAssets -> "缺少内置资源"
+                        LocalRuntimeIssue.UnsupportedAbi -> "不支持的架构"
+                        LocalRuntimeIssue.Failed -> "安装异常"
+                        else -> "未配置"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = AetherOnSurfaceVariant,
+                )
+                if (setupState.detail.isNotBlank()) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        text = setupState.detail,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = AetherOnSurfaceVariant,
+                    )
+                }
+                Spacer(Modifier.height(14.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    SettingsActionButton(
+                        label = if (setupState.isReady) {
+                            stringResource(R.string.settings_ready)
+                        } else {
+                            "安装"
+                        },
+                        onClick = onInitialize,
+                        modifier = Modifier.weight(1f),
+                        enabled = !setupState.isReady,
+                    )
+                    SettingsSubtleActionButton(
+                        label = stringResource(R.string.common_refresh),
+                        onClick = onRefresh,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+                Spacer(Modifier.height(10.dp))
+                SettingsSubtleActionButton(
+                    label = "重置内嵌 Termux 数据",
+                    onClick = onReset,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                if (setupState.isReady && !isDefaultRuntime) {
+                    Spacer(Modifier.height(10.dp))
+                    SettingsActionButton(
+                        label = stringResource(R.string.settings_use_as_default_runtime),
+                        onClick = onSetDefault,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            }
+        }
+
+        Spacer(Modifier.height(16.dp))
+
+        SettingsCardGroup {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text(
+                    text = "说明",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = AetherOnSurface,
+                )
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    text = "安装后：技能可调用 bash / python3 / apt；附件导入与文件导出走 Qing 应用层；首次安装包含解压 + 软件包配置 + 索引同步，约 1-3 分钟。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = AetherOnSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+@Composable
 private fun RuntimeDefaultsPage(
     title: String,
     termuxReady: Boolean,
     alpineReady: Boolean,
+    termuxEmbeddedReady: Boolean,
     enabledRuntimeIds: Set<LocalRuntimeId>,
     defaultRuntimeId: LocalRuntimeId?,
     onSetDefaultRuntime: (LocalRuntimeId) -> Unit,
