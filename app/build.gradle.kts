@@ -41,9 +41,11 @@ val appVersionName = providers.gradleProperty("aether.versionName")
     .orNull
     ?.trim()
     ?.takeIf { it.isNotEmpty() }
-    ?: "2.1.2"
+    ?: "2.1.5"
 val piBridgeProjectDir = rootProject.layout.projectDirectory.dir("pi-bridge")
 val piBridgeGeneratedAssetsDir = layout.buildDirectory.dir("generated/assets/piBridge")
+val preinstalledExtensionsDir = rootProject.layout.projectDirectory.dir("extensions")
+val preinstalledExtensionsGeneratedAssetsDir = layout.buildDirectory.dir("generated/assets/preinstalledExtensions")
 val piProviderIconsGeneratedResDir = layout.buildDirectory.dir("generated/res/piProviderIcons")
 // Make shared Compose resources available to Android resource APIs.
 val sharedComposeResourcesDir = rootProject.project(":shared").projectDir.resolve(
@@ -111,7 +113,7 @@ android {
         // Alpine/Termux-style local runtimes install executable ELF files into app-private
         // storage. Android blocks execve() from that location for targetSdk >= 29.
         targetSdk = 28
-        versionCode = 9
+        versionCode = 10
         versionName = appVersionName
 
         ndk {
@@ -249,6 +251,7 @@ dependencies {
     implementation(libs.shizuku.provider)
     implementation(libs.android.app.process)
     implementation(libs.posthog.android)
+    implementation(libs.sora.editor)
 
     debugImplementation(libs.androidx.compose.ui.tooling)
     debugImplementation(libs.androidx.compose.ui.test.manifest)
@@ -340,10 +343,22 @@ val copyPiBridgeAsset = tasks.register<SyncGeneratedSourceDirectory>("copyPiBrid
     includeEmptyDirs = false
 }
 
+val copyPreinstalledExtensions = tasks.register<SyncGeneratedSourceDirectory>("copyPreinstalledExtensions") {
+    outputDirectory.set(preinstalledExtensionsGeneratedAssetsDir)
+    from(preinstalledExtensionsDir) {
+        into("extensions")
+    }
+    includeEmptyDirs = false
+}
+
 androidComponents {
     onVariants(selector().all()) { variant ->
         variant.sources.assets?.addGeneratedSourceDirectory(
             copyPiBridgeAsset,
+            SyncGeneratedSourceDirectory::outputDirectory,
+        )
+        variant.sources.assets?.addGeneratedSourceDirectory(
+            copyPreinstalledExtensions,
             SyncGeneratedSourceDirectory::outputDirectory,
         )
         variant.sources.res?.addGeneratedSourceDirectory(

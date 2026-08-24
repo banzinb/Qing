@@ -105,11 +105,19 @@ class SharedPiChatClient(
         systemPrompt: String = platformDefaultSystemPrompt(),
         reasoning: String = "off",
         timeoutMillis: Int = 360_000,
+        thinkingLevelMap: Map<String, String> = emptyMap(),
+        isReasoningModel: Boolean? = null,
     ): SharedPiTurnResult {
         val response = bridge.request(
             type = "complete_once",
             payload = buildJsonObject {
-                put("model_config", config.toSharedPiModelConfig(timeoutMillis, reasoning != "off"))
+                put("model_config", config.toSharedPiModelConfig(
+                    timeoutMillis = timeoutMillis,
+                    reasoningEnabled = isReasoningModel ?: (
+                        reasoning != "off" || thinkingLevelMap["off"] == "none"
+                    ),
+                    thinkingLevelMap = thinkingLevelMap,
+                ))
                 put("system_prompt", systemPrompt.ifBlank { platformDefaultSystemPrompt() })
                 put("messages", messages.toPiMessages())
                 put("stream", false)
@@ -144,6 +152,8 @@ class SharedPiChatClient(
         systemPrompt: String = platformDefaultSystemPrompt(),
         reasoning: String = "off",
         timeoutMillis: Int = 360_000,
+        thinkingLevelMap: Map<String, String> = emptyMap(),
+        isReasoningModel: Boolean? = null,
         onAssistantTextDelta: suspend (String) -> Unit = {},
         onAssistantReasoningDelta: suspend (String) -> Unit = {},
         onAssistantReasoningSummaryDelta: suspend (String) -> Unit = {},
@@ -163,7 +173,13 @@ class SharedPiChatClient(
             else -> executor?.definitions ?: JsonArray(emptyList())
         }
         val payload = buildJsonObject {
-            put("model_config", config.toSharedPiModelConfig(timeoutMillis, reasoning != "off"))
+            put("model_config", config.toSharedPiModelConfig(
+                timeoutMillis = timeoutMillis,
+                reasoningEnabled = isReasoningModel ?: (
+                    reasoning != "off" || thinkingLevelMap["off"] == "none"
+                ),
+                thinkingLevelMap = thinkingLevelMap,
+            ))
             put("session_id", resolvedSessionId)
             put("system_prompt", systemPrompt.ifBlank { platformDefaultSystemPrompt() })
             put("messages", messages.withSkillCommand(skillCommand).toPiMessages())
@@ -317,6 +333,11 @@ class SharedPiChatClient(
                 totalTokens = usage.long("total_tokens"),
                 reasoningTokens = usage.long("reasoning_tokens"),
                 cachedInputTokens = usage.long("cached_input_tokens"),
+                inputTokensAvailable = "input_tokens" in usage,
+                outputTokensAvailable = "output_tokens" in usage,
+                totalTokensAvailable = "total_tokens" in usage,
+                reasoningTokensAvailable = "reasoning_tokens" in usage,
+                cachedInputTokensAvailable = "cached_input_tokens" in usage,
             ),
             usageAvailable = usage.isNotEmpty(),
             providerPayloadJson = toSharedProviderPayloadJson(),
@@ -404,6 +425,7 @@ data class SharedPiHostToolCall(
 fun LlmProviderConfig.toSharedPiModelConfig(
     timeoutMillis: Int = 360_000,
     reasoningEnabled: Boolean = false,
+    thinkingLevelMap: Map<String, String> = emptyMap(),
 ): JsonObject {
     val definition = PiProviderCatalog.resolve(piProviderId)
     val effectiveAuthMethod = if (
@@ -435,6 +457,11 @@ fun LlmProviderConfig.toSharedPiModelConfig(
             put("User-Agent", normalizeLlmUserAgent(userAgent))
         })
         put("reasoning", reasoningEnabled)
+        if (thinkingLevelMap.isNotEmpty()) {
+            put("thinking_level_map", buildJsonObject {
+                thinkingLevelMap.forEach { (k, v) -> put(k, v) }
+            })
+        }
         put("context_window", 128_000)
         put("max_tokens", 16_384)
         put("timeout_ms", timeoutMillis.coerceIn(30_000, 3_600_000))

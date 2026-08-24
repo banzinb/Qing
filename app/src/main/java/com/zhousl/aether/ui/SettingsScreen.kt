@@ -140,9 +140,7 @@ import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
 import kotlin.math.roundToInt
-import com.zhousl.aether.data.AetherPrivacyPolicyUrl
 import com.zhousl.aether.data.AetherAppExtensionError
-import com.zhousl.aether.data.AetherWebsiteUrl
 import com.zhousl.aether.data.AgentModeAuthorizationIssue
 import com.zhousl.aether.data.AgentModeAuthorizationMethod
 import com.zhousl.aether.data.AgentModeAuthorizationState
@@ -199,6 +197,7 @@ import com.zhousl.aether.runtime.LocalRuntimeSetupState
 import com.zhousl.aether.runtime.AlpineSetupActivity
 import com.zhousl.aether.runtime.AlpineSetupProgress
 import com.zhousl.aether.runtime.AlpineTerminalLaunchSpec
+import com.zhousl.aether.runtime.AndroidAlpineFileManagerRuntime
 import com.zhousl.aether.termux.TermuxSetupState
 import com.zhousl.aether.ui.theme.AetherOnSurface
 import com.zhousl.aether.ui.theme.AetherOnPrimary
@@ -253,6 +252,7 @@ private enum class SettingsPage {
     Termux,
     Alpine,
     AlpineTerminal,
+    AlpineFiles,
     AlpineChrome,
     EmbeddedTermux,
     EmbeddedTermuxTerminal,
@@ -298,6 +298,7 @@ private fun SettingsPage.depth(): Int = when (this) {
     SettingsPage.AddScheduledTask,
     SettingsPage.EditScheduledTask,
     SettingsPage.AlpineTerminal,
+    SettingsPage.AlpineFiles,
     SettingsPage.AlpineChrome,
     SettingsPage.EmbeddedTermuxTerminal,
     SettingsPage.RootSetupProgress -> 2
@@ -486,6 +487,7 @@ fun SettingsScreen(
     defaultRuntimeId: LocalRuntimeId?,
     alpinePackageProfiles: Map<String, PackageProfileState>,
     alpinePackageInstallProgress: Map<String, AlpineSetupProgress>,
+    alpineFileManagerRuntime: AndroidAlpineFileManagerRuntime,
     developerTermuxReadyOverride: Boolean?,
     installedSkills: List<com.zhousl.aether.data.InstalledSkill>,
     installedPiExtensions: List<InstalledPiExtension>,
@@ -596,6 +598,7 @@ fun SettingsScreen(
     onStopAgentModeDisplay: () -> Unit,
     onRefreshAgentModeDisplays: (AgentModeAuthorizationMethod) -> Unit,
     onOpenWebsite: () -> Unit,
+    onOpenGitHub: () -> Unit,
     onOpenPrivacyPolicy: () -> Unit,
     onCheckForUpdates: () -> Unit,
     onForceUpdateCheckForTesting: () -> Unit,
@@ -821,6 +824,7 @@ fun SettingsScreen(
         SettingsPage.AddMcpServer, SettingsPage.EditMcpServer -> SettingsPage.McpServers
         SettingsPage.AddScheduledTask, SettingsPage.EditScheduledTask -> SettingsPage.ScheduledTasks
         SettingsPage.AlpineTerminal,
+        SettingsPage.AlpineFiles,
         SettingsPage.AlpineChrome -> SettingsPage.Alpine
         SettingsPage.EmbeddedTermuxTerminal -> SettingsPage.EmbeddedTermux
         SettingsPage.RootSetupProgress -> rootSetupReturnPageValue()
@@ -1352,6 +1356,7 @@ fun SettingsScreen(
                 onInstallPackageProfile = onInstallAlpinePackageProfile,
                 onSetDefault = { onSetDefaultRuntime(LocalRuntimeId.Alpine) },
                 onOpenTerminal = { currentPage = SettingsPage.AlpineTerminal.name },
+                onOpenFiles = { currentPage = SettingsPage.AlpineFiles.name },
                 onOpenChrome = { currentPage = SettingsPage.AlpineChrome.name },
                 onBack = { currentPage = SettingsPage.Hub.name },
             )
@@ -1360,6 +1365,13 @@ fun SettingsScreen(
                 createLaunchSpec = onCreateAlpineTerminalLaunchSpec,
                 onBack = { currentPage = SettingsPage.Alpine.name },
             )
+
+            SettingsPage.AlpineFiles -> {
+                AndroidAlpineFileManagerScreen(
+                    runtime = alpineFileManagerRuntime,
+                    onBack = { currentPage = SettingsPage.Alpine.name },
+                )
+            }
 
             SettingsPage.AlpineChrome -> AlpineChromeScreen(
                 onStart = onStartAlpineChrome,
@@ -1472,6 +1484,7 @@ fun SettingsScreen(
                 title = stringResource(R.string.settings_about),
                 appUpdate = appUpdate,
                 onOpenWebsite = onOpenWebsite,
+                onOpenGitHub = onOpenGitHub,
                 onOpenPrivacyPolicy = onOpenPrivacyPolicy,
                 onCheckForUpdates = onCheckForUpdates,
                 onDownloadAndInstallUpdate = onDownloadAndInstallUpdate,
@@ -4909,8 +4922,8 @@ private fun PiExtensionsPage(
         Spacer(Modifier.height(16.dp))
 
         val tabs = listOf(
-            stringResource(R.string.settings_extension_discover),
             stringResource(R.string.settings_extension_installed),
+            stringResource(R.string.settings_extension_discover),
         )
         SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
             tabs.forEachIndexed { index, label ->
@@ -4934,6 +4947,66 @@ private fun PiExtensionsPage(
 
         when (selectedTab) {
             0 -> {
+                if (!hasLoadedInstalledExtensions) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 32.dp),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(22.dp),
+                            strokeWidth = 2.dp,
+                            color = AetherPrimary,
+                        )
+                        Spacer(Modifier.width(12.dp))
+                        Text(
+                            stringResource(R.string.settings_loading_installed_extensions),
+                            color = AetherOnSurfaceVariant,
+                        )
+                    }
+                } else if (installedExtensions.isEmpty()) {
+                    SettingsCardGroup {
+                        Column(
+                            modifier = Modifier.fillMaxWidth().padding(24.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                        ) {
+                            Text(
+                                stringResource(R.string.settings_no_extensions_installed),
+                                style = MaterialTheme.typography.titleMedium,
+                                color = AetherOnSurface,
+                            )
+                            Spacer(Modifier.height(8.dp))
+                            Text(
+                                stringResource(R.string.settings_install_or_import_extension),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = AetherOnSurfaceVariant,
+                            )
+                            Spacer(Modifier.height(16.dp))
+                            SettingsActionButton(
+                                label = stringResource(R.string.settings_import_extension),
+                                onClick = onImport,
+                                enabled = operationSource.isBlank(),
+                                isLoading = operationSource == "import",
+                            )
+                        }
+                    }
+                } else {
+                    installedExtensions.forEach { extension ->
+                        InstalledPiExtensionCard(
+                            extension = extension,
+                            isOperating = operationSource == extension.id ||
+                                operationSource == extension.source,
+                            actionsEnabled = operationSource.isBlank(),
+                            onUpdate = { onUpdate(extension.source) },
+                            onRemove = { onRemove(extension) },
+                            onSetEnabled = { enabled -> onSetEnabled(extension, enabled) },
+                        )
+                        Spacer(Modifier.height(10.dp))
+                    }
+                }
+            }
+
+            else -> {
                 SettingsCardGroup {
                     ChatGptTextField(
                         label = stringResource(R.string.settings_search_extensions),
@@ -4994,66 +5067,6 @@ private fun PiExtensionsPage(
                             entry = entry,
                             installed = installedSources.contains(entry.source),
                             onClick = { onSelectPackage(entry) },
-                        )
-                        Spacer(Modifier.height(10.dp))
-                    }
-                }
-            }
-
-            else -> {
-                if (!hasLoadedInstalledExtensions) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(vertical = 32.dp),
-                        horizontalArrangement = Arrangement.Center,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(22.dp),
-                            strokeWidth = 2.dp,
-                            color = AetherPrimary,
-                        )
-                        Spacer(Modifier.width(12.dp))
-                        Text(
-                            stringResource(R.string.settings_loading_installed_extensions),
-                            color = AetherOnSurfaceVariant,
-                        )
-                    }
-                } else if (installedExtensions.isEmpty()) {
-                    SettingsCardGroup {
-                        Column(
-                            modifier = Modifier.fillMaxWidth().padding(24.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                        ) {
-                            Text(
-                                stringResource(R.string.settings_no_extensions_installed),
-                                style = MaterialTheme.typography.titleMedium,
-                                color = AetherOnSurface,
-                            )
-                            Spacer(Modifier.height(8.dp))
-                            Text(
-                                stringResource(R.string.settings_install_or_import_extension),
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = AetherOnSurfaceVariant,
-                            )
-                            Spacer(Modifier.height(16.dp))
-                            SettingsActionButton(
-                                label = stringResource(R.string.settings_import_extension),
-                                onClick = onImport,
-                                enabled = operationSource.isBlank(),
-                                isLoading = operationSource == "import",
-                            )
-                        }
-                    }
-                } else {
-                    installedExtensions.forEach { extension ->
-                        InstalledPiExtensionCard(
-                            extension = extension,
-                            isOperating = operationSource == extension.id ||
-                                operationSource == extension.source,
-                            actionsEnabled = operationSource.isBlank(),
-                            onUpdate = { onUpdate(extension.source) },
-                            onRemove = { onRemove(extension) },
-                            onSetEnabled = { enabled -> onSetEnabled(extension, enabled) },
                         )
                         Spacer(Modifier.height(10.dp))
                     }
@@ -6531,6 +6544,7 @@ private fun AlpineSettingsPage(
     onInstallPackageProfile: (String) -> Unit,
     onSetDefault: () -> Unit,
     onOpenTerminal: () -> Unit,
+    onOpenFiles: () -> Unit,
     onOpenChrome: () -> Unit,
     onBack: () -> Unit,
 ) {
@@ -6544,10 +6558,14 @@ private fun AlpineSettingsPage(
         trailingEnabled = setupState.isReady,
         trailingContentDescription = stringResource(R.string.settings_open_terminal),
         onTrailingAction = onOpenTerminal,
-        secondaryTrailingIcon = Icons.Rounded.Public,
-        secondaryTrailingEnabled = packageProfiles["chrome"]?.installed == true,
-        secondaryTrailingContentDescription = stringResource(R.string.settings_open_chrome),
-        onSecondaryTrailingAction = onOpenChrome,
+        secondaryTrailingIcon = Icons.Rounded.Folder,
+        secondaryTrailingEnabled = setupState.isReady,
+        secondaryTrailingContentDescription = "Open files",
+        onSecondaryTrailingAction = onOpenFiles,
+        tertiaryTrailingIcon = Icons.Rounded.Public,
+        tertiaryTrailingEnabled = packageProfiles["chrome"]?.installed == true,
+        tertiaryTrailingContentDescription = stringResource(R.string.settings_open_chrome),
+        onTertiaryTrailingAction = onOpenChrome,
     ) {
         Text(
             text = stringResource(R.string.settings_alpine_description),
@@ -7920,6 +7938,7 @@ private fun AboutPage(
     title: String,
     appUpdate: AppUpdateUiState,
     onOpenWebsite: () -> Unit,
+    onOpenGitHub: () -> Unit,
     onOpenPrivacyPolicy: () -> Unit,
     onCheckForUpdates: () -> Unit,
     onDownloadAndInstallUpdate: () -> Unit,
@@ -7977,14 +7996,21 @@ private fun AboutPage(
             SettingsNavRow(
                 icon = Icons.Rounded.Link,
                 title = stringResource(R.string.settings_website),
-                subtitle = AetherWebsiteUrl.removePrefix("https://"),
+                subtitle = "",
                 onClick = onOpenWebsite,
             )
             CardDivider()
             SettingsNavRow(
                 icon = Icons.Rounded.Link,
+                title = stringResource(R.string.settings_github),
+                subtitle = "",
+                onClick = onOpenGitHub,
+            )
+            CardDivider()
+            SettingsNavRow(
+                icon = Icons.Rounded.Link,
                 title = stringResource(R.string.settings_privacy_policy),
-                subtitle = AetherPrivacyPolicyUrl.removePrefix("https://"),
+                subtitle = "",
                 onClick = onOpenPrivacyPolicy,
             )
         }
@@ -8045,6 +8071,10 @@ private fun SubPageScaffold(
     secondaryTrailingEnabled: Boolean = true,
     secondaryTrailingContentDescription: String = title,
     onSecondaryTrailingAction: (() -> Unit)? = null,
+    tertiaryTrailingIcon: ImageVector? = null,
+    tertiaryTrailingEnabled: Boolean = true,
+    tertiaryTrailingContentDescription: String = title,
+    onTertiaryTrailingAction: (() -> Unit)? = null,
     content: @Composable () -> Unit,
 ) {
     var topBarBodyHeightPx by remember { mutableIntStateOf(0) }
@@ -8092,6 +8122,10 @@ private fun SubPageScaffold(
                 secondaryTrailingEnabled = secondaryTrailingEnabled,
                 secondaryTrailingContentDescription = secondaryTrailingContentDescription,
                 onSecondaryTrailingAction = onSecondaryTrailingAction,
+                tertiaryTrailingIcon = tertiaryTrailingIcon,
+                tertiaryTrailingEnabled = tertiaryTrailingEnabled,
+                tertiaryTrailingContentDescription = tertiaryTrailingContentDescription,
+                onTertiaryTrailingAction = onTertiaryTrailingAction,
                 onBodyHeightChanged = { topBarBodyHeightPx = it },
             )
         }
@@ -8114,6 +8148,10 @@ private fun SettingsTopBarOverlay(
     secondaryTrailingEnabled: Boolean = true,
     secondaryTrailingContentDescription: String = title,
     onSecondaryTrailingAction: (() -> Unit)? = null,
+    tertiaryTrailingIcon: ImageVector? = null,
+    tertiaryTrailingEnabled: Boolean = true,
+    tertiaryTrailingContentDescription: String = title,
+    onTertiaryTrailingAction: (() -> Unit)? = null,
     onBodyHeightChanged: (Int) -> Unit,
 ) {
     Column(
@@ -8137,6 +8175,10 @@ private fun SettingsTopBarOverlay(
                 secondaryTrailingEnabled = secondaryTrailingEnabled,
                 secondaryTrailingContentDescription = secondaryTrailingContentDescription,
                 onSecondaryTrailingAction = onSecondaryTrailingAction,
+                tertiaryTrailingIcon = tertiaryTrailingIcon,
+                tertiaryTrailingEnabled = tertiaryTrailingEnabled,
+                tertiaryTrailingContentDescription = tertiaryTrailingContentDescription,
+                onTertiaryTrailingAction = onTertiaryTrailingAction,
             )
         }
         Spacer(
@@ -8161,6 +8203,10 @@ private fun SettingsTopBar(
     secondaryTrailingEnabled: Boolean = true,
     secondaryTrailingContentDescription: String = title,
     onSecondaryTrailingAction: (() -> Unit)? = null,
+    tertiaryTrailingIcon: ImageVector? = null,
+    tertiaryTrailingEnabled: Boolean = true,
+    tertiaryTrailingContentDescription: String = title,
+    onTertiaryTrailingAction: (() -> Unit)? = null,
 ) {
     Box(
         modifier = Modifier
@@ -8178,13 +8224,23 @@ private fun SettingsTopBar(
             text = title,
             style = MaterialTheme.typography.titleMedium,
             color = AetherOnSurface,
-            modifier = Modifier.align(Alignment.Center),
+            modifier = Modifier
+                .align(Alignment.Center)
+                .offset(x = if (tertiaryTrailingIcon != null) (-48).dp else 0.dp),
         )
         Row(
             modifier = Modifier.align(Alignment.CenterEnd),
             horizontalArrangement = Arrangement.spacedBy(4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            if (tertiaryTrailingIcon != null && onTertiaryTrailingAction != null) {
+                SettingsCircleButton(
+                    icon = tertiaryTrailingIcon,
+                    contentDescription = tertiaryTrailingContentDescription,
+                    enabled = tertiaryTrailingEnabled,
+                    onClick = onTertiaryTrailingAction,
+                )
+            }
             if (secondaryTrailingIcon != null && onSecondaryTrailingAction != null) {
                 SettingsCircleButton(
                     icon = secondaryTrailingIcon,

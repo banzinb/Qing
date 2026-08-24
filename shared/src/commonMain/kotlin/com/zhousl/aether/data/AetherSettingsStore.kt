@@ -19,6 +19,7 @@ data class SharedThinkingCatalogCache(
     val source: String = "",
     val levelsByProviderModel: Map<String, List<String>> = emptyMap(),
     val clampsByProviderModel: Map<String, Map<String, String>> = emptyMap(),
+    val reasoningModels: Set<String> = emptySet(),
 )
 
 @Serializable
@@ -45,7 +46,6 @@ data class SharedPersistedSettings(
 
 data class SharedPersistedUiState(
     val route: String = "",
-    val settingsDestination: String = "",
 )
 
 class AetherSettingsStore(
@@ -91,7 +91,6 @@ class AetherSettingsStore(
             ),
             uiState = SharedPersistedUiState(
                 route = preferences[LastRoute].orEmpty(),
-                settingsDestination = preferences[SettingsDestination].orEmpty(),
             ),
         )
     }
@@ -160,10 +159,13 @@ class AetherSettingsStore(
     suspend fun saveThinkingCatalogCache(cache: SharedThinkingCatalogCache) {
         dataStore.edit { preferences ->
             val current = parseSharedThinkingCatalogCache(preferences[ThinkingCatalogCacheJson].orEmpty())
+            val refreshedKeys = cache.levelsByProviderModel.keys
             val merged = SharedThinkingCatalogCache(
                 source = cache.source.ifBlank { current.source },
                 levelsByProviderModel = current.levelsByProviderModel + cache.levelsByProviderModel,
-                clampsByProviderModel = current.clampsByProviderModel + cache.clampsByProviderModel,
+                clampsByProviderModel =
+                    (current.clampsByProviderModel - refreshedKeys) + cache.clampsByProviderModel,
+                reasoningModels = (current.reasoningModels - refreshedKeys) + cache.reasoningModels,
             )
             preferences[ThinkingCatalogCacheJson] = serializeSharedThinkingCatalogCache(merged)
         }
@@ -179,10 +181,9 @@ class AetherSettingsStore(
         }
     }
 
-    suspend fun saveUiState(route: String, settingsDestination: String) {
+    suspend fun saveUiState(route: String) {
         dataStore.edit { preferences ->
             preferences[LastRoute] = route
-            preferences[SettingsDestination] = settingsDestination
         }
     }
 
@@ -251,7 +252,6 @@ class AetherSettingsStore(
         val ThinkingCatalogCacheJson = stringPreferencesKey("thinking_catalog_cache_json")
         val ModelCatalogCacheJson = stringPreferencesKey("model_catalog_cache_json")
         val LastRoute = stringPreferencesKey("last_route")
-        val SettingsDestination = stringPreferencesKey("settings_destination")
     }
 }
 

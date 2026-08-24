@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { flushCompileCache } from "node:module";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -118,6 +119,7 @@ interface ModelConfig {
   api_key?: string;
   custom_headers?: Record<string, string>;
   reasoning?: boolean;
+  thinking_level_map?: Record<string, string | null>;
   context_window?: number;
   max_tokens?: number;
   timeout_ms?: number;
@@ -177,6 +179,7 @@ interface AgentSessionState {
   settingsManager: SettingsManager;
   configuredExtensionPaths: string[];
   pendingReload: boolean;
+  pendingRecreate: boolean;
   currentRequestId: string;
   turnStartedAtMillis?: number;
   firstAssistantEventAtMillis?: number;
@@ -204,6 +207,11 @@ let currentExtensionLoadOptions = {
   disabledExtensionPaths: [] as string[],
   disabledPackageSources: [] as string[],
 };
+
+interface NativeExtensionLoadOptions {
+  disabledExtensionPaths: string[];
+  disabledPackageSources: string[];
+}
 
 interface SharedCredentialState {
   credential?: Credential;
@@ -235,6 +243,17 @@ let hostToolCounter = 0;
 let runtimeOperationCounter = 0;
 let authPromptCounter = 0;
 let aetherHostCallCounter = 0;
+let compileCacheFlushed = false;
+
+function flushStartupCompileCache(): void {
+  if (compileCacheFlushed) return;
+  compileCacheFlushed = true;
+  try {
+    flushCompileCache();
+  } catch {
+    // Compile caching is an optimization and must not affect bridge requests.
+  }
+}
 
 function aetherOAuthAuth(providerId: string, oauth: OAuthAuth | undefined): OAuthAuth | undefined {
   if (!oauth) return undefined;
@@ -676,6 +695,20 @@ function normalizeHeaders(value: unknown): Record<string, string> {
   return headers;
 }
 
+function normalizeThinkingLevelMap(rawValue: unknown): Record<string, string | null> | undefined {
+  const raw = asObject(rawValue);
+  if (!raw || Object.keys(raw).length === 0) return undefined;
+  const result: Record<string, string | null> = {};
+  for (const [key, value] of Object.entries(raw)) {
+    if (value === null) {
+      result[key] = null;
+    } else if (typeof value === "string") {
+      result[key] = value;
+    }
+  }
+  return Object.keys(result).length > 0 ? result : undefined;
+}
+
 function normalizeModelConfig(rawValue: unknown): ModelConfig {
   const raw = asObject(rawValue);
   const providerType = asString(raw.provider_type).trim();
@@ -717,6 +750,7 @@ function normalizeModelConfig(rawValue: unknown): ModelConfig {
     api_key: asString(raw.api_key),
     custom_headers: normalizeHeaders(raw.custom_headers),
     reasoning: asBoolean(raw.reasoning, false),
+    thinking_level_map: normalizeThinkingLevelMap(raw.thinking_level_map),
     context_window: asNumber(raw.context_window, 128000),
     max_tokens: asNumber(raw.max_tokens, 16384),
     timeout_ms: asNumber(raw.timeout_ms, 360000),
@@ -803,6 +837,7 @@ function createAetherModel(config: ModelConfig): Model<string> {
     provider: config.pi_provider_id,
     baseUrl: config.base_url,
     reasoning: config.reasoning ?? false,
+    thinkingLevelMap: config.thinking_level_map,
     input: ["text", "image"],
     cost: {
       input: 0,
@@ -917,6 +952,14 @@ function buildModels(config: ModelConfig): {
               cacheWrite: 0,
             },
           }),
+      ...(config.thinking_level_map
+        ? {
+            thinkingLevelMap: {
+              ...(builtinModel ? modelTemplate.thinkingLevelMap ?? {} : {}),
+              ...config.thinking_level_map,
+            },
+          }
+        : {}),
       ...customBaseUrlModelOverrides,
       ...(config.base_url ? { baseUrl: config.base_url } : {}),
       headers: {
@@ -1241,8 +1284,13 @@ function streamOptionsFor(
   const maxTokens = payload.max_tokens;
   if (typeof maxTokens === "number") options.maxTokens = maxTokens;
   const thinkingLevel = thinkingLevelFor(payload);
-  const reasoning = thinkingLevel ? clampThinkingLevel(model, thinkingLevel) : undefined;
-  if (reasoning && reasoning !== "off") {
+  // Keep the raw off signal out of native transports. They disable thinking by
+  // omitting the reasoning level, while OpenAI-compatible transports still read
+  // model.thinkingLevelMap.off when constructing their provider-specific payload.
+  const reasoning = thinkingLevel && thinkingLevel !== "off"
+    ? clampThinkingLevel(model, thinkingLevel)
+    : undefined;
+  if (reasoning) {
     options.reasoning = reasoning as SimpleStreamOptions["reasoning"];
   }
   return options;
@@ -1414,10 +1462,11 @@ function promptFromLastUserMessage(messages: Message[]): {
 }
 
 function thinkingLevelFor(payload: JsonObject): "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | undefined {
-  const reasoning = asString(payload.reasoning).trim();
+  const reasoning = asString(payload.reasoning).trim().toLowerCase();
   if (!reasoning) return undefined;
-  if (["off", "minimal", "low", "medium", "high", "xhigh", "max"].includes(reasoning)) {
-    return reasoning as "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+  const normalized = reasoning === "none" ? "off" : reasoning;
+  if (["off", "minimal", "low", "medium", "high", "xhigh", "max"].includes(normalized)) {
+    return normalized as "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
   }
   return undefined;
 }
@@ -2119,7 +2168,13 @@ function emitAgentSessionEvent(state: AgentSessionState, event: AgentSessionEven
       writeEvent(requestId, "session_entry_appended", { entry: event.entry });
       return;
     case "agent_settled":
-      if (state.pendingReload) {
+      if (state.pendingRecreate) {
+        state.pendingRecreate = false;
+        state.pendingReload = false;
+        void closeNativeAgentSession(state.sessionId).catch((error) => {
+          stderr.write(`pi session recreation cleanup failed: ${errorMessageWithCause(error)}\n`);
+        });
+      } else if (state.pendingReload) {
         state.pendingReload = false;
         void state.session.reload().catch((error) => {
           stderr.write(`pi session reload failed: ${errorMessageWithCause(error)}\n`);
@@ -2129,6 +2184,41 @@ function emitAgentSessionEvent(state: AgentSessionState, event: AgentSessionEven
     default:
       return;
   }
+}
+
+function nativeExtensionPathIsDisabled(candidatePath: string, disabledPaths: Set<string>): boolean {
+  const candidate = path.resolve(candidatePath);
+  return [...disabledPaths].some((disabledPath) => {
+    const relative = path.relative(disabledPath, candidate);
+    return relative === "" || (
+      !relative.startsWith(`..${path.sep}`) &&
+      relative !== ".." &&
+      !path.isAbsolute(relative)
+    );
+  });
+}
+
+async function resolveNativeExtensionSet(
+  workspaceDirectory: string,
+  configuredExtensionPaths: string[],
+  loadOptions: NativeExtensionLoadOptions,
+): Promise<{ extensionPaths: string[]; signature: string }> {
+  const disabledPaths = new Set(
+    loadOptions.disabledExtensionPaths.map((entry) => path.resolve(entry)),
+  );
+  const discoveredPaths = discoverAetherExtensionPaths(
+    workspaceDirectory,
+    configuredExtensionPaths,
+  ).filter((candidate) => !nativeExtensionPathIsDisabled(candidate, disabledPaths));
+  const packagePaths = await discoverPackageExtensionPaths(
+    workspaceDirectory,
+    new Set(loadOptions.disabledPackageSources),
+  );
+  const extensionPaths = [...new Set([...discoveredPaths, ...packagePaths])].sort();
+  return {
+    extensionPaths,
+    signature: JSON.stringify(extensionPaths),
+  };
 }
 
 async function createNativeAgentSession(
@@ -2144,23 +2234,19 @@ async function createNativeAgentSession(
   const built = await buildModelRuntime(config);
   const settingsManager = sessionSettings(payload, config);
   const agentDir = asString(payload.agent_directory, path.join(os.homedir(), ".pi", "agent"));
-  const disabledPaths = stringArray(payload.disabled_extension_paths).map((entry) => path.resolve(entry));
   const configuredExtensionPaths = stringArray(payload.extension_paths);
-  const additionalExtensionPaths = discoverAetherExtensionPaths(workspaceDirectory, configuredExtensionPaths)
-    .filter((candidate) => !disabledPaths.some((disabled) => {
-      const relative = path.relative(disabled, candidate);
-      return relative === "" || (!relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
-    }));
   // Extension files are part of the session's tool registry. Include the
   // resolved set in the reuse key so installing/enabling a package cannot
   // leave an existing session with a stale tool list.
-  const packageExtensionPaths = await discoverPackageExtensionPaths(
-    workspaceDirectory,
-    new Set(stringArray(payload.disabled_package_sources)),
-  );
-  const extensionSignature = JSON.stringify(
-    [...new Set([...additionalExtensionPaths, ...packageExtensionPaths])].sort(),
-  );
+  const { extensionPaths: additionalExtensionPaths, signature: extensionSignature } =
+    await resolveNativeExtensionSet(
+      workspaceDirectory,
+      configuredExtensionPaths,
+      {
+        disabledExtensionPaths: stringArray(payload.disabled_extension_paths),
+        disabledPackageSources: stringArray(payload.disabled_package_sources),
+      },
+    );
   const resourceLoader = new DefaultResourceLoader({
     cwd: workspaceDirectory,
     agentDir,
@@ -2203,6 +2289,7 @@ async function createNativeAgentSession(
     settingsManager,
     configuredExtensionPaths,
     pendingReload: false,
+    pendingRecreate: false,
     currentRequestId: "",
     toolArgsById: new Map<string, unknown>(),
     lastAccessedAt: Date.now(),
@@ -2459,21 +2546,15 @@ async function prepareNativeAgentSession(
   if (!sessionId) throw new Error("session_id is required for Pi AgentSession.");
   const platform = platformForPayload(payload);
   const signature = hostToolSignature(allowedHostToolDefinitions(payload.host_tools, platform));
-  const disabledPaths = stringArray(payload.disabled_extension_paths).map((entry) => path.resolve(entry));
   const configuredExtensionPaths = stringArray(payload.extension_paths);
-  const extensionPaths = discoverAetherExtensionPaths(
-    asString(payload.workspace_directory, process.cwd()) || process.cwd(),
+  const workspaceDirectory = asString(payload.workspace_directory, process.cwd()) || process.cwd();
+  const { signature: extensionSignature } = await resolveNativeExtensionSet(
+    workspaceDirectory,
     configuredExtensionPaths,
-  ).filter((candidate) => !disabledPaths.some((disabled) => {
-    const relative = path.relative(disabled, candidate);
-    return relative === "" || (!relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
-  }));
-  const packageExtensionPaths = await discoverPackageExtensionPaths(
-    asString(payload.workspace_directory, process.cwd()) || process.cwd(),
-    new Set(stringArray(payload.disabled_package_sources)),
-  );
-  const extensionSignature = JSON.stringify(
-    [...new Set([...extensionPaths, ...packageExtensionPaths])].sort(),
+    {
+      disabledExtensionPaths: stringArray(payload.disabled_extension_paths),
+      disabledPackageSources: stringArray(payload.disabled_package_sources),
+    },
   );
   const skillSignature = JSON.stringify(stringArray(payload.skill_paths).sort());
   const existing = agentSessions.get(sessionId);
@@ -2482,7 +2563,7 @@ async function prepareNativeAgentSession(
     existing.toolSignature === signature &&
     existing.extensionSignature === extensionSignature &&
     existing.skillSignature === skillSignature &&
-    existing.workspaceDirectory === asString(payload.workspace_directory, process.cwd()) &&
+    existing.workspaceDirectory === workspaceDirectory &&
     existing.runtime === runtimeForPayload(payload);
   if (existing && !reusable) await closeNativeAgentSession(sessionId);
   if (!reusable) {
@@ -2524,6 +2605,14 @@ async function runNativeAgentTurn(id: string, payload: JsonObject): Promise<Json
   const messages = normalizeMessages(payload.messages);
   const prompt = promptFromLastUserMessage(messages);
   const { state, reused } = await prepareNativeAgentSession(payload, prompt.history);
+  const requestedThinkingLevel = thinkingLevelFor(payload) ?? "off";
+  state.session.setThinkingLevel(requestedThinkingLevel);
+  bridgeDebug("agent_turn_thinking_level", {
+    session_id: state.sessionId,
+    requested: requestedThinkingLevel,
+    effective: state.session.thinkingLevel,
+    session_reused: reused,
+  });
   const message = await runNativeAgentPrompt(id, state, prompt.text, prompt.images);
   return {
     ...assistantPayload(message),
@@ -2843,28 +2932,53 @@ async function reloadAllExtensionSessions(
   payload: JsonObject = {},
 ): Promise<JsonObject> {
   const loadOptions = nativeExtensionLoadOptionsFromPayload(payload);
+  // Preinstalled packages can provide both Pi and Aether entrypoints. Resolve
+  // their npm dependencies before reloading native Pi sessions so both loaders
+  // observe the same ready package tree.
+  const skipAetherExtensions = asBoolean(payload.skip_aether_extensions, false);
+  const aetherReload = skipAetherExtensions
+    ? { reloaded: false, errors: [] }
+    : await loadAetherAppExtensions(process.cwd(), loadOptions);
   const results: JsonObject[] = [];
-  for (const state of agentSessions.values()) {
+  for (const state of [...agentSessions.values()]) {
+    const { signature: extensionSignature } = await resolveNativeExtensionSet(
+      state.workspaceDirectory,
+      state.configuredExtensionPaths,
+      loadOptions,
+    );
+    const requiresRecreation = extensionSignature !== state.extensionSignature;
     const scheduled = !state.session.isIdle;
-    if (scheduled) state.pendingReload = true;
-    else await state.session.reload();
+    if (scheduled) {
+      state.pendingReload = true;
+      state.pendingRecreate = requiresRecreation;
+    } else if (requiresRecreation) {
+      await closeNativeAgentSession(state.sessionId);
+    } else {
+      await state.session.reload();
+    }
     results.push({
       session_id: state.sessionId,
       reloaded: !scheduled,
       scheduled,
-      errors: state.resourceLoader.getExtensions().errors,
+      recreated_on_next_use: requiresRecreation,
+      errors: requiresRecreation ? [] : state.resourceLoader.getExtensions().errors,
     });
   }
-  const aetherReload = await loadAetherAppExtensions(process.cwd(), loadOptions);
+  // ResourceLoader keeps healthy extensions active while reporting broken ones as
+  // diagnostics. A diagnostic must not make an unrelated import/enable operation
+  // fail; an actual reload exception is already propagated above.
   const sessionReloadSucceeded = results.every((result) =>
-    Array.isArray(result.errors) && result.errors.length === 0
+    result.reloaded === true || result.scheduled === true
   );
   return {
-    succeeded: sessionReloadSucceeded && aetherReload.reloaded,
+    // Aether Script extensions are reloaded independently. Keep the session
+    // operation usable when one unrelated Aether extension remains broken; its
+    // details are still returned in aether_reload.errors for diagnostics.
+    succeeded: sessionReloadSucceeded,
     session_count: results.length,
     sessions: results,
     aether_reload: aetherReload,
-    aether: await aetherAppExtensionSnapshot(),
+    aether: skipAetherExtensions ? {} : await aetherAppExtensionSnapshot(),
   };
 }
 
@@ -3175,9 +3289,13 @@ async function main(): Promise<void> {
       writeError(undefined, error, "invalid_json");
       continue;
     }
-    handleRequest(request).catch((error) => {
-      writeError(request.id, error);
-    });
+    handleRequest(request).then(
+      flushStartupCompileCache,
+      (error) => {
+        flushStartupCompileCache();
+        writeError(request.id, error);
+      },
+    );
   }
 }
 

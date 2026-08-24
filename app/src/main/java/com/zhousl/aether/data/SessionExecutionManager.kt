@@ -22,6 +22,7 @@ import com.zhousl.aether.ui.MessageDisplayKind
 import com.zhousl.aether.ui.MessageAuthor
 import com.zhousl.aether.ui.ReasoningSummaryChunk
 import com.zhousl.aether.ui.ReasoningTrace
+import com.zhousl.aether.ui.sanitizedForReasoningOff
 import com.zhousl.aether.ui.syncActiveBranches
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
@@ -619,6 +620,11 @@ class SessionExecutionManager(
                     "message_count" to request.requestMessages.size,
                 ),
             )
+            val modelKey = thinkingCatalogKey(request.settings.piProviderId, request.settings.modelId)
+            val cachedThinkingLevelMaps = settingsRepository.loadThinkingLevelMapsCache()
+            val cachedReasoningModels = settingsRepository.loadReasoningModelsCache()
+            val thinkingLevelMap = cachedThinkingLevelMaps[modelKey].orEmpty()
+            val isReasoningModel = modelKey in cachedReasoningModels
             val result = piAgentRunner.runTurn(
                 settings = request.settings,
                 messages = buildRequestMessages(
@@ -635,10 +641,13 @@ class SessionExecutionManager(
                 sessionId = handle.sessionId,
                 sessionFile = agentSessionMetadata?.jsonlPath.orEmpty(),
                 runtimeId = activeRuntimeId,
+                thinkingLevelMap = thinkingLevelMap,
+                isReasoningModel = isReasoningModel,
                 onToolEvent = emitToolEvent,
                 onToolProgress = emitToolEvent,
                 onAssistantReasoningDelta = { delta ->
                     if (handle.pauseRequested) return@runTurn
+                    if (request.settings.reasoningEffort == "off") return@runTurn
                     if (delta.isEmpty()) return@runTurn
                     handle.finishDirectReasoningSummaryChunk()
                     appendReasoningDelta(
@@ -648,6 +657,7 @@ class SessionExecutionManager(
                 },
                 onAssistantReasoningSummaryDelta = { delta ->
                     if (handle.pauseRequested) return@runTurn
+                    if (request.settings.reasoningEffort == "off") return@runTurn
                     if (delta.isEmpty()) return@runTurn
                     appendDirectReasoningSummaryDelta(
                         handle = handle,
@@ -789,6 +799,16 @@ class SessionExecutionManager(
                         outputTokens = estimatedOutputTokens,
                         totalTokens = (estimatedTokenUsage.totalTokens ?: 0L) + estimatedOutputTokens,
                     )
+                    val responseBlocks = currentAssistantResponseBlocks(handle.sessionId).let { blocks ->
+                        if (request.settings.reasoningEffort == "off") {
+                            blocks.sanitizedForReasoningOff()
+                        } else {
+                            blocks
+                        }
+                    }
+                    val visibleThoughtDurationMillis = thoughtDurationMillis.takeIf {
+                        request.settings.reasoningEffort != "off"
+                    }
                     diagnosticLogger.event(
                         category = "session",
                         event = "turn_model_success",
@@ -802,10 +822,10 @@ class SessionExecutionManager(
                     appendAgentMessage(
                         sessionId = handle.sessionId,
                         blocks = ensureAssistantResponseFinalText(
-                            blocks = currentAssistantResponseBlocks(handle.sessionId),
+                            blocks = responseBlocks,
                             finalText = turnResult.assistantText,
                         ) { handle.nextPendingBlockId("agent-text") },
-                        thoughtDurationMillis = thoughtDurationMillis,
+                        thoughtDurationMillis = visibleThoughtDurationMillis,
                         outcome = SessionTurnOutcome.Success,
                         tokenUsage = resolvedTokenUsage,
                         tokenUsageSource = if (turnResult.tokenUsage != null) "api" else "estimated",
@@ -824,6 +844,16 @@ class SessionExecutionManager(
                     )
                 },
                 onFailure = { throwable ->
+                    val responseBlocks = currentAssistantResponseBlocks(handle.sessionId).let { blocks ->
+                        if (request.settings.reasoningEffort == "off") {
+                            blocks.sanitizedForReasoningOff()
+                        } else {
+                            blocks
+                        }
+                    }
+                    val visibleThoughtDurationMillis = thoughtDurationMillis.takeIf {
+                        request.settings.reasoningEffort != "off"
+                    }
                     diagnosticLogger.exception(
                         category = "session",
                         event = "turn_model_failed",
@@ -835,15 +865,15 @@ class SessionExecutionManager(
                     appendAgentMessage(
                         sessionId = handle.sessionId,
                         blocks = appendAssistantResponseText(
-                            blocks = currentAssistantResponseBlocks(handle.sessionId),
+                            blocks = responseBlocks,
                             delta = buildString {
-                                if (currentAssistantResponseBlocks(handle.sessionId).lastOrNull() is AssistantResponseBlock.Text) {
+                                if (responseBlocks.lastOrNull() is AssistantResponseBlock.Text) {
                                     append("\n\n")
                                 }
                                 append("Request failed: ${formatFailureMessage(throwable)}")
                             },
                         ) { handle.nextPendingBlockId("agent-text") },
-                        thoughtDurationMillis = thoughtDurationMillis,
+                        thoughtDurationMillis = visibleThoughtDurationMillis,
                         outcome = SessionTurnOutcome.Failure,
                         tokenUsage = estimatedTokenUsage,
                         tokenUsageSource = "estimated",
@@ -2348,6 +2378,10 @@ class SessionExecutionManager(
         if (!titleSettings.isProviderSetupValid()) {
             return null
         }
+        val modelKey = thinkingCatalogKey(titleSettings.piProviderId, titleSettings.modelId)
+        val thinkingLevelMap = settingsRepository.loadThinkingLevelMapsCache()[modelKey].orEmpty()
+        val isReasoningModel = settingsRepository.loadThinkingCatalogCache()[modelKey]
+            .orEmpty().isNotEmpty()
         val prompt = buildString {
             appendLine("Summarize this assistant reasoning excerpt for a user-visible thinking timeline.")
             appendLine("Return exactly two short paragraphs: first a concise title, then one detail paragraph.")
@@ -2374,6 +2408,8 @@ class SessionExecutionManager(
                 )
             ),
             disableReasoning = true,
+            thinkingLevelMap = thinkingLevelMap,
+            isReasoningModel = isReasoningModel,
         )?.getOrNull()?.assistantText?.trim().orEmpty()
         return parseReasoningSummary(result)
     }

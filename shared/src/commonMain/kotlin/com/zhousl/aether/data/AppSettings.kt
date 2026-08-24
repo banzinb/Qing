@@ -262,6 +262,7 @@ private const val MinLlmInactivityReconnectTimeoutSeconds = 30
 private const val MaxLlmInactivityReconnectTimeoutSeconds = 3600
 const val OnboardingStarterPrompt = "Hi"
 const val AetherWebsiteUrl = "https://github.com/banzinb/Qing"
+const val AetherGitHubUrl = "https://github.com/Zhou-Shilin/Aether"
 const val AetherPrivacyPolicyUrl = "https://github.com/banzinb/Qing/wiki/Privacy-Policy"
 const val DefaultTavilyBaseUrl = "https://api.tavily.com/"
 const val DefaultBingSearchUrl = "https://www.bing.com/search"

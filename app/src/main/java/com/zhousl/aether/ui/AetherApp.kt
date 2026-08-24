@@ -116,6 +116,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.zhousl.aether.AetherApplication
 import com.zhousl.aether.data.AetherPrivacyPolicyUrl
+import com.zhousl.aether.data.AetherGitHubUrl
 import com.zhousl.aether.data.AetherWebsiteUrl
 import com.zhousl.aether.data.AgentModeAuthorizationMethod
 import com.zhousl.aether.data.AppLanguage
@@ -131,6 +132,7 @@ import com.zhousl.aether.platform.LocalReduceMotion
 import com.zhousl.aether.mod.AetherNativeModState
 import com.zhousl.aether.runtime.LocalRuntimeIssue
 import com.zhousl.aether.runtime.LocalRuntimeSetupState
+import com.zhousl.aether.runtime.AndroidAlpineFileManagerRuntime
 import com.zhousl.aether.termux.TermuxContract
 import com.zhousl.aether.termux.TermuxSetupIssue
 import com.zhousl.aether.termux.TermuxSetupState
@@ -445,6 +447,9 @@ private fun AetherAppContent(
         (context.applicationContext as AetherApplication).runtime
     }
     val workspaceFileBridge = appRuntime.workspaceFileBridge
+    val alpineFileManagerRuntime = remember(appRuntime.alpineRuntime) {
+        AndroidAlpineFileManagerRuntime(appRuntime.alpineRuntime)
+    }
     val runtimeWorkspaceFileBridge = appRuntime.runtimeWorkspaceFileBridge
     val activeSession = uiState.sessions.firstOrNull { it.id == uiState.currentSessionId }
     val activeProviderConfig = uiState.providerConfigs.firstOrNull { it.isEnabled }
@@ -1097,6 +1102,7 @@ private fun AetherAppContent(
                     defaultRuntimeId = uiState.settings.defaultRuntimeId,
                     alpinePackageProfiles = uiState.settings.alpinePackageProfiles,
                     alpinePackageInstallProgress = uiState.alpinePackageInstallProgress,
+                    alpineFileManagerRuntime = alpineFileManagerRuntime,
                     developerTermuxReadyOverride = uiState.developerTermuxReadyOverride,
                     installedSkills = uiState.installedSkills,
                     installedPiExtensions = uiState.installedPiExtensions,
@@ -1224,6 +1230,7 @@ private fun AetherAppContent(
                     onStopAgentModeDisplay = viewModel::stopAgentModeDisplay,
                     onRefreshAgentModeDisplays = viewModel::refreshAgentModeDisplays,
                     onOpenWebsite = { openExternalUrl(context, AetherWebsiteUrl) },
+                    onOpenGitHub = { openExternalUrl(context, AetherGitHubUrl) },
                     onOpenPrivacyPolicy = { openExternalUrl(context, AetherPrivacyPolicyUrl) },
                     onCheckForUpdates = viewModel::checkForUpdates,
                     onForceUpdateCheckForTesting = viewModel::forceUpdateCheckForTesting,

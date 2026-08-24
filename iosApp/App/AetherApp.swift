@@ -2,6 +2,11 @@ import Foundation
 import SwiftUI
 import UIKit
 import AetherShared
+import FileProvider
+
+extension Notification.Name {
+    static let openAlpineFileManager = Notification.Name("Aether.OpenAlpineFileManager")
+}
 
 private final class AetherAppDelegate: NSObject, UIApplicationDelegate {
     private let internetPermissionRequester = AetherInternetPermissionRequester()
@@ -11,6 +16,19 @@ private final class AetherAppDelegate: NSObject, UIApplicationDelegate {
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
         AetherRuntimeHost.shared.registerBackgroundExecution()
+        let domain = NSFileProviderDomain(identifier: NSFileProviderDomainIdentifier("com.baimoqilin.aether"), displayName: "Aether")
+        NSFileProviderManager.add(domain) { error in
+            if let error = error as NSError? {
+                NSLog(
+                    "Aether File Provider registration failed (%@ %ld): %@",
+                    error.domain,
+                    error.code,
+                    error.localizedDescription
+                )
+            } else {
+                NSLog("Aether File Provider domain registered")
+            }
+        }
         AetherRuntimeHost.shared.refreshApkRepositoriesForCurrentNetwork()
         internetPermissionRequester.requestAccess()
         return true
@@ -57,12 +75,23 @@ func makeInternetPermissionRequest() -> URLRequest {
 struct AetherIOSApp: App {
     @UIApplicationDelegateAdaptor(AetherAppDelegate.self) private var appDelegate
     @Environment(\.scenePhase) private var scenePhase
+    @State private var presentsAlpineFileManager = false
+    @StateObject private var nativeSettings = NativeSettingsModel()
 
     var body: some Scene {
         WindowGroup {
             ComposeRootView()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .ignoresSafeArea()
+                .onReceive(NotificationCenter.default.publisher(for: .openAlpineFileManager)) { _ in
+                    presentsAlpineFileManager = true
+                }
+                .sheet(isPresented: $presentsAlpineFileManager) {
+                    AlpineFileManagerView(host: AetherRuntimeHost.shared)
+                }
+                .sheet(isPresented: $nativeSettings.isPresented) {
+                    NativeSettingsView(model: nativeSettings)
+                }
         }
         .onChange(of: scenePhase) { _, phase in
             switch phase {
@@ -114,5 +143,20 @@ private final class FullscreenComposeViewController: UIViewController {
             content.view.bottomAnchor.constraint(equalTo: view.bottomAnchor),
         ])
         content.didMove(toParent: self)
+    }
+
+    override func viewWillTransition(
+        to size: CGSize,
+        with coordinator: any UIViewControllerTransitionCoordinator
+    ) {
+        // Compose can otherwise retain the keyboard frame from the previous
+        // orientation and keep bottom IME insets after the keyboard disappears.
+        view.endEditing(true)
+        super.viewWillTransition(to: size, with: coordinator)
+
+        coordinator.animate(alongsideTransition: nil) { [weak self] _ in
+            self?.content.view.setNeedsLayout()
+            self?.content.view.layoutIfNeeded()
+        }
     }
 }

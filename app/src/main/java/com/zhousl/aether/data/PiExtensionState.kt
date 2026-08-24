@@ -20,12 +20,26 @@ data class PiExtensionLoadOptions(
         disabledExtensionPaths.toList() to disabledPackageSources.toList()
 }
 
+internal val DefaultDisabledPreinstalledExtensionPaths: Set<String> = setOf(
+    "/root/.aether/extensions/pi-web-access",
+    "/root/.aether/extensions/pi-mcp-adapter",
+    "/root/.aether/extensions/pi-subagents",
+)
+
+internal val DefaultDisabledPreinstalledExtensionIds: Set<String> = setOf(
+    "import:aether:/root/.aether/extensions/pi-web-access",
+    "import:aether:/root/.aether/extensions/pi-mcp-adapter",
+    "import:aether:/root/.aether/extensions/pi-subagents",
+)
+
 class PiExtensionStateRepository(
     private val context: Context,
 ) {
     val disabledExtensionIds: Flow<Set<String>> =
         context.piExtensionStateDataStore.data.map { preferences ->
-            preferences[DISABLED_EXTENSION_IDS].orEmpty()
+            (preferences[DISABLED_EXTENSION_IDS] ?: DefaultDisabledPreinstalledExtensionIds)
+                .map(::normalizeExtensionStateId)
+                .toSet()
         }
 
     suspend fun setEnabled(
@@ -34,23 +48,32 @@ class PiExtensionStateRepository(
     ) {
         val normalizedId = extensionId.trim()
         if (normalizedId.isBlank()) return
+        val stableId = normalizeExtensionStateId(normalizedId)
+        val baseName = stableId.substringAfterLast('/')
         context.piExtensionStateDataStore.edit { preferences ->
-            val disabledIds = preferences[DISABLED_EXTENSION_IDS].orEmpty().toMutableSet()
+            val disabledIds = (preferences[DISABLED_EXTENSION_IDS] ?: DefaultDisabledPreinstalledExtensionIds)
+                .mapTo(mutableSetOf(), ::normalizeExtensionStateId)
             if (enabled) {
-                disabledIds.remove(normalizedId)
+                disabledIds.remove(stableId)
+                disabledIds.removeAll { it.substringAfterLast('/') == baseName }
             } else {
-                disabledIds.add(normalizedId)
+                disabledIds.add(stableId)
             }
-            if (disabledIds.isEmpty()) {
-                preferences.remove(DISABLED_EXTENSION_IDS)
-            } else {
-                preferences[DISABLED_EXTENSION_IDS] = disabledIds
-            }
+            preferences[DISABLED_EXTENSION_IDS] = disabledIds
         }
     }
 
     suspend fun loadOptions(): PiExtensionLoadOptions =
         loadOptionsForIds(disabledExtensionIds.first())
+
+    suspend fun replaceDisabledExtensionIds(extensionIds: Set<String>) {
+        context.piExtensionStateDataStore.edit { preferences ->
+            preferences[DISABLED_EXTENSION_IDS] = extensionIds
+                .map(::normalizeExtensionStateId)
+                .filter(String::isNotBlank)
+                .toSet()
+        }
+    }
 
     private companion object {
         val DISABLED_EXTENSION_IDS = stringSetPreferencesKey("disabled_extension_ids")
@@ -77,7 +100,12 @@ internal fun loadOptionsForIds(
                     .substringAfter(':', "")
                     .trim()
                     .takeIf(String::isNotBlank)
+                    ?.let(::normalizeImportedExtensionPath)
                     ?.let(disabledExtensionPaths::add)
+            }
+
+            id.startsWith("/") -> {
+                disabledExtensionPaths.add(normalizeImportedExtensionPath(id))
             }
         }
     }
@@ -85,4 +113,26 @@ internal fun loadOptionsForIds(
         disabledExtensionPaths = disabledExtensionPaths,
         disabledPackageSources = disabledPackageSources,
     )
+}
+
+internal fun normalizeExtensionStateId(rawId: String): String {
+    val id = rawId.trim()
+    if (!id.startsWith("import:")) return id
+    val scope = id.substringAfter(':', "").substringBefore(':', "").trim()
+    val importedPath = id.substringAfter(':', "").substringAfter(':', "").trim()
+    if (scope.isBlank() || importedPath.isBlank()) return id
+    return "import:$scope:${normalizeImportedExtensionPath(importedPath)}"
+}
+
+internal fun normalizeImportedExtensionPath(rawPath: String): String {
+    val path = rawPath.trim()
+    val guestRoots = listOf(
+        "/root/.aether/extensions",
+        "/root/.pi/agent/extensions",
+    )
+    guestRoots.forEach { guestRoot ->
+        val rootIndex = path.lastIndexOf(guestRoot)
+        if (rootIndex >= 0) return path.substring(rootIndex)
+    }
+    return path
 }

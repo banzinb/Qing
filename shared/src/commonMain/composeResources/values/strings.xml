@@ -70,6 +70,7 @@
     <string name="statistics_title">Statistics</string>
     <string name="statistics_session_tokens">Session tokens</string>
     <string name="statistics_turn_tokens">Turn tokens</string>
+    <string name="statistics_reasoning_tokens">Reasoning tokens</string>
     <string name="statistics_output_rate">Output rate</string>
     <string name="statistics_first_token_latency">First token latency</string>
     <string name="statistics_input">Input</string>
@@ -397,6 +398,7 @@
     <string name="settings_version">Version</string>
     <string name="settings_check_for_updates">Check for updates</string>
     <string name="settings_website">Website</string>
+    <string name="settings_github">GitHub</string>
     <string name="settings_privacy_policy">Privacy Policy</string>
     <string name="settings_download_and_install">Download and install</string>
     <string name="settings_mcp_server_count_summary">%1$d servers</string>
@@ -1153,4 +1155,15 @@
     <string name="pc_codex_connection_test_ok">Bridge is reachable</string>
     <string name="pc_codex_connection_test_failed">Bridge is unreachable</string>
     <string name="pc_codex_message_count">%1$d messages</string>
+    <string name="file_manager_title">Files</string>
+    <string name="file_manager_open">Open</string>
+    <string name="file_manager_create_file">New file</string>
+    <string name="file_manager_create_folder">New folder</string>
+    <string name="file_manager_rename">Rename</string>
+    <string name="file_manager_delete">Delete</string>
+    <string name="file_manager_new_name">Name</string>
+    <string name="file_manager_empty">This folder is empty</string>
+    <string name="file_manager_view_grid">Grid view</string>
+    <string name="file_manager_view_list">List view</string>
+    <string name="common_confirm">Confirm</string>
 </resources>

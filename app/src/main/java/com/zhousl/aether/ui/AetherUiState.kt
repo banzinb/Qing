@@ -186,6 +186,25 @@ sealed interface AssistantResponseBlock {
     ) : AssistantResponseBlock
 }
 
+internal fun List<AssistantResponseBlock>.sanitizedForReasoningOff(): List<AssistantResponseBlock> {
+    val finalText = filterIsInstance<AssistantResponseBlock.Text>()
+        .lastOrNull { it.text.isNotBlank() }
+    val workBlocks = flatMap { block ->
+        when (block) {
+            is AssistantResponseBlock.Text -> emptyList()
+            is AssistantResponseBlock.Reasoning -> block.trace.toolInvocations
+                .takeIf { it.isNotEmpty() }
+                ?.let { tools ->
+                    listOf(AssistantResponseBlock.ToolGroup(block.id, tools))
+                }
+                .orEmpty()
+            is AssistantResponseBlock.Status,
+            is AssistantResponseBlock.ToolGroup -> listOf(block)
+        }
+    }
+    return workBlocks + listOfNotNull(finalText)
+}
+
 data class ChatMessage(
     val id: String,
     val author: MessageAuthor,
@@ -290,6 +309,7 @@ data class AetherUiState(
     val modelCatalogInfo: Map<String, com.zhousl.aether.data.ModelCatalogInfo> = emptyMap(),
     val thinkingLevelsByProviderModel: Map<String, List<String>> = emptyMap(),
     val thinkingLevelClampsByProviderModel: Map<String, Map<String, String>> = emptyMap(),
+    val reasoningModels: Set<String> = emptySet(),
     val isFetchingModels: Boolean = false,
     val providerAuthState: PiProviderAuthState = PiProviderAuthState(),
     val piCoreSetupState: PiCoreSetupState = PiCoreSetupState(),

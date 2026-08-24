@@ -152,7 +152,7 @@ test("lists Pi-discovered project skills without Aether managed copies", async (
     join(managedSkill, "SKILL.md"),
     "---\nname: managed\ndescription: Already managed by Aether\n---\n",
   );
-  const client = new BridgeClient({ HOME: root });
+  const client = new BridgeClient({ HOME: root }, "dist/extension-bridge.mjs");
   try {
     const payload = await client.request("skills-1", "list_discovered_skills", {
       workspace_directory: workspace,
@@ -169,7 +169,10 @@ test("lists Pi-discovered project skills without Aether managed copies", async (
 
 test("lists Pi extension packages from an isolated agent directory", async () => {
   const home = await mkdtemp(join(tmpdir(), "aether-pi-packages-"));
-  const client = new BridgeClient({ HOME: home, USERPROFILE: home });
+  const client = new BridgeClient(
+    { HOME: home, USERPROFILE: home },
+    "dist/extension-bridge.mjs",
+  );
   try {
     const result = await client.request("packages-list", "list_extension_packages");
     assert.deepEqual(result.packages, []);
@@ -367,7 +370,10 @@ export default defineAetherExtension((aether) => {
     "utf8",
   );
 
-  const client = new BridgeClient({ HOME: home, USERPROFILE: home });
+  const client = new BridgeClient(
+    { HOME: home, USERPROFILE: home },
+    "dist/extension-bridge.mjs",
+  );
   try {
     const loaded = await client.request("aether-load", "reload_aether_extensions", {
       context: { draft_input: "hello" },
@@ -574,6 +580,108 @@ export default defineAetherExtension((aether) => {
       },
     );
     assert.deepEqual(action.result, { version: "stable" });
+  } finally {
+    await client.close();
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+test("installs dependencies for bundled Aether packages before loading them", async () => {
+  const home = await mkdtemp(join(tmpdir(), "aether-preinstalled-deps-"));
+  const packageDirectory = join(home, ".aether", "extensions", "dependency-test");
+  const binDirectory = join(home, "bin");
+  const npmLog = join(home, "npm.log");
+  await mkdir(packageDirectory, { recursive: true });
+  await mkdir(binDirectory, { recursive: true });
+  await writeFile(
+    join(packageDirectory, "package.json"),
+    JSON.stringify({
+      name: "dependency-test",
+      version: "1.0.0",
+      dependencies: { "fixture-dependency": "1.0.0" },
+      aether: { extensions: ["./index.ts"] },
+    }),
+    "utf8",
+  );
+  await writeFile(
+    join(packageDirectory, "index.ts"),
+    `export default (aether) => aether.registerAction("loaded", () => ({ loaded: true }));\n`,
+    "utf8",
+  );
+  // Simulate an interrupted install. A bare node_modules directory must not be
+  // mistaken for a complete dependency tree.
+  await mkdir(join(packageDirectory, "node_modules"), { recursive: true });
+  await writeFile(
+    join(binDirectory, "npm"),
+    `#!/bin/sh\nprintf '%s\\n' "$*" >> "$AETHER_TEST_NPM_LOG"\nmkdir -p node_modules\n`,
+    { encoding: "utf8", mode: 0o755 },
+  );
+
+  const client = new BridgeClient({
+    HOME: home,
+    USERPROFILE: home,
+    PATH: `${binDirectory}:${process.env.PATH ?? ""}`,
+    AETHER_TEST_NPM_LOG: npmLog,
+  });
+  try {
+    const first = await client.request("dependency-load", "reload_aether_extensions");
+    assert.equal(first.reloaded, true);
+    assert.equal(first.snapshot.extensions.length, 1);
+    assert.match(await readFile(npmLog, "utf8"), /^install /m);
+    assert.ok(await readFile(join(packageDirectory, "node_modules", ".aether-install-complete"), "utf8"));
+
+    await client.request("dependency-reload", "reload_aether_extensions");
+    assert.equal((await readFile(npmLog, "utf8")).trim().split("\n").length, 1);
+
+    const manifestPath = join(packageDirectory, "package.json");
+    const updatedManifest = JSON.parse(await readFile(manifestPath, "utf8"));
+    updatedManifest.dependencies["second-fixture-dependency"] = "2.0.0";
+    await writeFile(manifestPath, JSON.stringify(updatedManifest), "utf8");
+    await client.request("dependency-update", "reload_aether_extensions");
+    assert.equal((await readFile(npmLog, "utf8")).trim().split("\n").length, 2);
+  } finally {
+    await client.close();
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+test("does not let one broken Aether extension block unrelated reload operations", async () => {
+  const home = await mkdtemp(join(tmpdir(), "aether-broken-extension-"));
+  const root = join(home, ".aether", "extensions");
+  const broken = join(root, "broken");
+  const healthy = join(root, "healthy");
+  await mkdir(broken, { recursive: true });
+  await writeFile(
+    join(broken, "package.json"),
+    JSON.stringify({ name: "broken", aether: { extensions: ["./index.ts"] } }),
+    "utf8",
+  );
+  await writeFile(join(broken, "index.ts"), `export default () => { throw new Error("broken extension"); };\n`, "utf8");
+
+  const client = new BridgeClient({ HOME: home, USERPROFILE: home });
+  try {
+    const blocked = await client.request("broken-only", "reload_all_extensions");
+    assert.equal(blocked.succeeded, true);
+    assert.equal(blocked.aether_reload.reloaded, false);
+    assert.match(blocked.aether_reload.errors[0].error, /broken extension/);
+
+    await mkdir(healthy, { recursive: true });
+    await writeFile(
+      join(healthy, "package.json"),
+      JSON.stringify({ name: "healthy", aether: { extensions: ["./index.ts"] } }),
+      "utf8",
+    );
+    await writeFile(
+      join(healthy, "index.ts"),
+      `import { ui } from "@aether/extension-api"; export default (aether) => aether.registerSurface("chat.composer.top", ui.text("healthy"));\n`,
+      "utf8",
+    );
+
+    const recovered = await client.request("broken-with-healthy", "reload_all_extensions");
+    assert.equal(recovered.succeeded, true);
+    assert.equal(recovered.aether_reload.reloaded, true);
+    assert.deepEqual(recovered.aether.extensions.map(({ name }) => name), ["healthy"]);
+    assert.match(recovered.aether_reload.errors[0].error, /broken extension/);
   } finally {
     await client.close();
     await rm(home, { recursive: true, force: true });
@@ -1123,6 +1231,57 @@ export default function (pi: ExtensionAPI) {
   assert.equal(invoked.invoked, true);
 });
 
+test("recreates existing sessions after disabling a Pi extension", async (t) => {
+  const workspace = await mkdtemp(join(tmpdir(), "aether-pi-disable-"));
+  t.after(() => rm(workspace, { recursive: true, force: true }));
+  const extensionDirectory = join(workspace, ".pi", "extensions");
+  await mkdir(extensionDirectory, { recursive: true });
+  await writeFile(
+    join(extensionDirectory, "disable-me.ts"),
+    `
+export default function (pi) {
+  pi.registerCommand("disable-me", { description: "Disable me", async handler() {} });
+}
+`,
+    "utf8",
+  );
+
+  const client = new BridgeClient();
+  await client.request(
+    "disable-create",
+    "run_turn",
+    {
+      ...turnPayload("session-disable", [userMessage("start")]),
+      workspace_directory: workspace,
+    },
+  );
+  const before = await client.request("disable-list-before", "list_extensions", {
+    session_id: "session-disable",
+  });
+  assert.ok(before.commands.some((command) => command.name === "disable-me"));
+
+  const reload = await client.request("disable-reload", "reload_all_extensions", {
+    disabled_extension_paths: [extensionDirectory],
+    disabled_package_sources: [],
+  });
+  assert.equal(reload.sessions[0].recreated_on_next_use, true);
+
+  await client.request(
+    "disable-recreate",
+    "run_turn",
+    {
+      ...turnPayload("session-disable", [userMessage("continue")]),
+      workspace_directory: workspace,
+      disabled_extension_paths: [extensionDirectory],
+      disabled_package_sources: [],
+    },
+  );
+  const after = await client.request("disable-list-after", "list_extensions", {
+    session_id: "session-disable",
+  });
+  assert.ok(after.commands.every((command) => command.name !== "disable-me"));
+});
+
 test("recreates a reused session when a new Pi extension becomes discoverable", async (t) => {
   const workspace = await mkdtemp(join(tmpdir(), "aether-pi-extension-discovery-"));
   t.after(() => rm(workspace, { recursive: true, force: true }));
@@ -1631,6 +1790,257 @@ test("maps a custom OpenAI-compatible provider through Pi", async (t) => {
   assert.equal(receivedRequest.authorization, "Bearer secret-key");
   assert.equal(receivedRequest.customHeader, "present");
   assert.equal(receivedRequest.body.model, "custom-model");
+});
+
+test("passes reasoning_effort none when off is selected for a model with thinkingLevelMap off: none", async (t) => {
+  let receivedRequest;
+  const server = createServer((request, response) => {
+    const chunks = [];
+    request.on("data", (chunk) => chunks.push(chunk));
+    request.on("end", () => {
+      receivedRequest = {
+        url: request.url,
+        authorization: request.headers.authorization,
+        body: JSON.parse(Buffer.concat(chunks).toString("utf8")),
+      };
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.write(
+        `data: ${JSON.stringify({
+          id: "chatcmpl-pi-none-test",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: "reasoning-model",
+          choices: [
+            {
+              index: 0,
+              delta: { role: "assistant", content: "NONE_OK" },
+              finish_reason: null,
+            },
+          ],
+        })}\n\n`,
+      );
+      response.write(
+        `data: ${JSON.stringify({
+          id: "chatcmpl-pi-none-test",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: "reasoning-model",
+          choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+          usage: {
+            prompt_tokens: 4,
+            completion_tokens: 2,
+            total_tokens: 6,
+          },
+        })}\n\n`,
+      );
+      response.end("data: [DONE]\n\n");
+    });
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  const address = server.address();
+  assert.ok(address && typeof address === "object");
+
+  const client = new BridgeClient();
+  const result = await client.request(
+    "custom-reasoning-none",
+    "complete_once",
+    {
+      model_config: {
+        provider_type: "openai_compatible",
+        provider_config_id: "custom-reasoning-none",
+        pi_provider_id: "aether-test-reasoning",
+        pi_api: "openai-completions",
+        model_id: "reasoning-model",
+        base_url: `http://127.0.0.1:${address.port}/v1`,
+        api_key: "secret-key",
+        reasoning: true,
+        thinking_level_map: { off: "none" },
+      },
+      reasoning: "off",
+      system_prompt: "Reply briefly.",
+      messages: [userMessage("hello")],
+      stream: false,
+    },
+  );
+
+  assert.equal(result.assistant_text, "NONE_OK", JSON.stringify(result));
+  assert.equal(receivedRequest.body.reasoning_effort, "none");
+  assert.equal(Object.hasOwn(result.usage, "reasoning_tokens"), false);
+});
+
+test("updates reasoning effort when reusing an agent session", async (t) => {
+  const receivedBodies = [];
+  const server = createServer((request, response) => {
+    const chunks = [];
+    request.on("data", (chunk) => chunks.push(chunk));
+    request.on("end", () => {
+      const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+      receivedBodies.push(body);
+      const answer = body.reasoning_effort === "none" ? "NONE_OK" : "LOW_OK";
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.write(
+        `data: ${JSON.stringify({
+          id: `chatcmpl-agent-reasoning-${receivedBodies.length}`,
+          object: "chat.completion.chunk",
+          created: 1,
+          model: "reasoning-model",
+          choices: [{
+            index: 0,
+            delta: { role: "assistant", reasoning_content: "HIDDEN_REASONING" },
+            finish_reason: null,
+          }],
+        })}\n\n`,
+      );
+      response.write(
+        `data: ${JSON.stringify({
+          id: `chatcmpl-agent-reasoning-${receivedBodies.length}`,
+          object: "chat.completion.chunk",
+          created: 1,
+          model: "reasoning-model",
+          choices: [{ index: 0, delta: { content: answer }, finish_reason: null }],
+        })}\n\n`,
+      );
+      response.write(
+        `data: ${JSON.stringify({
+          id: `chatcmpl-agent-reasoning-${receivedBodies.length}`,
+          object: "chat.completion.chunk",
+          created: 1,
+          model: "reasoning-model",
+          choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+          usage: { prompt_tokens: 4, completion_tokens: 4, total_tokens: 8 },
+        })}\n\n`,
+      );
+      response.end("data: [DONE]\n\n");
+    });
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  const address = server.address();
+  assert.ok(address && typeof address === "object");
+
+  const client = new BridgeClient();
+  const config = {
+    provider_type: "openai_compatible",
+    provider_config_id: "agent-reasoning-level",
+    pi_provider_id: "aether-test-agent-reasoning",
+    pi_api: "openai-completions",
+    model_id: "reasoning-model",
+    base_url: `http://127.0.0.1:${address.port}/v1`,
+    api_key: "secret-key",
+    reasoning: true,
+    thinking_level_map: { off: "none" },
+  };
+  const sessionId = "session-agent-reasoning-level";
+  const low = await client.request(
+    "agent-reasoning-low",
+    "run_turn",
+    { ...turnPayload(sessionId, [userMessage("first")], config), reasoning: "low" },
+  );
+  const off = await client.request(
+    "agent-reasoning-off",
+    "run_turn",
+    { ...turnPayload(sessionId, [userMessage("second")], config), reasoning: "off" },
+  );
+
+  assert.equal(low.session_reused, false);
+  assert.equal(off.session_reused, true);
+  assert.deepEqual(receivedBodies.map((body) => body.reasoning_effort), ["low", "none"]);
+  assert.equal(off.reasoning_text, "HIDDEN_REASONING");
+  assert.equal(off.assistant_text, "NONE_OK");
+  assert.ok(
+    client.events.some(
+      (frame) =>
+        frame.id === "agent-reasoning-off" &&
+        frame.event === "assistant_reasoning_delta" &&
+        frame.payload.delta === "HIDDEN_REASONING",
+    ),
+  );
+});
+
+test("reads top-level reasoning_tokens from OpenAI-compatible completion usage", async (t) => {
+  const server = createServer((request, response) => {
+    request.resume();
+    request.on("end", () => {
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.write(
+        `data: ${JSON.stringify({
+          id: "chatcmpl-top-level-reasoning-usage",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: "reasoning-model",
+          choices: [
+            {
+              index: 0,
+              delta: { role: "assistant", reasoning_content: "Brief reasoning" },
+              finish_reason: null,
+            },
+          ],
+        })}\n\n`,
+      );
+      response.write(
+        `data: ${JSON.stringify({
+          id: "chatcmpl-top-level-reasoning-usage",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: "reasoning-model",
+          choices: [
+            {
+              index: 0,
+              delta: { content: "ANSWER" },
+              finish_reason: null,
+            },
+          ],
+        })}\n\n`,
+      );
+      response.write(
+        `data: ${JSON.stringify({
+          id: "chatcmpl-top-level-reasoning-usage",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: "reasoning-model",
+          choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+          usage: {
+            prompt_tokens: 4,
+            completion_tokens: 9,
+            total_tokens: 13,
+            reasoning_tokens: 5,
+          },
+        })}\n\n`,
+      );
+      response.end("data: [DONE]\n\n");
+    });
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  const address = server.address();
+  assert.ok(address && typeof address === "object");
+
+  const client = new BridgeClient();
+  const result = await client.request(
+    "custom-top-level-reasoning-usage",
+    "complete_once",
+    {
+      model_config: {
+        provider_type: "openai_compatible",
+        provider_config_id: "custom-top-level-reasoning-usage",
+        pi_provider_id: "aether-test-reasoning",
+        pi_api: "openai-completions",
+        model_id: "reasoning-model",
+        base_url: `http://127.0.0.1:${address.port}/v1`,
+        api_key: "secret-key",
+        reasoning: true,
+      },
+      reasoning: "low",
+      system_prompt: "Reply briefly.",
+      messages: [userMessage("hello")],
+      stream: false,
+    },
+  );
+
+  assert.equal(result.assistant_text, "ANSWER", JSON.stringify(result));
+  assert.equal(result.reasoning_text, "Brief reasoning", JSON.stringify(result));
+  assert.equal(result.usage.reasoning_tokens, 5, JSON.stringify(result));
 });
 
 test("accepts arbitrary manual model IDs for a built-in provider", async (t) => {
