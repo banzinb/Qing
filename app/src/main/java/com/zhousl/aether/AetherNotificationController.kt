@@ -17,7 +17,9 @@ import com.zhousl.aether.ui.ChatSession
 
 private const val ForegroundChannelId = "aether_background_runs"
 private const val CompletionChannelId = "aether_completed_runs"
+private const val PresenceChannelId = "aether_presence"
 const val ForegroundNotificationId = 1001
+const val PresenceNotificationId = 2002
 
 class AetherNotificationController(
     private val context: Context,
@@ -43,8 +45,17 @@ class AetherNotificationController(
         ).apply {
             description = "Alerts you when a background Qing session finishes."
         }
+        val presenceChannel = NotificationChannel(
+            PresenceChannelId,
+            "Active pushes",
+            NotificationManager.IMPORTANCE_DEFAULT,
+        ).apply {
+            description = "Shows proactive memory summaries from Qing."
+            setShowBadge(true)
+        }
         manager.createNotificationChannel(foregroundChannel)
         manager.createNotificationChannel(completionChannel)
+        manager.createNotificationChannel(presenceChannel)
     }
 
     fun buildForegroundNotification(
@@ -135,6 +146,78 @@ class AetherNotificationController(
 
         try {
             notificationManager.notify(sessionId.hashCode(), notification)
+        } catch (_: SecurityException) {
+            // Notification permission can be revoked after the preflight check.
+        }
+    }
+
+    fun notifyPresencePush(summary: String) {
+        if (!canPostUserNotifications()) return
+
+        val contentIntent = PendingIntent.getActivity(
+            context,
+            PresenceNotificationId,
+            Intent(context, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            },
+            PendingIntent.FLAG_UPDATE_CURRENT or pendingIntentMutabilityFlags(),
+        )
+        val dismissIntent = PendingIntent.getBroadcast(
+            context,
+            PresenceNotificationId,
+            Intent(context, PresencePushAlarmReceiver::class.java).apply {
+                action = PresencePushAlarmReceiver.ActionDismissPresencePush
+            },
+            PendingIntent.FLAG_UPDATE_CURRENT or pendingIntentMutabilityFlags(),
+        )
+        val disableIntent = PendingIntent.getBroadcast(
+            context,
+            PresenceNotificationId + 1,
+            Intent(context, PresencePushAlarmReceiver::class.java).apply {
+                action = PresencePushAlarmReceiver.ActionDisablePresencePush
+            },
+            PendingIntent.FLAG_UPDATE_CURRENT or pendingIntentMutabilityFlags(),
+        )
+
+        val notification = NotificationCompat.Builder(context, PresenceChannelId)
+            .setSmallIcon(R.drawable.ic_notification_small)
+            .setContentTitle(context.getString(R.string.presence_notification_title))
+            .setContentText(context.getString(R.string.presence_notification_body))
+            .setStyle(
+                NotificationCompat.BigTextStyle().bigText(
+                    summary.ifBlank { context.getString(R.string.presence_notification_body) }
+                )
+            )
+            .setContentIntent(contentIntent)
+            .addAction(
+                R.drawable.ic_notification_small,
+                context.getString(R.string.presence_notification_open),
+                contentIntent,
+            )
+            .addAction(
+                R.drawable.ic_notification_small,
+                context.getString(R.string.presence_notification_ignore),
+                dismissIntent,
+            )
+            .addAction(
+                R.drawable.ic_notification_small,
+                context.getString(R.string.presence_notification_disable),
+                disableIntent,
+            )
+            .setAutoCancel(true)
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .build()
+
+        try {
+            notificationManager.notify(PresenceNotificationId, notification)
+        } catch (_: SecurityException) {
+            // Notification permission can be revoked after the preflight check.
+        }
+    }
+
+    fun cancelPresencePush() {
+        try {
+            notificationManager.cancel(PresenceNotificationId)
         } catch (_: SecurityException) {
             // Notification permission can be revoked after the preflight check.
         }

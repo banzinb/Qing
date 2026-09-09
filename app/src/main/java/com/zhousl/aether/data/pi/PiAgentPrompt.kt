@@ -15,6 +15,7 @@ internal fun buildPiAgentInstructions(
     runtimeId: LocalRuntimeId,
     agentModeEnabled: Boolean,
     chromeEnabled: Boolean = false,
+    memoryContext: String = "",
 ): String = buildString {
     val configuredPrompt = expandDynamicPromptPlaceholders(settings.systemPrompt).trim()
     if (configuredPrompt.isNotBlank()) {
@@ -33,7 +34,11 @@ internal fun buildPiAgentInstructions(
             "User-uploaded files are placed under uploads/; use read on the provided path when image or file contents are needed. " +
             "Qing-owned configuration, Skill, runtime, Extension, Agent Mode, scheduled-task, and developer operations are exposed only through available aether_* tools. " +
             "Never modify LLM provider credentials or model configuration through self-management tools. " +
-            "Only claim device actions or command results that were actually observed."
+            "Only claim device actions or command results that were actually observed. " +
+            "Qing keeps a local memory store (bills, todos, clips, preferences). " +
+            "memory_write and memory_query are always available as host tools in every runtime — use memory_write to save what the user asks you to remember, and memory_query to look it up later. " +
+            "memory_write accepts priority=always|normal|low (default normal): use always only when the user explicitly wants something remembered long-term (preferences, commitments), normal for everyday records, low for trivial one-off details. " +
+            "When the user says remember/keep in mind/长期记住 something (a preference, commitment, or fact about them), save it with memory_write domain=pref action=set (key=short topic, value=full content) so it is injected every turn."
     )
     if (agentModeEnabled) {
         append(
@@ -44,6 +49,13 @@ internal fun buildPiAgentInstructions(
     if (chromeEnabled) {
         append(
             "\n\nThe chat has enabled the browser tool (Chrome Extension tool). Prefer selectors and DOM-reading actions, and use coordinates only as a fallback."
+        )
+    }
+    if (memoryContext.isNotBlank()) {
+        append("\n\n")
+        append(memoryContext)
+        append(
+            "\n\nUse the memory_query / memory_write tools for more detail; never invent memory contents that are not listed here."
         )
     }
 }

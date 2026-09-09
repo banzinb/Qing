@@ -126,7 +126,7 @@ class AetherSelfManagementTool(
                     "runtime",
                     JSONObject().apply {
                         put("type", "string")
-                        put("enum", JSONArray(listOf("alpine", "termux")))
+                        put("enum", JSONArray(listOf("alpine", "termux", "embedded_termux")))
                     },
                 )
             },

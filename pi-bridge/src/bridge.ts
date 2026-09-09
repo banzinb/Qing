@@ -1499,6 +1499,8 @@ const AETHER_HOST_TOOL_NAMES = new Set([
   "aether_developer_manage",
   "aether_runtime_manage",
   "agent_display",
+  "memory_write",
+  "memory_query",
 ]);
 
 function runtimeForPayload(payload: JsonObject): "alpine" | "termux" {

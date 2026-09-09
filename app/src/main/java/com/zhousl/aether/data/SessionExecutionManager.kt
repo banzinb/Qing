@@ -576,14 +576,22 @@ class SessionExecutionManager(
             )
             val agentSessionMetadata = chatRepository.getAgentSessionMetadata(handle.sessionId)
                 ?.takeIf { metadata -> validateAgentSessionFile(metadata.piSessionId, metadata.jsonlPath) }
-            val activeRuntimeId = LocalRuntimeId.fromStorage(agentSessionMetadata?.runtime)
-                ?: runtimeRouter.runtimeFor(request.settings, null)?.id
-                ?: request.settings.defaultRuntimeId
-                ?: LocalRuntimeId.Alpine
-            val runtimeWorkspaceDirectory = runtimeRouter.runtimeWorkspaceDirectory(
-                settings = request.settings,
-                termuxWorkspaceDirectory = workspaceDirectory,
-            )
+            val sessionRuntimeId = LocalRuntimeId.fromStorage(agentSessionMetadata?.runtime)
+            val activeRuntimeId = when {
+                sessionRuntimeId != null && runtimeRouter.runtimeById(sessionRuntimeId).inspectSetup().isReady ->
+                    sessionRuntimeId
+                else ->
+                    runtimeRouter.resolveUsableRuntime(request.settings, null)?.id
+                        ?: sessionRuntimeId
+                        ?: request.settings.defaultRuntimeId
+                        ?: LocalRuntimeId.Alpine
+            }
+            val runtimeWorkspaceDirectory = when (activeRuntimeId) {
+                LocalRuntimeId.Termux -> workspaceDirectory
+                LocalRuntimeId.Alpine -> runtimeRouter.runtimeById(LocalRuntimeId.Alpine).workspaceRoot
+                LocalRuntimeId.EmbeddedTermux ->
+                    runtimeRouter.runtimeById(LocalRuntimeId.EmbeddedTermux).workspaceRoot
+            }
             val reasoningTraceToolRoutingEnabled = request.settings.supportsVisibleReasoningTrace()
             var providerRequestCheckpoint: ProviderRequestCheckpoint? = null
             val emitToolEvent: suspend (AgentToolEvent) -> Unit = { event ->

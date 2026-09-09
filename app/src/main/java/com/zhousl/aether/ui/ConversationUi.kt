@@ -25,6 +25,7 @@ import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -413,6 +414,14 @@ fun ConversationScreen(
     var composerBodyHeightPx by remember { mutableIntStateOf(0) }
     var pendingGenerationHeightPx by remember { mutableIntStateOf(0) }
     var composerFocused by remember { mutableStateOf(false) }
+    val agentStatus = when {
+        pendingStatusText.isNotBlank() -> AetherAgentStatus.Connecting
+        isSending ||
+            pendingResponseBlocks.isNotEmpty() ||
+            pendingToolInvocations.isNotEmpty() ||
+            activeTurnStartedAtMillis != null -> AetherAgentStatus.Working
+        else -> AetherAgentStatus.Idle
+    }
 
     // --- Qing pet state machine ---
     val petContext = LocalContext.current
@@ -801,6 +810,7 @@ fun ConversationScreen(
             ConversationTopOverlay(
                 modifier = Modifier.align(Alignment.TopCenter),
                 onBodyHeightChanged = { topBarBodyHeightPx = it },
+                agentStatus = agentStatus,
                 modelOptions = modelOptions,
                 modelCatalogInfo = modelCatalogInfo,
                 selectedModelKey = selectedModelKey,
@@ -900,6 +910,7 @@ private fun LazyListState.isAtConversationBottom(): Boolean {
 private fun ConversationTopOverlay(
     modifier: Modifier = Modifier,
     onBodyHeightChanged: (Int) -> Unit,
+    agentStatus: AetherAgentStatus,
     modelOptions: List<ProviderModelOption>,
     modelCatalogInfo: Map<String, ModelCatalogInfo>,
     selectedModelKey: String,
@@ -923,6 +934,7 @@ private fun ConversationTopOverlay(
         ) {
             Column {
                 ConversationTopBar(
+                    agentStatus = agentStatus,
                     modelOptions = modelOptions,
                     modelCatalogInfo = modelCatalogInfo,
                     selectedModelKey = selectedModelKey,
@@ -953,6 +965,7 @@ private fun ConversationTopOverlay(
 @Composable
 private fun ConversationTopBar(
     modifier: Modifier = Modifier,
+    agentStatus: AetherAgentStatus = AetherAgentStatus.Idle,
     modelOptions: List<ProviderModelOption>,
     modelCatalogInfo: Map<String, ModelCatalogInfo>,
     selectedModelKey: String,
@@ -975,6 +988,7 @@ private fun ConversationTopBar(
         onNewChat = onNewChat,
     ) {
         ConversationModelSelector(
+            agentStatus = agentStatus,
             options = modelOptions,
             modelCatalogInfo = modelCatalogInfo,
             selectedModelKey = selectedModelKey,
@@ -991,6 +1005,7 @@ private fun ConversationTopBar(
 
 @Composable
 private fun ConversationModelSelector(
+    agentStatus: AetherAgentStatus = AetherAgentStatus.Idle,
     options: List<ProviderModelOption>,
     modelCatalogInfo: Map<String, ModelCatalogInfo>,
     selectedModelKey: String,
@@ -1054,7 +1069,8 @@ private fun ConversationModelSelector(
             Row(
                 modifier = Modifier.height(38.dp)
                     .clip(RoundedCornerShape(999.dp))
-                    .background(AetherSurface.copy(alpha = 0.96f))
+                    .background(aetherGlassControlColor())
+                    .border(1.dp, aetherGlassBorderColor(), RoundedCornerShape(999.dp))
                     .clickable(enabled = options.isNotEmpty()) {
                         onOpened()
                         menuSelectedModelKey = selectedModelKey
@@ -1063,12 +1079,17 @@ private fun ConversationModelSelector(
                 },
                 verticalAlignment = Alignment.CenterVertically,
             ) {
+                AetherGlassStatusDot(
+                    status = agentStatus,
+                    modifier = Modifier.padding(start = 17.dp),
+                )
+                Spacer(modifier = Modifier.width(7.dp))
                 if (selectedDisplay != null) {
                     SelectedModelDisplay(
                         displayName = selectedDisplay,
                         modifier = Modifier
                             .widthIn(max = 240.dp)
-                            .padding(horizontal = 17.dp),
+                            .padding(end = 17.dp),
                     )
                 } else {
                     Text(
@@ -1079,7 +1100,7 @@ private fun ConversationModelSelector(
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier
                             .widthIn(max = 220.dp)
-                            .padding(horizontal = 17.dp),
+                            .padding(end = 17.dp),
                     )
                 }
             }

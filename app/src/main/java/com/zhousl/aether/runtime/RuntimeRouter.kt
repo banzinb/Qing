@@ -42,6 +42,37 @@ class RuntimeRouter(
         LocalRuntimeId.EmbeddedTermux -> embeddedTermuxRuntime ?: termuxRuntime
     }
 
+    /**
+     * Resolve a runtime that is actually usable (installed/ready).
+     * When no explicit environment is requested, falls back through enabled
+     * runtimes in priority order: EmbeddedTermux -> Alpine -> Termux.
+     */
+    suspend fun resolveUsableRuntime(
+        settings: AppSettings,
+        environment: String?,
+    ): LocalRuntime? {
+        val candidates = buildList {
+            runtimeFor(settings, environment)?.let(::add)
+            val requested = environment?.trim().orEmpty().lowercase()
+            if (requested.isEmpty() || requested == "default") {
+                val enabled = settings.enabledRuntimeIds
+                if (enabled.isNotEmpty()) {
+                    listOf(
+                        LocalRuntimeId.EmbeddedTermux,
+                        LocalRuntimeId.Alpine,
+                        LocalRuntimeId.Termux,
+                    ).forEach { id ->
+                        if (id in enabled && none { it.id == id }) add(runtimeById(id))
+                    }
+                }
+            }
+        }
+        for (candidate in candidates) {
+            if (candidate.inspectSetup().isReady) return candidate
+        }
+        return candidates.firstOrNull()
+    }
+
     fun runtimeForRunId(runId: String): Pair<LocalRuntime, String>? {
         val separatorIndex = runId.indexOf(':')
         if (separatorIndex <= 0) return null

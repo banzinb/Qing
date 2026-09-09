@@ -58,3 +58,4 @@ Thumbs.db
 .DS_Store
 xcuserdata/
 pi-bridge/session-*.jsonl
+codex-src/

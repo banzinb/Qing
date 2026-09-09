@@ -129,6 +129,9 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
 import com.zhousl.aether.R
+import com.zhousl.aether.ui.resultcard.QingCardParser
+import com.zhousl.aether.ui.resultcard.QingResultCard
+import com.zhousl.aether.ui.resultcard.QingCard
 import com.zhousl.aether.ui.theme.AetherMessageBubble
 import com.zhousl.aether.ui.theme.AetherError
 import com.zhousl.aether.ui.theme.AetherOnPrimaryContainer
@@ -909,12 +912,22 @@ private fun AssistantMessageBlock(
             onOpenAttachment = onOpenAttachment,
         )
         }
+        val fallbackCard = remember(message) {
+            message.toolInvocations.mapNotNull { invocation ->
+                QingCardParser.fallbackStatusCard(
+                    toolName = invocation.toolName,
+                    argumentsJson = invocation.argumentsJson,
+                    outputJson = invocation.outputJson,
+                )
+            }.firstOrNull()
+        }
         if (message.text.isNotBlank()) {
-            MarkdownContent(
-                markdown = message.text,
+            AssistantFinalTextBlock(
+                text = message.text,
                 workspaceDirectory = workspaceDirectory,
                 allowRootImageRead = allowRootImageRead,
                 onLinkClick = onOpenLink,
+                fallbackCard = fallbackCard,
             )
         }
         if (message.statusText.isNotBlank()) {
@@ -999,6 +1012,18 @@ fun ConversationAssistantGroupBubble(
     val hasReasoningTrace = messages.any { it.reasoningTrace != null }
     val showActions = messages.none { it.assistantActionsHidden }
     val context = LocalContext.current
+    val fallbackCard = remember(messages) {
+        messages.asSequence()
+            .flatMap { it.toolInvocations.asSequence() }
+            .mapNotNull { invocation ->
+                QingCardParser.fallbackStatusCard(
+                    toolName = invocation.toolName,
+                    argumentsJson = invocation.argumentsJson,
+                    outputJson = invocation.outputJson,
+                )
+            }
+            .firstOrNull()
+    }
     val agentModeReplayTimeline = remember(context, messages) {
         buildAgentModeReplayTimeline(context, messages)
     }
@@ -1024,8 +1049,8 @@ fun ConversationAssistantGroupBubble(
                 .takeIf { it >= 0 }
                 ?.let { messages[it] }
                 ?.let { message ->
-                    MarkdownContent(
-                        markdown = message.text,
+                    AssistantFinalTextBlock(
+                        text = message.text,
                         workspaceDirectory = workspaceDirectory,
                         allowRootImageRead = allowRootImageRead,
                         onLinkClick = onOpenLink,
@@ -1098,6 +1123,7 @@ fun ConversationAssistantGroupBubble(
                         allowRootImageRead = allowRootImageRead,
                         onOpenAttachment = onOpenAttachment,
                         onOpenLink = onOpenLink,
+                        fallbackCard = fallbackCard,
                     )
                 }
             }
@@ -1112,6 +1138,7 @@ fun ConversationAssistantGroupBubble(
                     allowRootImageRead = allowRootImageRead,
                     onOpenAttachment = onOpenAttachment,
                     onOpenLink = onOpenLink,
+                    fallbackCard = fallbackCard,
                 )
             }
         }
@@ -1139,6 +1166,7 @@ fun ConversationAssistantGroupBubble(
                 allowRootImageRead = allowRootImageRead,
                 onOpenAttachment = onOpenAttachment,
                 onOpenLink = onOpenLink,
+                fallbackCard = fallbackCard,
             )
         }
         if (showActions) {
@@ -1163,6 +1191,7 @@ private fun AssistantGroupMessageContent(
     allowRootImageRead: Boolean,
     onOpenAttachment: (ChatAttachment) -> Unit,
     onOpenLink: (String) -> Unit,
+    fallbackCard: QingCard? = null,
 ) {
     val context = LocalContext.current
     val replayToolInvocations = message.replayToolInvocations()
@@ -1198,11 +1227,12 @@ private fun AssistantGroupMessageContent(
         onOpenAttachment = onOpenAttachment,
     )
     if (message.text.isNotBlank() && message.id !in interleavedAgentModeTextIds) {
-        MarkdownContent(
-            markdown = message.text,
+        AssistantFinalTextBlock(
+            text = message.text,
             workspaceDirectory = workspaceDirectory,
             allowRootImageRead = allowRootImageRead,
             onLinkClick = onOpenLink,
+            fallbackCard = fallbackCard,
         )
     }
     if (message.statusText.isNotBlank()) {
@@ -1734,23 +1764,29 @@ fun AgentWorkingStatusHeader(
     title: String,
     modifier: Modifier = Modifier,
 ) {
-    Column(
+    AetherGlassCapsule(
         modifier = modifier
             .fillMaxWidth()
             .padding(top = 6.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+        cornerRadius = 14.dp,
     ) {
-        Text(
-            text = title,
-            style = MaterialTheme.typography.bodyMedium,
-            color = AetherOnSurfaceVariant,
-        )
-        Box(
+        Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(1.dp)
-                .background(AetherOutlineSoft.copy(alpha = 0.62f))
-        )
+                .padding(horizontal = 14.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(9.dp),
+        ) {
+            AetherGlassStatusDot(status = AetherAgentStatus.Working)
+            Text(
+                text = title,
+                style = MaterialTheme.typography.bodyMedium,
+                color = AetherOnSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+        }
     }
 }
 
@@ -4657,3 +4693,28 @@ private data class AgentModeReplayTimeline(
     val interleavedTextMessageIds: Set<String>,
     val firstFrameMessageIndex: Int,
 )
+
+
+@Composable
+private fun AssistantFinalTextBlock(
+    text: String,
+    workspaceDirectory: String?,
+    allowRootImageRead: Boolean,
+    onLinkClick: (String) -> Unit,
+    fallbackCard: QingCard? = null,
+) {
+    val (card, cleanText) = remember(text) { QingCardParser.parse(text) }
+    if (card != null) {
+        QingResultCard(card = card)
+    } else if (fallbackCard != null) {
+        QingResultCard(card = fallbackCard)
+    }
+    if (cleanText.isNotBlank()) {
+        MarkdownContent(
+            markdown = cleanText,
+            workspaceDirectory = workspaceDirectory,
+            allowRootImageRead = allowRootImageRead,
+            onLinkClick = onLinkClick,
+        )
+    }
+}

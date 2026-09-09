@@ -483,6 +483,16 @@
     <string name="settings_keep_tasks_running_background_subtitle">Uses an Android foreground service so active chats can keep working after you leave Qing.</string>
     <string name="settings_notify_background_tasks_finish">Notify when background tasks finish</string>
     <string name="settings_notify_background_tasks_finish_subtitle">Shows a completion alert when a run ends while Qing is not on screen.</string>
+    <string name="settings_keep_alive_section">Background keep-alive guide</string>
+    <string name="settings_notification_access">Notification access</string>
+    <string name="settings_notification_access_subtitle">Allows Qing to send task completion and active push alerts.</string>
+    <string name="settings_ignore_battery_optimization">Ignore battery optimization</string>
+    <string name="settings_ignore_battery_optimization_subtitle">Stops the system from killing Qing in the background.</string>
+    <string name="settings_enable_auto_start">Allow auto start</string>
+    <string name="settings_auto_start_subtitle">Restores scheduled task and active push alarms after reboot.</string>
+    <string name="settings_exact_alarm_access">Allow exact alarms</string>
+    <string name="settings_exact_alarm_subtitle">Lets scheduled tasks and active pushes fire on time.</string>
+    <string name="settings_keep_alive_rom_hint">If the system still kills Qing, find its app settings under your ROM and allow auto start, then lock Qing in recent apps.</string>
     <string name="settings_reconnect">Reconnect</string>
     <string name="settings_reconnect_after_seconds">Reconnect after %1$ds</string>
     <string name="settings_reconnect_after_idle_seconds">Provider timeout seconds</string>
@@ -535,6 +545,23 @@
     <string name="settings_days_of_week_input">Days 1-7 or mon,tue</string>
     <string name="settings_time_hhmm">Time HH:mm</string>
     <string name="settings_interval_window_hint">Interval windows are optional. Leave start and end blank to run all day.</string>
+    <string name="settings_quiet_start_time">Quiet start HH:mm</string>
+    <string name="settings_quiet_end_time">Quiet end HH:mm</string>
+    <string name="settings_presence_push">Active pushes</string>
+    <string name="settings_presence_push_on">Active</string>
+    <string name="settings_presence_push_off">Off</string>
+    <string name="settings_presence_push_enabled">Enable active pushes</string>
+    <string name="settings_presence_push_description">Qing sends a short memory summary at your chosen pace, without spending model tokens.</string>
+    <string name="settings_presence_push_interval">Push every N minutes</string>
+    <string name="settings_presence_push_jitter">Randomize timing</string>
+    <string name="settings_presence_push_jitter_subtitle">Adds up to 15 minutes of random delay so pushes feel less robotic.</string>
+    <string name="settings_presence_push_hint">Quiet hours skip pushes. Active hours define when pushes are allowed.</string>
+    <string name="settings_presence_push_send_test">Send test push</string>
+    <string name="presence_notification_title">Qing wants to remind you</string>
+    <string name="presence_notification_body">Here is a quick memory summary.</string>
+    <string name="presence_notification_open">Open</string>
+    <string name="presence_notification_ignore">Ignore</string>
+    <string name="presence_notification_disable">Turn off pushes</string>
 
     <!-- Provider configuration -->
     <string name="provider_form_provider_name">Provider name</string>
@@ -1166,4 +1193,6 @@
     <string name="file_manager_view_grid">Grid view</string>
     <string name="file_manager_view_list">List view</string>
     <string name="common_confirm">Confirm</string>
+    <string name="data_overview_title">My Data</string>
+    <string name="data_overview_drawer_subtitle">Bills / Todos / Clips</string>
 </resources>

@@ -2,6 +2,7 @@ package com.zhousl.aether.data
 
 import com.zhousl.aether.runtime.RuntimeRouter
 import kotlin.coroutines.cancellation.CancellationException
+import kotlin.math.roundToLong
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -23,6 +24,7 @@ class AetherToolExecutor(
     private val runtimeRouter: RuntimeRouter,
     private val webToolsClient: WebToolsClient? = null,
     private val agentModeController: AgentModeController? = null,
+    private val memoryRepository: MemoryRepository? = null,
 ) {
     suspend fun execute(
         settings: AppSettings,
@@ -66,6 +68,9 @@ class AetherToolExecutor(
                 argumentsJson = argumentsJson,
                 onRuntimeChanged = onRuntimeChanged,
             )
+
+            "memory_write" -> executeMemoryWrite(argumentsJson)
+            "memory_query" -> executeMemoryQuery(argumentsJson)
 
             in SelfManagementToolNames -> selfManagementTool?.execute(
                 toolName = toolName,
@@ -112,7 +117,7 @@ class AetherToolExecutor(
             return JSONObject().put("ok", false).put("errmsg", "action must be 'status' or 'set'.").toString()
         }
         val requested = LocalRuntimeId.fromStorage(arguments.optString("runtime"))
-            ?: return JSONObject().put("ok", false).put("errmsg", "runtime must be 'alpine' or 'termux'.").toString()
+            ?: return JSONObject().put("ok", false).put("errmsg", "runtime must be 'alpine', 'termux' or 'embedded_termux'.").toString()
         val setup = runtimeRouter.runtimeById(requested).inspectSetup()
         val enabled = settings.enabledRuntimeIds.isEmpty() || requested in settings.enabledRuntimeIds
         if (!setup.isReady || !enabled) {
@@ -135,6 +140,187 @@ class AetherToolExecutor(
 
 
 
+    private suspend fun executeMemoryWrite(argumentsJson: String): String {
+        val repository = memoryRepository
+            ?: return unavailableToolOutput("memory_write")
+        val arguments = runCatching { JSONObject(argumentsJson) }.getOrNull()
+            ?: return JSONObject().put("ok", false).put("errmsg", "Arguments were not valid JSON.").toString()
+        val domain = arguments.optString("domain").trim().lowercase()
+        val action = arguments.optString("action").trim().lowercase().ifBlank { "add" }
+        val payload = arguments.optJSONObject("payload") ?: arguments
+        val priority = normalizeMemoryPriority(payload.optString("priority"))
+        return try {
+            val output = when (domain) {
+                "bill" -> when (action) {
+                    "add" -> {
+                        val amountCents = parseAmountCents(payload.optString("amount"))
+                            ?: return JSONObject().put("ok", false).put("errmsg", "bill.amount is required, e.g. 18 or 18.50.").toString()
+                        val id = repository.addBill(
+                            amountCents = amountCents,
+                            category = payload.optString("category"),
+                            note = payload.optString("note"),
+                            occurredAtMillis = parseDateMillis(payload.optString("occurred_at")) ?: System.currentTimeMillis(),
+                            priority = priority,
+                        )
+                        JSONObject()
+                            .put("ok", true)
+                            .put("action", "add")
+                            .put("domain", "bill")
+                            .put("id", id)
+                            .put("amount_cents", amountCents)
+                    }
+                    "delete" -> {
+                        repository.deleteBill(payload.optString("id"))
+                        JSONObject().put("ok", true).put("action", "delete").put("domain", "bill")
+                    }
+                    else -> JSONObject().put("ok", false).put("errmsg", "Unsupported action '$action' for bill.")
+                }
+                "todo" -> when (action) {
+                    "add" -> {
+                        val title = payload.optString("title").trim()
+                        if (title.isBlank()) return JSONObject().put("ok", false).put("errmsg", "todo.title is required.").toString()
+                        val id = repository.addTodo(title, parseDateMillis(payload.optString("due_at")), priority)
+                        JSONObject().put("ok", true).put("action", "add").put("domain", "todo").put("id", id).put("title", title)
+                    }
+                    "done" -> {
+                        repository.setTodoDone(payload.optString("id"), payload.optBoolean("done", true))
+                        JSONObject().put("ok", true).put("action", "done").put("domain", "todo")
+                    }
+                    "delete" -> {
+                        repository.deleteTodo(payload.optString("id"))
+                        JSONObject().put("ok", true).put("action", "delete").put("domain", "todo")
+                    }
+                    else -> JSONObject().put("ok", false).put("errmsg", "Unsupported action '$action' for todo.")
+                }
+                "clip" -> when (action) {
+                    "add" -> {
+                        val id = repository.addClip(
+                            title = payload.optString("title"),
+                            url = payload.optString("url"),
+                            content = payload.optString("content"),
+                            tags = payload.optString("tags"),
+                            source = payload.optString("source"),
+                            priority = priority,
+                        )
+                        JSONObject().put("ok", true).put("action", "add").put("domain", "clip").put("id", id)
+                    }
+                    "delete" -> {
+                        repository.deleteClip(payload.optString("id"))
+                        JSONObject().put("ok", true).put("action", "delete").put("domain", "clip")
+                    }
+                    else -> JSONObject().put("ok", false).put("errmsg", "Unsupported action '$action' for clip.")
+                }
+                "pref" -> when (action) {
+                    "set" -> {
+                        val key = payload.optString("key").trim()
+                        if (key.isBlank()) return JSONObject().put("ok", false).put("errmsg", "pref.key is required.").toString()
+                        repository.setPref(key, payload.optString("value"))
+                        JSONObject().put("ok", true).put("action", "set").put("domain", "pref").put("key", key)
+                    }
+                    "get" -> JSONObject()
+                        .put("ok", true)
+                        .put("action", "get")
+                        .put("domain", "pref")
+                        .put("key", payload.optString("key"))
+                        .put("value", repository.getPref(payload.optString("key")).orEmpty())
+                    else -> JSONObject().put("ok", false).put("errmsg", "Unsupported action '$action' for pref.")
+                }
+                else -> JSONObject().put("ok", false).put("errmsg", "Unknown memory domain '$domain'. Use bill, todo, clip, or pref.")
+            }
+            output.toString()
+        } catch (throwable: Exception) {
+            JSONObject().put("ok", false).put("errmsg", "memory_write failed: ${throwable.message}").toString()
+        }
+    }
+
+    private suspend fun executeMemoryQuery(argumentsJson: String): String {
+        val repository = memoryRepository
+            ?: return unavailableToolOutput("memory_query")
+        val arguments = runCatching { JSONObject(argumentsJson) }.getOrNull()
+            ?: return JSONObject().put("ok", false).put("errmsg", "Arguments were not valid JSON.").toString()
+        val domain = arguments.optString("domain").trim().lowercase()
+        val limit = arguments.optInt("limit", 20).coerceIn(1, 100)
+        return try {
+            val output = when (domain) {
+                "bill" -> {
+                    val from = parseDateMillis(arguments.optString("from")) ?: 0L
+                    val to = parseDateMillis(arguments.optString("to")) ?: Long.MAX_VALUE
+                    val bills = repository.billsInRange(from, to).take(limit)
+                    JSONObject().apply {
+                        put("ok", true)
+                        put("domain", "bill")
+                        put("count", bills.size)
+                        put("items", org.json.JSONArray().apply {
+                            bills.forEach { bill ->
+                                put(
+                                    JSONObject().apply {
+                                        put("id", bill.id)
+                                        put("amount_cents", bill.amountCents)
+                                        put("amount", formatYuan(bill.amountCents))
+                                        put("category", bill.category)
+                                        put("note", bill.note)
+                                        put("occurred_at_millis", bill.occurredAtMillis)
+                                        put("priority", bill.priority)
+                                    }
+                                )
+                            }
+                        })
+                    }
+                }
+                "todo" -> {
+                    val todos = repository.activeTodos().take(limit)
+                    JSONObject().apply {
+                        put("ok", true)
+                        put("domain", "todo")
+                        put("count", todos.size)
+                        put("items", org.json.JSONArray().apply {
+                            todos.forEach { todo ->
+                                put(
+                                    JSONObject().apply {
+                                        put("id", todo.id)
+                                        put("title", todo.title)
+                                        put("due_at_millis", todo.dueAtMillis)
+                                        put("priority", todo.priority)
+                                    }
+                                )
+                            }
+                        })
+                    }
+                }
+                "clip" -> {
+                    val clips = repository.searchClips(arguments.optString("query"), limit)
+                    JSONObject().apply {
+                        put("ok", true)
+                        put("domain", "clip")
+                        put("count", clips.size)
+                        put("items", org.json.JSONArray().apply {
+                            clips.forEach { clip ->
+                                put(
+                                    JSONObject().apply {
+                                        put("id", clip.id)
+                                        put("title", clip.title)
+                                        put("url", clip.url)
+                                        put("tags", clip.tags)
+                                        put("created_at_millis", clip.createdAtMillis)
+                                        put("priority", clip.priority)
+                                    }
+                                )
+                            }
+                        })
+                    }
+                }
+                "stats" -> {
+                    val from = parseDateMillis(arguments.optString("from")) ?: 0L
+                    val to = parseDateMillis(arguments.optString("to")) ?: Long.MAX_VALUE
+                    repository.billStatsJson(from, to).put("ok", true).put("domain", "stats")
+                }
+                else -> JSONObject().put("ok", false).put("errmsg", "Unknown memory domain '$domain'. Use bill, todo, clip, or stats.")
+            }
+            output.toString()
+        } catch (throwable: Exception) {
+            JSONObject().put("ok", false).put("errmsg", "memory_query failed: ${throwable.message}").toString()
+        }
+    }
     private suspend fun executeFetchWebUrl(argumentsJson: String): String {
         val client = webToolsClient ?: return toolUnavailableOutput("fetch_web_url")
         val arguments = runCatching { JSONObject(argumentsJson) }.getOrNull()
@@ -300,7 +486,7 @@ class AetherToolExecutor(
         endDate = arguments.stringValue("end_date", "endDate").ifBlank { null },
     )
     companion object {
-        val hostToolNames: Set<String> = setOf("agent_display", "fetch_web_url", "web_search", "tavily_search", *SelfManagementToolNames.toTypedArray())
+        val hostToolNames: Set<String> = setOf("agent_display", "fetch_web_url", "web_search", "tavily_search", "memory_write", "memory_query", *SelfManagementToolNames.toTypedArray())
 
         fun supports(toolName: String): Boolean = toolName in hostToolNames
 
@@ -349,7 +535,45 @@ class AetherToolExecutor(
                         put("exclude_domains", stringArrayProperty("Optional list of domains to exclude."))
                         put("country", stringProperty("Optional lowercase Tavily country value for localized general search, such as united states or china. Leave null when unsure."))
                         put("start_date", stringProperty("Optional start date in YYYY-MM-DD format. Do not combine this with time_range."))
-                        put("end_date", stringProperty("Optional end date in YYYY-MM-DD format. Do not combine this with time_range."))
+                    },
+                ),
+            )
+            put(
+                webToolDefinition(
+                    name = "memory_write",
+                    description = "写入青的本地记忆。domain=bill（记账）/todo（待办）/clip（剪藏）/pref（用户偏好）。记一笔账：domain=bill&amount=18.5&category=餐饮；加待办：domain=todo&title=买牛奶&due_at=2026-08-27；剪藏：domain=clip&title=...&url=...；记住偏好：domain=pref&key=city&value=上海。",
+                    required = listOf("domain"),
+                    properties = JSONObject().apply {
+                        put("domain", stringProperty("bill, todo, clip, or pref."))
+                        put("action", stringProperty("Optional: add (default), done, delete, set, get."))
+                        put("amount", stringProperty("For bill: amount in yuan, e.g. 18 or 18.5."))
+                        put("category", stringProperty("For bill: category such as 餐饮/交通/购物/其他."))
+                        put("note", stringProperty("Optional note for a bill."))
+                        put("occurred_at", stringProperty("Optional bill date YYYY-MM-DD; defaults to now."))
+                        put("title", stringProperty("For todo or clip: the title."))
+                        put("due_at", stringProperty("Optional todo due date YYYY-MM-DD."))
+                        put("url", stringProperty("For clip: source URL."))
+                        put("content", stringProperty("For clip: content or summary text."))
+                        put("tags", stringProperty("For clip: comma-separated tags."))
+                        put("source", stringProperty("For clip: where it came from, e.g. 网页/微信."))
+                        put("key", stringProperty("For pref: preference key."))
+                        put("value", stringProperty("For pref: preference value."))
+                        put("id", stringProperty("For done/delete actions: the memory item id."))
+                        put("done", booleanProperty("For todo done action: whether to mark done, default true."))
+                    },
+                ),
+            )
+            put(
+                webToolDefinition(
+                    name = "memory_query",
+                    description = "查询青的本地记忆。domain=bill 查账单（可按 from/to 日期过滤）、todo 查未完成待办、clip 按关键词搜剪藏、stats 查账单总额与分类汇总。",
+                    required = listOf("domain"),
+                    properties = JSONObject().apply {
+                        put("domain", stringProperty("bill, todo, clip, or stats."))
+                        put("query", stringProperty("Search text, mainly for clip."))
+                        put("from", stringProperty("Optional start date YYYY-MM-DD."))
+                        put("to", stringProperty("Optional end date YYYY-MM-DD."))
+                        put("limit", integerProperty("Maximum items to return, default 20."))
                     },
                 ),
             )
@@ -603,3 +827,28 @@ private fun JSONObject.stringArrayValue(
 
 private fun JSONObject.hasUsableValue(key: String): Boolean =
     has(key) && !isNull(key) && !cleanOptionalString(key).equals("null", ignoreCase = true)
+
+private fun normalizeMemoryPriority(raw: String): String = when (raw.trim().lowercase()) {
+    "always", "high" -> "always"
+    "low" -> "low"
+    else -> "normal"
+}
+private fun parseAmountCents(raw: String): Long? {
+    val text = raw.trim().replace("¥", "").replace("￥", "")
+    val parsed = text.toDoubleOrNull() ?: return null
+    return (parsed * 100).roundToLong()
+}
+
+private fun parseDateMillis(raw: String): Long? {
+    if (raw.isBlank()) return null
+    raw.toLongOrNull()?.let { return it }
+    return runCatching {
+        java.time.LocalDate.parse(raw)
+            .atStartOfDay(java.time.ZoneId.systemDefault())
+            .toInstant()
+            .toEpochMilli()
+    }.getOrNull()
+}
+
+private fun formatYuan(cents: Long): String =
+    String.format(java.util.Locale.CHINA, "%.2f", cents / 100.0)

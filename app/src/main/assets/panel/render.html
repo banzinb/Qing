@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<script src="echarts.min.js"></script>
+<style>
+  html, body { margin:0; padding:0; background:transparent; overflow:hidden; }
+  #chart { width:100%; height:100%; }
+</style>
+</head>
+<body>
+<div id="chart"></div>
+<script>
+  var chart = null;
+  var lastOption = null;
+  function ensureChart() {
+    var el = document.getElementById('chart');
+    if (!chart) {
+      chart = echarts.init(el, null, { renderer: 'canvas' });
+    }
+    return chart;
+  }
+  window.renderCard = function (cfg) {
+    if (!cfg || !cfg.option) return;
+    var chart = ensureChart();
+    var option = JSON.parse(JSON.stringify(cfg.option));
+    option.backgroundColor = 'transparent';
+    option.textStyle = option.textStyle || {};
+    option.textStyle.fontFamily = option.textStyle.fontFamily || 'sans-serif';
+    lastOption = option;
+    chart.setOption(option, true);
+    chart.resize();
+  };
+  window.clearCard = function () {
+    if (chart) chart.clear();
+    lastOption = null;
+  };
+  window.addEventListener('resize', function () { if (chart && lastOption) chart.resize(); });
+  window.addEventListener('message', function (e) {
+    if (e.data && e.data.type === 'qing-chart-resize' && chart && lastOption) chart.resize();
+  });
+  window.__qingChartReady = true;
+</script>
+</body>
+</html>

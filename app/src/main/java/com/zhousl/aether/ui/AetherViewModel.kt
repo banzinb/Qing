@@ -31,6 +31,7 @@ import com.zhousl.aether.data.InstalledSkill
 import com.zhousl.aether.data.InstalledPiExtension
 import com.zhousl.aether.data.PiExtensionInstallKind
 import com.zhousl.aether.data.PiExtensionCatalogEntry
+import com.zhousl.aether.data.PresencePushSettings
 import com.zhousl.aether.data.PiDiscoveredSkillSource
 import com.zhousl.aether.data.ProviderModelCatalogClient
 import com.zhousl.aether.data.thinkingCatalogKey
@@ -189,6 +190,7 @@ class AetherViewModel(
     private val piExtensionManager = runtime.piExtensionManager
     private val aetherAppExtensionManager = runtime.aetherAppExtensionManager
     private val scheduledTaskManager = runtime.scheduledTaskManager
+    private val presencePushManager = runtime.presencePushManager
     private val mcpClientManager = McpClientManager(
         runtimeRouter = runtime.runtimeRouter,
         settings = AppSettings(),
@@ -388,6 +390,11 @@ class AetherViewModel(
         viewModelScope.launch {
             scheduledTaskManager.scheduledTasks.collect { tasks ->
                 _uiState.update { current -> current.copy(scheduledTasks = tasks) }
+            }
+        }
+        viewModelScope.launch {
+            presencePushManager.settings.collect { settings ->
+                _uiState.update { current -> current.copy(presenceSettings = settings) }
             }
         }
         viewModelScope.launch {
@@ -1745,6 +1752,14 @@ class AetherViewModel(
     }
 
     fun closePcCodex() {
+        _uiState.update { it.copy(currentScreen = AppScreen.Chat) }
+    }
+
+    fun openDataOverview() {
+        _uiState.update { it.copy(currentScreen = AppScreen.DataOverview) }
+    }
+
+    fun closeDataOverview() {
         _uiState.update { it.copy(currentScreen = AppScreen.Chat) }
     }
 
@@ -3505,6 +3520,16 @@ class AetherViewModel(
         viewModelScope.launch {
             scheduledTaskManager.removeTask(taskId)
         }
+    }
+
+    fun savePresencePushSettings(settings: PresencePushSettings) {
+        viewModelScope.launch {
+            presencePushManager.save(settings)
+        }
+    }
+
+    fun sendTestPresencePush() {
+        runtime.sendTestPresencePush()
     }
 
     private fun maybeInitializeWorkspaceMode(settings: AppSettings) {

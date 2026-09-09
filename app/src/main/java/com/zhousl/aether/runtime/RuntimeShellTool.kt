@@ -14,7 +14,7 @@ class RuntimeShellTool(
         val arguments = parseArguments(argumentsJson)
             ?: return invalidArguments("Arguments were not valid JSON.")
         val environment = arguments.runtimeEnvironment()
-        val runtime = router.runtimeFor(settings, environment)
+        val runtime = router.resolveUsableRuntime(settings, environment)
             ?: return router.setupRequiredError(environment)
         arguments.remove("environment")
         arguments.remove("runtime")

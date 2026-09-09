@@ -59,6 +59,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.BarChart
 import androidx.compose.material.icons.rounded.ArrowDropDown
 import androidx.compose.material.icons.rounded.ArrowUpward
 import androidx.compose.material.icons.rounded.AttachFile
@@ -190,6 +191,7 @@ fun ConversationDrawer(
     onDeleteSession: (String) -> Unit,
     onSettingsSelected: () -> Unit,
     onPcCodexSelected: () -> Unit,
+    onDataOverviewSelected: () -> Unit,
 ) {
     AetherConversationDrawer(
         sessions = sessions.map { session ->
@@ -223,6 +225,10 @@ fun ConversationDrawer(
         extraContent = { dismissSearch ->
             AetherExtensionSlot(AetherExtensionSlotDrawer)
             AetherExtensionSlot(AetherExtensionSlotDrawerListEnd)
+            DataOverviewDrawerLauncher(
+                onClick = onDataOverviewSelected,
+                modifier = Modifier.padding(top = 10.dp),
+            )
             PcCodexDrawerLauncher(
                 onClick = onPcCodexSelected,
                 modifier = Modifier.padding(top = 10.dp),
@@ -720,6 +726,54 @@ private fun DrawerFloatingChatButton(
             style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Medium),
             color = Color.White,
         )
+    }
+}
+
+@Composable
+private fun DataOverviewDrawerLauncher(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(18.dp))
+            .background(AetherSurfaceHigh)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Box(
+            modifier = Modifier
+                .size(34.dp)
+                .clip(CircleShape)
+                .background(AetherSurfaceHigher),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.BarChart,
+                contentDescription = null,
+                tint = AetherOnSurface,
+                modifier = Modifier.size(18.dp),
+            )
+        }
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = stringResource(R.string.data_overview_title),
+                style = MaterialTheme.typography.bodyLarge,
+                color = AetherOnSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = stringResource(R.string.data_overview_drawer_subtitle),
+                style = MaterialTheme.typography.bodySmall,
+                color = AetherOnSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
     }
 }
 

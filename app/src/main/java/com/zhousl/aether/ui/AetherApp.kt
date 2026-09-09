@@ -175,6 +175,7 @@ private fun AppScreen.depth(): Int = when (this) {
     AppScreen.Chat -> 1
     AppScreen.Settings -> 2
     AppScreen.PcCodex -> 2
+    AppScreen.DataOverview -> 2
 }
 
 private fun AetherUiState.toAetherExtensionContext(): JSONObject {
@@ -822,6 +823,12 @@ private fun AetherAppContent(
                         viewModel.openPcCodex()
                     }
                 },
+                onDataOverviewSelected = {
+                    scope.launch {
+                        drawerState.close()
+                        viewModel.openDataOverview()
+                    }
+                },
             )
         },
     ) {
@@ -1096,6 +1103,7 @@ private fun AetherAppContent(
                     providerConfigs = uiState.providerConfigs,
                     usageStatisticsSnapshots = uiState.usageStatisticsSnapshots,
                     scheduledTasks = uiState.scheduledTasks,
+                    presenceSettings = uiState.presenceSettings,
                     termuxSetupState = effectiveTermuxSetupState,
                     alpineSetupState = uiState.alpineSetupState,
                     enabledRuntimeIds = uiState.settings.enabledRuntimeIds,
@@ -1176,6 +1184,8 @@ private fun AetherAppContent(
                     onSaveScheduledTask = viewModel::saveScheduledTask,
                     onToggleScheduledTaskEnabled = viewModel::setScheduledTaskEnabled,
                     onRemoveScheduledTask = viewModel::removeScheduledTask,
+                    onSavePresencePushSettings = viewModel::savePresencePushSettings,
+                    onSendTestPresencePush = viewModel::sendTestPresencePush,
                     onRequestTermuxPermission = { requestTermuxPermission("settings_termux_permission") },
                     onImportAppData = {
                         appDataImportLauncher.launch(arrayOf("application/json", "text/*", "*/*"))
@@ -1242,6 +1252,10 @@ private fun AetherAppContent(
 
                     AppScreen.PcCodex -> PcCodexScreen(
                         onBack = viewModel::closePcCodex,
+                    )
+
+                    AppScreen.DataOverview -> DataOverviewScreen(
+                        onBack = viewModel::closeDataOverview,
                     )
         }
             }

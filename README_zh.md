@@ -1,93 +1,42 @@
-<p align="center">
-  <img src="app/src/main/res/drawable-nodpi/aether_mark.png" width="128" height="128" alt="Qing Logo">
-</p>
+# 青 Qing
 
-<h1 align="center">青 | Qing</h1>
+青是一个装完就有用的 Android 中文技能 Agent：单 APK、自带完整 Linux 运行时、开箱即用，把日常任务做成看得见结果的工作流。
 
-<p align="center">
-  <strong>Soar with local AI.</strong><br>
-  高颜值、高扩展性、本地化的跨平台通用 AI Agent（Android / iOS / macOS）
-</p>
+## 特点
 
-<p align="center">
-  <a href="README.md">English</a> •
-  <a href="#-视觉与体验">视觉与体验</a> •
-  <a href="#-极高扩展性">扩展生态</a> •
-  <a href="#-核心特性">核心特性</a> •
-  <a href="#-快速开始">快速开始</a> •
-  <a href="#-项目来源">项目来源</a>
-</p>
+- 单 APK 自带内嵌 Termux（proot + bash/apt/python），无需 root，无需额外安装
+- 预置中文技能：记账、待办、剪藏、网页提炼、PPT 生成，技能结果以图表/统计/清单卡片直接呈现
+- 本地记忆库：账单/待办/剪藏/偏好自动沉淀，支持优先级、时间衰减与自动上下文注入
+- 主动推送（Presence）：按活跃时段与勿扰规则，定时把记忆摘要推给你，不消耗模型 token
+- 离线 ECharts 结果卡片：数据总览与技能结果可视化，不需要网络
+- 兼容 Pi 扩展生态：支持标准 Pi 扩展、MCP 适配器与子 Agent 扩展
+- 可选 Shizuku / Termux 主机能力，为后续手机操控预留底座
+- 基于 Aether（GPL-3.0）构建，保留上游扩展体系与交互打磨
 
----
+## 快速开始
 
-## 🎨 视觉与体验
+1. 安装 APK
+2. 按引导配置模型服务商（DeepSeek、OpenAI 兼容端点等）
+3. 直接说「记一笔账」「加个待办」「剪藏这个网页」，青会调用技能并产出结果卡片
 
-> 鹏之徙于南冥也，水击三千里，抟扶摇而上者九万里，去以六月息者也。
+## 构建
 
-**Aether 扶摇** 致力于为移动端及桌面设备（Android、iOS、macOS）提供现代化的本地 AI Agent 体验。基于 Pi 框架内核，在保持极简轻量 UI 的同时，提供了极其强大的扩展性与无缝的工具调用体验。
+需要 JDK 17+、Android SDK、NDK r28+，以及 Node.js（用于构建 pi-bridge）。
 
-## 🧩 极高扩展性
+```bash
+./gradlew :app:assembleDebug   # 调试包
+./gradlew :app:assembleRelease # 正式包（需要配置签名）
+```
 
-Aether 原生兼容并支持加载标准 [Pi 扩展](https://github.com/earendil-works/pi)。为了让原本面向 TUI 的扩展在移动触摸屏上也能拥有优秀的交互体验，Aether 提供了专属的 **Extension API**，支持注入原生设置卡片、输入框上方实时卡片（Widget）、浮层对话查看器（Overlay）、提示词拦截钩子（Hooks）以及语义化工具标题（Tool Titles）。
+本地运行时资产位于 `app/src/main/assets/runtimes/`，pi-bridge 在 `pi-bridge/`，PC 联动在 `pc-bridge/`。
 
-| 扩展插件 | 功能简介 | 仓库地址 |
-| :--- | :--- | :--- |
-| **Pi Web Access*** | 支持 20+ 搜索引擎（OpenAI、Brave、Exa、Tavily、Perplexity、Gemini、SearXNG 等）的联网搜索、网页正文提取、GitHub 仓库克隆、PDF 提取及 YouTube / 本地视频理解，内置原生设置分类页与对话卡片。 | [AetherExtensions/pi-web-access](https://github.com/AetherExtensions/pi-web-access) |
-| **Pi MCP Adapter*** | 模型上下文协议（MCP）适配网关，支持 Stdio、Streamable HTTP、SSE 与 Unix Socket 传输，具备懒加载与节约上下文的工具发现机制、交互式 OAuth 授权以及可视化服务器管理界面。 | [AetherExtensions/pi-mcp-adapter](https://github.com/AetherExtensions/pi-mcp-adapter) |
-| **Pi Subagents*** | 类 Claude Code 的自主子 Agent 体系，支持并发后台执行、运行中实时 Steering 引导、输入框上方实时进度 Widget / FleetView 卡片、浮层对话查看器及 `@handle` 提示词定向派发。 | [AetherExtensions/pi-subagents](https://github.com/AetherExtensions/pi-subagents) |
+## 项目来源
 
-*\* 表示由 Aether 官方团队适配的扩展。欢迎 [提交 PR](https://github.com/Zhou-Shilin/Aether/pulls) 将您的扩展加入列表。*
+青由 Aether 派生而来，核心 Agent 执行、UI 与扩展体系继承上游：
 
-所有扩展均可通过 zip 压缩包直接在 **设置 → 扩展 → 导入扩展** 中一键安装与热重载。
+- 上游：[Zhou-Shilin/Aether](https://github.com/Zhou-Shilin/Aether)
+- 本仓库：[banzinb/Qing](https://github.com/banzinb/Qing)
 
-扩展开发文档详见：<https://aether.baimoqilin.com/docs/extensions/overview.md>
+## License
 
-
-## 📱 视觉与体验
-
-Aether 的 UI 和交互大量参考了 ChatGPT、Codex CLI/App、Gemini、Poco Agent 等成熟的优秀应用。每一个动画、每一个交互细节都经过精心打磨，打破“开源项目简陋廉价”的刻板印象。
-
-<p align="center">
-  <table>
-    <tr>
-      <td><img src="public/input_bar.jpg" width="280"></td>
-      <td><img src="public/tool_execution.jpg" width="280"></td>
-      <td><img src="public/msg_options.jpg" width="280"></td>
-    </tr>
-  </table>
-</p>
-
-
-## ✨ 核心特性
-
-- **超高颜值，丝滑交互**: 凝聚 ChatGPT 等优秀应用的设计精华，打造极简、现代、优雅的界面。
-- **Pi Harness 内核**: 采用 Pi 框架，拥有最广泛的 Model Provider 兼容性，以及最轻量、最高效的 Agent 执行引擎。
-- **极致的可扩展性**: 原生继承 Pi 的强大扩展体系，并提供独有的 Aether Script Extensions 与 Native Mods，支持深度定制移动端 UI、原生设置页、输入框组件与运行逻辑。
-- **内置 Alpine 虚拟机**: 自动安装 Alpine Linux 运行环境，开箱即用，支持各种 Linux 工具与命令行操作。
-- **扩展主机控制**: 支持可选的 Shizuku 与 Termux 扩展，用于直接操纵和控制手机系统。（仅限 Android）
-
-
-## 🚀 快速开始
-
-安装 APK 后按引导配置模型服务商即可。原版安装文档见 <https://aether.baimoqilin.com/docs/quickstart>。
-
-
-## 📌 项目来源
-
-本项目由一名 15 岁学生在课业之余断断续续开发而成 (⁠ʘ⁠ᴗ⁠ʘ⁠✿⁠)。目前项目仍在积极的迭代和打磨中。如果你喜欢这个项目，欢迎点一个 ⭐ Star，或者提交 PR 与 Issue 一起让 Aether 变得更好！
-
-![Donation](public/donation.jpg)
-
----
-
-## 特别鸣谢
-
-- OpenAI Codex
-- Google Gemini
-- [Linux DO 社区](https://linux.do/)
-
----
-
-## 📄 开源协议
-
-本项目采用 **GPL License 3.0**。
+GPL-3.0。请保留上游 License 与 NOTICE。

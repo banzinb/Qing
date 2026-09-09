@@ -1,6 +1,7 @@
 package com.zhousl.aether.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.offset
@@ -33,6 +34,7 @@ fun HeaderCircleButton(
     size: Dp = 44.dp,
     iconSize: Dp = 22.dp,
     containerColor: Color = Color.White,
+    borderColor: Color? = null,
     iconTint: Color = AetherOnSurface,
     showHalo: Boolean = true,
 ) {
@@ -50,6 +52,13 @@ fun HeaderCircleButton(
             modifier = Modifier.matchParentSize()
                 .clip(CircleShape)
                 .background(if (enabled) containerColor else containerColor.copy(alpha = 0.55f))
+                .then(
+                    if (borderColor != null) {
+                        Modifier.border(1.dp, borderColor, CircleShape)
+                    } else {
+                        Modifier
+                    }
+                )
                 .clickable(enabled = enabled, onClick = onClick),
             contentAlignment = Alignment.Center,
         ) {

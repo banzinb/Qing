@@ -1,5 +1,10 @@
 package com.zhousl.aether.ui
 
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import android.os.Build
+import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
@@ -52,6 +57,7 @@ import androidx.compose.material.icons.automirrored.rounded.ArrowForwardIos
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.ArrowDropDown
 import androidx.compose.material.icons.rounded.AutoAwesome
+import androidx.compose.material.icons.rounded.BatteryStd
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Cloud
 import androidx.compose.material.icons.rounded.Code
@@ -63,7 +69,9 @@ import androidx.compose.material.icons.rounded.FileUpload
 import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.Link
+import androidx.compose.material.icons.rounded.NotificationsActive
 import androidx.compose.material.icons.rounded.Person
+import androidx.compose.material.icons.rounded.PowerSettingsNew
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Schedule
 import androidx.compose.material.icons.rounded.Search
@@ -166,6 +174,7 @@ import com.zhousl.aether.data.PiExtensionInstallKind
 import com.zhousl.aether.data.PiPackageCompatibilityIssue
 import com.zhousl.aether.data.PiPackageDetails
 import com.zhousl.aether.data.PackageProfileState
+import com.zhousl.aether.data.PresencePushSettings
 import com.zhousl.aether.data.ProviderModelOption
 import com.zhousl.aether.data.RootSetupIssue
 import com.zhousl.aether.data.RootSetupState
@@ -247,6 +256,7 @@ private enum class SettingsPage {
     AddMcpServer,
     EditMcpServer,
     ScheduledTasks,
+    Presence,
     AddScheduledTask,
     EditScheduledTask,
     Termux,
@@ -279,6 +289,7 @@ private fun SettingsPage.depth(): Int = when (this) {
     SettingsPage.Extensions,
     SettingsPage.McpServers,
     SettingsPage.ScheduledTasks,
+    SettingsPage.Presence,
     SettingsPage.Termux,
     SettingsPage.Alpine,
     SettingsPage.EmbeddedTermux,
@@ -321,13 +332,70 @@ private fun RootSetupProgressReturnPage.toSettingsPage(): SettingsPage =
         RootSetupProgressReturnPage.AgentMode -> SettingsPage.AgentMode
     }
 
+private fun openQingNotificationSettings(context: Context) {
+    val intent = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).apply {
+        putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
+    launchQingSettingsIntentSafely(context, intent) {
+        openQingAppDetails(context)
+    }
+}
+
+private fun openQingIgnoreBatteryOptimizations(context: Context) {
+    val intent = Intent(
+        Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+        Uri.parse("package:${context.packageName}"),
+    ).apply {
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
+    launchQingSettingsIntentSafely(context, intent) {
+        openQingAppDetails(context)
+    }
+}
+
+private fun openQingExactAlarmSettings(context: Context) {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
+    val intent = Intent(
+        Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM,
+        Uri.parse("package:${context.packageName}"),
+    ).apply {
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
+    launchQingSettingsIntentSafely(context, intent) {
+        openQingAppDetails(context)
+    }
+}
+
+private fun openQingAppDetails(context: Context) {
+    val intent = Intent(
+        Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+        Uri.parse("package:${context.packageName}"),
+    ).apply {
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
+    launchQingSettingsIntentSafely(context, intent) {}
+}
+
+private fun launchQingSettingsIntentSafely(
+    context: Context,
+    intent: Intent,
+    fallback: () -> Unit,
+) {
+    try {
+        context.startActivity(intent)
+    } catch (_: Throwable) {
+        runCatching { fallback() }
+    }
+}
+
 private fun formatTaskMinute(minuteOfDay: Int): String {
     val normalized = minuteOfDay.coerceIn(0, 1_439)
     return "%02d:%02d".format(Locale.US, normalized / 60, normalized % 60)
 }
 
 private fun parseTaskMinute(value: String): Int? {
-    val parts = value.trim().split(':')
+    val parts = value.trim().replace('\uFF1A', ':').split(':')
     if (parts.size != 2) return null
     val hour = parts[0].toIntOrNull() ?: return null
     val minute = parts[1].toIntOrNull() ?: return null
@@ -481,6 +549,7 @@ fun SettingsScreen(
     providerConfigs: List<LlmProviderConfig>,
     usageStatisticsSnapshots: List<ChatUsageStatisticsSnapshot>,
     scheduledTasks: List<ScheduledTask>,
+    presenceSettings: PresencePushSettings,
     termuxSetupState: TermuxSetupState,
     alpineSetupState: LocalRuntimeSetupState,
     enabledRuntimeIds: Set<LocalRuntimeId>,
@@ -563,6 +632,8 @@ fun SettingsScreen(
     onSaveScheduledTask: (String?, String, String, ScheduledTaskSchedule, Boolean) -> Unit,
     onToggleScheduledTaskEnabled: (String, Boolean) -> Unit,
     onRemoveScheduledTask: (String) -> Unit,
+    onSavePresencePushSettings: (PresencePushSettings) -> Unit,
+    onSendTestPresencePush: () -> Unit,
     onRequestTermuxPermission: () -> Unit,
     onImportAppData: () -> Unit,
     onExportAppData: () -> Unit,
@@ -909,6 +980,7 @@ fun SettingsScreen(
                 },
                 mcpServerCount = mcpServers.size,
                 scheduledTaskCount = scheduledTasks.size,
+                presencePushEnabled = presenceSettings.enabled,
                 statisticsSummary = buildSettingsStatisticsSummary(usageStatisticsSnapshots),
                 onReplayOnboarding = ::persistAndReplayOnboarding,
                 onNavigate = { page ->
@@ -1123,6 +1195,10 @@ fun SettingsScreen(
                 onKeepTasksRunningInBackgroundChanged = { keepTasksRunningInBackgroundValue = it },
                 notifyOnTaskCompletion = notifyOnTaskCompletionValue,
                 onNotifyOnTaskCompletionChanged = { notifyOnTaskCompletionValue = it },
+                onOpenNotificationSettings = { openQingNotificationSettings(context) },
+                onIgnoreBatteryOptimizations = { openQingIgnoreBatteryOptimizations(context) },
+                onOpenAutoStartSettings = { openQingAppDetails(context) },
+                onOpenExactAlarmSettings = { openQingExactAlarmSettings(context) },
                 onBack = { currentPage = SettingsPage.Hub.name },
             )
             SettingsPage.ExtensionSettings -> {
@@ -1304,6 +1380,13 @@ fun SettingsScreen(
                     currentPage = SettingsPage.EditScheduledTask.name
                 },
                 onAddNew = { currentPage = SettingsPage.AddScheduledTask.name },
+                onBack = { currentPage = SettingsPage.Hub.name },
+            )
+
+            SettingsPage.Presence -> PresencePushSettingsPage(
+                settings = presenceSettings,
+                onSave = onSavePresencePushSettings,
+                onSendTestPush = onSendTestPresencePush,
                 onBack = { currentPage = SettingsPage.Hub.name },
             )
 
@@ -1518,6 +1601,7 @@ private fun SettingsHub(
     onOpenExtensionSettings: (String) -> Unit,
     mcpServerCount: Int,
     scheduledTaskCount: Int,
+    presencePushEnabled: Boolean,
     statisticsSummary: String,
     onReplayOnboarding: () -> Unit,
     onNavigate: (SettingsPage) -> Unit,
@@ -1604,6 +1688,21 @@ private fun SettingsHub(
                     title = stringResource(R.string.settings_reliability),
                     subtitle = reliabilitySummary,
                     onClick = { onNavigate(SettingsPage.Reliability) },
+                )
+            }
+
+            Spacer(Modifier.height(16.dp))
+
+            SettingsCardGroup {
+                SettingsNavRow(
+                    icon = Icons.Rounded.NotificationsActive,
+                    title = stringResource(R.string.settings_presence_push),
+                    subtitle = if (presencePushEnabled) {
+                        stringResource(R.string.settings_presence_push_on)
+                    } else {
+                        stringResource(R.string.settings_presence_push_off)
+                    },
+                    onClick = { onNavigate(SettingsPage.Presence) },
                 )
             }
 
@@ -3480,6 +3579,10 @@ private fun ReliabilityPage(
     onKeepTasksRunningInBackgroundChanged: (Boolean) -> Unit,
     notifyOnTaskCompletion: Boolean,
     onNotifyOnTaskCompletionChanged: (Boolean) -> Unit,
+    onOpenNotificationSettings: () -> Unit,
+    onIgnoreBatteryOptimizations: () -> Unit,
+    onOpenAutoStartSettings: () -> Unit,
+    onOpenExactAlarmSettings: () -> Unit,
     onBack: () -> Unit,
 ) {
     SubPageScaffold(
@@ -3516,6 +3619,55 @@ private fun ReliabilityPage(
                 )
             }
         }
+
+        Spacer(Modifier.height(16.dp))
+        Text(
+            text = stringResource(R.string.settings_keep_alive_section),
+            style = MaterialTheme.typography.labelLarge,
+            color = AetherOnSurface,
+            modifier = Modifier.padding(horizontal = 4.dp),
+        )
+        Spacer(Modifier.height(8.dp))
+
+        SettingsCardGroup {
+            SettingsNavRow(
+                icon = Icons.Rounded.NotificationsActive,
+                title = stringResource(R.string.settings_notification_access),
+                subtitle = stringResource(R.string.settings_notification_access_subtitle),
+                onClick = onOpenNotificationSettings,
+            )
+            CardDivider()
+            SettingsNavRow(
+                icon = Icons.Rounded.BatteryStd,
+                title = stringResource(R.string.settings_ignore_battery_optimization),
+                subtitle = stringResource(R.string.settings_ignore_battery_optimization_subtitle),
+                onClick = onIgnoreBatteryOptimizations,
+            )
+            CardDivider()
+            SettingsNavRow(
+                icon = Icons.Rounded.PowerSettingsNew,
+                title = stringResource(R.string.settings_enable_auto_start),
+                subtitle = stringResource(R.string.settings_auto_start_subtitle),
+                onClick = onOpenAutoStartSettings,
+            )
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                CardDivider()
+                SettingsNavRow(
+                    icon = Icons.Rounded.Schedule,
+                    title = stringResource(R.string.settings_exact_alarm_access),
+                    subtitle = stringResource(R.string.settings_exact_alarm_subtitle),
+                    onClick = onOpenExactAlarmSettings,
+                )
+            }
+        }
+
+        Spacer(Modifier.height(8.dp))
+        Text(
+            text = stringResource(R.string.settings_keep_alive_rom_hint),
+            style = MaterialTheme.typography.bodySmall,
+            color = AetherOnSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 4.dp),
+        )
 
         Spacer(Modifier.height(16.dp))
         Text(
@@ -6370,6 +6522,120 @@ private fun AddMcpServerPage(
     }
 }
 
+@Composable
+private fun PresencePushSettingsPage(
+    settings: PresencePushSettings,
+    onSave: (PresencePushSettings) -> Unit,
+    onSendTestPush: () -> Unit,
+    onBack: () -> Unit,
+) {
+    var enabledValue by rememberSaveable {
+        mutableStateOf(settings.enabled)
+    }
+    var intervalValue by rememberSaveable(stateSaver = TextFieldValue.Saver) {
+        mutableStateOf(TextFieldValue(settings.intervalMinutes.toString()))
+    }
+    var activeStartValue by rememberSaveable(stateSaver = TextFieldValue.Saver) {
+        mutableStateOf(TextFieldValue(formatTaskMinute(settings.activeStartMinuteOfDay)))
+    }
+    var activeEndValue by rememberSaveable(stateSaver = TextFieldValue.Saver) {
+        mutableStateOf(TextFieldValue(formatTaskMinute(settings.activeEndMinuteOfDay)))
+    }
+    var quietStartValue by rememberSaveable(stateSaver = TextFieldValue.Saver) {
+        mutableStateOf(TextFieldValue(formatTaskMinute(settings.quietStartMinuteOfDay)))
+    }
+    var quietEndValue by rememberSaveable(stateSaver = TextFieldValue.Saver) {
+        mutableStateOf(TextFieldValue(formatTaskMinute(settings.quietEndMinuteOfDay)))
+    }
+    var jitterValue by rememberSaveable {
+        mutableStateOf(settings.jitterEnabled)
+    }
+
+    fun buildSettings(): PresencePushSettings = settings.copy(
+        enabled = enabledValue,
+        intervalMinutes = (intervalValue.text.trim().toIntOrNull() ?: 120).coerceIn(15, 720),
+        activeStartMinuteOfDay = parseTaskMinute(activeStartValue.text) ?: settings.activeStartMinuteOfDay,
+        activeEndMinuteOfDay = parseTaskMinute(activeEndValue.text) ?: settings.activeEndMinuteOfDay,
+        quietStartMinuteOfDay = parseTaskMinute(quietStartValue.text) ?: settings.quietStartMinuteOfDay,
+        quietEndMinuteOfDay = parseTaskMinute(quietEndValue.text) ?: settings.quietEndMinuteOfDay,
+        jitterEnabled = jitterValue,
+    )
+
+    SubPageScaffold(
+        title = stringResource(R.string.settings_presence_push),
+        onBack = onBack,
+        trailingIcon = Icons.Rounded.Check,
+        onTrailingAction = { onSave(buildSettings()) },
+    ) {
+        SettingsCardGroup {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp),
+            ) {
+                SettingsToggleRow(
+                    title = stringResource(R.string.settings_presence_push_enabled),
+                    subtitle = stringResource(R.string.settings_presence_push_description),
+                    checked = enabledValue,
+                    onCheckedChange = { enabledValue = it },
+                )
+            }
+        }
+        Spacer(Modifier.height(16.dp))
+        SettingsCardGroup {
+            ChatGptTextField(
+                label = stringResource(R.string.settings_presence_push_interval),
+                value = intervalValue,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                onValueChange = { intervalValue = it.copy(text = it.text.filter(Char::isDigit)) },
+            )
+            CardDivider()
+            ChatGptTextField(
+                label = stringResource(R.string.settings_active_start_time),
+                value = activeStartValue,
+                onValueChange = { activeStartValue = it },
+            )
+            CardDivider()
+            ChatGptTextField(
+                label = stringResource(R.string.settings_active_end_time),
+                value = activeEndValue,
+                onValueChange = { activeEndValue = it },
+            )
+            CardDivider()
+            ChatGptTextField(
+                label = stringResource(R.string.settings_quiet_start_time),
+                value = quietStartValue,
+                onValueChange = { quietStartValue = it },
+            )
+            CardDivider()
+            ChatGptTextField(
+                label = stringResource(R.string.settings_quiet_end_time),
+                value = quietEndValue,
+                onValueChange = { quietEndValue = it },
+            )
+            CardDivider()
+            SettingsToggleRow(
+                title = stringResource(R.string.settings_presence_push_jitter),
+                subtitle = stringResource(R.string.settings_presence_push_jitter_subtitle),
+                checked = jitterValue,
+                onCheckedChange = { jitterValue = it },
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+        Text(
+            text = stringResource(R.string.settings_presence_push_hint),
+            style = MaterialTheme.typography.bodySmall,
+            color = AetherOnSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 4.dp),
+        )
+        Spacer(Modifier.height(12.dp))
+        SettingsActionButton(
+            label = stringResource(R.string.settings_presence_push_send_test),
+            onClick = onSendTestPush,
+            modifier = Modifier.fillMaxWidth(),
+        )
+    }
+}
+
 // -----------------------------------------------------------------------------
 // Termux sub-page
 // -----------------------------------------------------------------------------
@@ -8208,64 +8474,71 @@ private fun SettingsTopBar(
     tertiaryTrailingContentDescription: String = title,
     onTertiaryTrailingAction: (() -> Unit)? = null,
 ) {
-    Box(
+    AetherGlassCapsule(
         modifier = Modifier
             .fillMaxWidth()
             .statusBarsPadding()
-            .padding(horizontal = 16.dp, vertical = 12.dp),
+            .padding(horizontal = 12.dp, vertical = 6.dp),
+        cornerRadius = 20.dp,
     ) {
-        SettingsCircleButton(
-            icon = Icons.AutoMirrored.Rounded.ArrowBack,
-            contentDescription = stringResource(R.string.common_back),
-            onClick = onBack,
-            modifier = Modifier.align(Alignment.CenterStart),
-        )
-        Text(
-            text = title,
-            style = MaterialTheme.typography.titleMedium,
-            color = AetherOnSurface,
+        Box(
             modifier = Modifier
-                .align(Alignment.Center)
-                .offset(x = if (tertiaryTrailingIcon != null) (-48).dp else 0.dp),
-        )
-        Row(
-            modifier = Modifier.align(Alignment.CenterEnd),
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
-            verticalAlignment = Alignment.CenterVertically,
+                .fillMaxWidth()
+                .height(44.dp),
         ) {
-            if (tertiaryTrailingIcon != null && onTertiaryTrailingAction != null) {
-                SettingsCircleButton(
-                    icon = tertiaryTrailingIcon,
-                    contentDescription = tertiaryTrailingContentDescription,
-                    enabled = tertiaryTrailingEnabled,
-                    onClick = onTertiaryTrailingAction,
-                )
-            }
-            if (secondaryTrailingIcon != null && onSecondaryTrailingAction != null) {
-                SettingsCircleButton(
-                    icon = secondaryTrailingIcon,
-                    contentDescription = secondaryTrailingContentDescription,
-                    enabled = secondaryTrailingEnabled,
-                    onClick = onSecondaryTrailingAction,
-                )
-            }
-            if (trailingLoading) {
-                Box(modifier = Modifier.size(44.dp), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(20.dp),
-                        strokeWidth = 2.dp,
-                        color = AetherPrimary,
+            SettingsCircleButton(
+                icon = Icons.AutoMirrored.Rounded.ArrowBack,
+                contentDescription = stringResource(R.string.common_back),
+                onClick = onBack,
+                modifier = Modifier.align(Alignment.CenterStart),
+            )
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleMedium.copy(letterSpacing = 0.6.sp),
+                color = AetherOnSurface,
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .offset(x = if (tertiaryTrailingIcon != null) (-48).dp else 0.dp),
+            )
+            Row(
+                modifier = Modifier.align(Alignment.CenterEnd),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                if (tertiaryTrailingIcon != null && onTertiaryTrailingAction != null) {
+                    SettingsCircleButton(
+                        icon = tertiaryTrailingIcon,
+                        contentDescription = tertiaryTrailingContentDescription,
+                        enabled = tertiaryTrailingEnabled,
+                        onClick = onTertiaryTrailingAction,
                     )
                 }
-            } else if (trailingIcon != null && onTrailingAction != null) {
-                SettingsCircleButton(
-                    icon = trailingIcon,
-                    contentDescription = trailingContentDescription,
-                    enabled = trailingEnabled,
-                    onClick = onTrailingAction,
-                )
-            } else if (secondaryTrailingIcon == null) {
-                Spacer(Modifier.size(44.dp))
+                if (secondaryTrailingIcon != null && onSecondaryTrailingAction != null) {
+                    SettingsCircleButton(
+                        icon = secondaryTrailingIcon,
+                        contentDescription = secondaryTrailingContentDescription,
+                        enabled = secondaryTrailingEnabled,
+                        onClick = onSecondaryTrailingAction,
+                    )
+                }
+                if (trailingLoading) {
+                    Box(modifier = Modifier.size(44.dp), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(20.dp),
+                            strokeWidth = 2.dp,
+                            color = AetherPrimary,
+                        )
+                    }
+                } else if (trailingIcon != null && onTrailingAction != null) {
+                    SettingsCircleButton(
+                        icon = trailingIcon,
+                        contentDescription = trailingContentDescription,
+                        enabled = trailingEnabled,
+                        onClick = onTrailingAction,
+                    )
+                } else if (secondaryTrailingIcon == null) {
+                    Spacer(Modifier.size(44.dp))
+                }
             }
         }
     }
@@ -8312,12 +8585,14 @@ private fun SettingsCircleButton(
     enabled: Boolean = true,
     onClick: () -> Unit,
 ) {
+    val containerColor = aetherGlassControlColor()
     Box(
         modifier = modifier
             .size(44.dp)
             .shadow(10.dp, RoundedCornerShape(50), ambientColor = AetherScrim, spotColor = AetherScrim)
             .clip(RoundedCornerShape(50))
-            .background(if (enabled) AetherSurface else AetherSurface.copy(alpha = 0.55f))
+            .background(if (enabled) containerColor else containerColor.copy(alpha = 0.5f))
+            .border(1.dp, aetherGlassBorderColor(), RoundedCornerShape(50))
             .clickable(enabled = enabled, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {

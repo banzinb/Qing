@@ -28,6 +28,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import com.zhousl.aether.data.MemoryRepository
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -37,6 +38,7 @@ private const val AetherExtensionGuestDirectory = "/root/.aether/extensions"
 class PiAgentRunner(
     private val bridge: PiKernelBridge,
     private val toolExecutor: AetherToolExecutor? = null,
+    private val memoryRepository: MemoryRepository? = null,
     private val settingsRepository: SettingsRepository? = null,
     private val piExtensionStateRepository: PiExtensionStateRepository? = null,
     private val appExtensionManager: AetherAppExtensionManager? = null,
@@ -89,6 +91,7 @@ class PiAgentRunner(
                 }
                 var currentRuntimeId = runtimeId
                 val appendedPiEntryIds = ConcurrentLinkedQueue<String>()
+                val memoryContext = memoryRepository?.buildAutoInjectionContext().orEmpty()
                 val prompt = {
                     buildPiAgentInstructions(
                         settings = settings,
@@ -100,6 +103,7 @@ class PiAgentRunner(
                         runtimeId = currentRuntimeId,
                         agentModeEnabled = agentModeEnabled,
                         chromeEnabled = chromeEnabled,
+                        memoryContext = memoryContext,
                     )
                 }
                 val payload = JSONObject().apply {

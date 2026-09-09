@@ -481,6 +481,16 @@
     <string name="settings_keep_tasks_running_background_subtitle">使用 Android 前台服务，让活跃聊天在离开 青 后继续工作。</string>
     <string name="settings_notify_background_tasks_finish">后台任务结束时通知</string>
     <string name="settings_notify_background_tasks_finish_subtitle">当运行在 青 不在屏幕上时结束，会显示完成提醒。</string>
+    <string name="settings_keep_alive_section">后台保活引导</string>
+    <string name="settings_notification_access">通知权限</string>
+    <string name="settings_notification_access_subtitle">允许 青 发送任务完成和主动推送提醒。</string>
+    <string name="settings_ignore_battery_optimization">忽略电池优化</string>
+    <string name="settings_ignore_battery_optimization_subtitle">避免系统在后台杀掉 青。</string>
+    <string name="settings_enable_auto_start">允许自启动</string>
+    <string name="settings_auto_start_subtitle">重启后自动恢复定时任务和主动推送调度。</string>
+    <string name="settings_exact_alarm_access">允许精确闹钟</string>
+    <string name="settings_exact_alarm_subtitle">让定时任务和主动推送按点触发。</string>
+    <string name="settings_keep_alive_rom_hint">品牌路径参考：小米/红米 设置→应用→青→自启动；OPPO/一加 设置→电池→应用速冻；华为/荣耀 设置→应用→启动管理；vivo 设置→电池→后台耗电管理。找不到时把 青 锁进最近任务即可。</string>
     <string name="settings_reconnect">重连</string>
     <string name="settings_reconnect_after_seconds">%1$d 秒后重连</string>
     <string name="settings_reconnect_after_idle_seconds">Provider 超时秒数</string>
@@ -533,6 +543,23 @@
     <string name="settings_days_of_week_input">星期 1-7 或 mon,tue</string>
     <string name="settings_time_hhmm">时间 HH:mm</string>
     <string name="settings_interval_window_hint">间隔任务的时间窗口是可选的。开始和结束留空则全天运行。</string>
+    <string name="settings_quiet_start_time">勿扰开始 HH:mm</string>
+    <string name="settings_quiet_end_time">勿扰结束 HH:mm</string>
+    <string name="settings_presence_push">主动推送</string>
+    <string name="settings_presence_push_on">已开启</string>
+    <string name="settings_presence_push_off">已关闭</string>
+    <string name="settings_presence_push_enabled">启用主动推送</string>
+    <string name="settings_presence_push_description">青 会按你设置的节奏推送一条简短记忆摘要，不消耗模型 token。</string>
+    <string name="settings_presence_push_interval">每隔多少分钟推送</string>
+    <string name="settings_presence_push_jitter">随机化推送时间</string>
+    <string name="settings_presence_push_jitter_subtitle">最多随机延迟 15 分钟，避免推送像机器人一样准时。</string>
+    <string name="settings_presence_push_hint">勿扰时段内不推送；活跃时段决定允许推送的时间。</string>
+    <string name="settings_presence_push_send_test">发送测试通知</string>
+    <string name="presence_notification_title">青 有件事想提醒你</string>
+    <string name="presence_notification_body">这是你的本地记忆摘要。</string>
+    <string name="presence_notification_open">打开</string>
+    <string name="presence_notification_ignore">忽略</string>
+    <string name="presence_notification_disable">关闭主动推送</string>
 
     <!-- Provider configuration -->
     <string name="provider_form_provider_name">提供方名称</string>
@@ -1164,4 +1191,6 @@
     <string name="file_manager_view_grid">网格视图</string>
     <string name="file_manager_view_list">列表视图</string>
     <string name="common_confirm">确定</string>
+    <string name="data_overview_title">我的数据</string>
+    <string name="data_overview_drawer_subtitle">账单 · 待办 · 剪藏</string>
 </resources>

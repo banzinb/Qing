@@ -19,9 +19,13 @@ import com.zhousl.aether.data.WebToolsClient
 import com.zhousl.aether.data.ChatRepository
 import com.zhousl.aether.data.PiExtensionManager
 import com.zhousl.aether.data.PiExtensionStateRepository
+import com.zhousl.aether.data.PresencePushManager
+import com.zhousl.aether.data.PresencePushRepository
+import com.zhousl.aether.data.PresencePushScheduler
 import com.zhousl.aether.data.RootSetupController
 import com.zhousl.aether.data.RuntimeWorkspaceFileBridge
 import com.zhousl.aether.data.ChatStateStore
+import com.zhousl.aether.data.MemoryRepository
 import com.zhousl.aether.data.ScheduledTask
 import com.zhousl.aether.data.ScheduledTaskManager
 import com.zhousl.aether.data.ScheduledTaskRepository
@@ -196,8 +200,10 @@ class AetherAppRuntime(
         loadOptionsProvider = piExtensionStateRepository::loadOptions,
     )
     val webToolsClient = WebToolsClient()
+    val memoryRepository = MemoryRepository(application)
     val piAgentRunner = PiAgentRunner(
         bridge = piKernelBridge,
+        memoryRepository = memoryRepository,
         settingsRepository = settingsRepository,
         piExtensionStateRepository = piExtensionStateRepository,
         appExtensionManager = aetherAppExtensionManager,
@@ -208,6 +214,7 @@ class AetherAppRuntime(
             runtimeRouter = runtimeRouter,
             webToolsClient = webToolsClient,
             agentModeController = agentModeController,
+            memoryRepository = memoryRepository,
         ),
     )
     val appForegroundTracker = AppForegroundTracker()
@@ -219,6 +226,15 @@ class AetherAppRuntime(
     val scheduledTaskManager = ScheduledTaskManager(
         repository = scheduledTaskRepository,
         scheduler = scheduledTaskScheduler,
+    )
+    val presencePushRepository = PresencePushRepository(application)
+    val presencePushScheduler = PresencePushScheduler(
+        context = application,
+        diagnosticLogger = diagnosticLogger,
+    )
+    val presencePushManager = PresencePushManager(
+        repository = presencePushRepository,
+        scheduler = presencePushScheduler,
     )
     val chatStateStore = ChatStateStore(
         scope = appScope,
@@ -285,6 +301,9 @@ class AetherAppRuntime(
         }
         appScope.launch {
             scheduledTaskManager.rescheduleAll()
+        }
+        appScope.launch {
+            presencePushManager.rescheduleAll()
         }
     }
 
@@ -360,6 +379,91 @@ class AetherAppRuntime(
                 scheduledTaskManager.rescheduleAll()
             } finally {
                 pendingResult.finish()
+            }
+        }
+    }
+
+    fun handlePresencePushAlarm(
+        pendingResult: android.content.BroadcastReceiver.PendingResult,
+    ) {
+        diagnosticLogger.event(
+            category = "presence_push",
+            event = "alarm_received",
+        )
+        appScope.launch {
+            try {
+                val settings = presencePushManager.markTriggeredAndScheduleNext()
+                val summary = memoryRepository.buildAutoInjectionContext(maxChars = 1200)
+                notificationController.notifyPresencePush(summary)
+                diagnosticLogger.event(
+                    category = "presence_push",
+                    event = "notification_posted",
+                    details = mapOf("enabled" to settings.enabled),
+                )
+            } catch (throwable: Throwable) {
+                diagnosticLogger.exception(
+                    category = "presence_push",
+                    event = "alarm_handle_failed",
+                    throwable = throwable,
+                )
+            } finally {
+                pendingResult.finish()
+            }
+        }
+    }
+
+    fun dismissPresencePushNotification() {
+        notificationController.cancelPresencePush()
+    }
+
+    fun disablePresencePush(
+        pendingResult: android.content.BroadcastReceiver.PendingResult,
+    ) {
+        appScope.launch {
+            try {
+                presencePushManager.update { settings ->
+                    settings.copy(enabled = false)
+                }
+                notificationController.cancelPresencePush()
+            } catch (throwable: Throwable) {
+                diagnosticLogger.exception(
+                    category = "presence_push",
+                    event = "disable_failed",
+                    throwable = throwable,
+                )
+            } finally {
+                pendingResult.finish()
+            }
+        }
+    }
+
+    fun reschedulePresencePush(
+        pendingResult: android.content.BroadcastReceiver.PendingResult,
+    ) {
+        appScope.launch {
+            try {
+                presencePushManager.rescheduleAll()
+            } finally {
+                pendingResult.finish()
+            }
+        }
+    }
+
+    fun sendTestPresencePush() {
+        appScope.launch {
+            try {
+                val summary = memoryRepository.buildAutoInjectionContext(maxChars = 1200)
+                notificationController.notifyPresencePush(summary)
+                diagnosticLogger.event(
+                    category = "presence_push",
+                    event = "test_push_posted",
+                )
+            } catch (throwable: Throwable) {
+                diagnosticLogger.exception(
+                    category = "presence_push",
+                    event = "test_push_failed",
+                    throwable = throwable,
+                )
             }
         }
     }

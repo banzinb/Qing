@@ -37,11 +37,15 @@ val nightlyKeystoreFile = localOrEnv("nightly.storeFile", "NIGHTLY_KEYSTORE_FILE
 val nightlyKeystorePassword = localOrEnv("nightly.storePassword", "NIGHTLY_KEYSTORE_PASSWORD")
 val nightlyKeyAlias = localOrEnv("nightly.keyAlias", "NIGHTLY_KEY_ALIAS")
 val nightlyKeyPassword = localOrEnv("nightly.keyPassword", "NIGHTLY_KEY_PASSWORD")
+val qingStoreFile = localOrEnv("qing.storeFile", "QING_STORE_FILE")
+val qingStorePassword = localOrEnv("qing.storePassword", "QING_STORE_PASSWORD")
+val qingKeyAlias = localOrEnv("qing.keyAlias", "QING_KEY_ALIAS")
+val qingKeyPassword = localOrEnv("qing.keyPassword", "QING_KEY_PASSWORD")
 val appVersionName = providers.gradleProperty("aether.versionName")
     .orNull
     ?.trim()
     ?.takeIf { it.isNotEmpty() }
-    ?: "2.1.5"
+    ?: "1.1.0"
 val piBridgeProjectDir = rootProject.layout.projectDirectory.dir("pi-bridge")
 val piBridgeGeneratedAssetsDir = layout.buildDirectory.dir("generated/assets/piBridge")
 val preinstalledExtensionsDir = rootProject.layout.projectDirectory.dir("extensions")
@@ -144,6 +148,20 @@ android {
                 keyPassword = nightlyKeyPassword
             }
         }
+
+        create("qing") {
+            if (
+                qingStoreFile.isNotBlank() &&
+                qingStorePassword.isNotBlank() &&
+                qingKeyAlias.isNotBlank() &&
+                qingKeyPassword.isNotBlank()
+            ) {
+                storeFile = file(qingStoreFile)
+                storePassword = qingStorePassword
+                keyAlias = qingKeyAlias
+                keyPassword = qingKeyPassword
+            }
+        }
     }
 
     buildTypes {
@@ -172,6 +190,11 @@ android {
         release {
             isMinifyEnabled = true
             isShrinkResources = true
+            signingConfig = if (qingStoreFile.isNotBlank()) {
+                signingConfigs.getByName("qing")
+            } else {
+                null
+            }
             manifestPlaceholders["appIcon"] = "@mipmap/ic_launcher"
             manifestPlaceholders["appRoundIcon"] = "@mipmap/ic_launcher_round"
             manifestPlaceholders["appLabel"] = "@string/app_name"

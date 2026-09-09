@@ -120,3 +120,15 @@ node ppt-generator.js --input ppt-outline.json --output "<标题>.pptx"
 - 内容有数据/案例支撑，不是空话。
 - 排版有封面、目录、正文、总结、结束页的基本结构。
 - 交付时给出可直接点击下载的文件链接。
+
+## 结果卡片（重要）
+
+回复末尾**必须**附一个 ```json 代码块作为结果卡片（硬性要求，不要省略），只放真实数据，不要编造：
+
+- 成功/失败反馈 → {"type":"status","title":"记账","status":"success","message":"已记 18.00 元（餐饮）"}
+- 汇总统计 → {"type":"stat","title":"本月开销","items":[{"label":"笔数","value":"12"},{"label":"合计","value":"386.50 元"}]}
+- 明细列表 → {"type":"list","title":"最近账单","rows":[{"title":"奶茶","subtitle":"餐饮","value":"18.00 元"}]}
+- 占比/趋势图 → {"type":"chart","title":"分类占比","chart":{"kind":"pie","series":[{"name":"餐饮","value":120},{"name":"交通","value":50}]}}
+  chart 的 kind 支持 pie（series 传 name/value 对）、bar/line（需要 x 数组 + series 传 name/data 数组）
+
+正文保持正常回答，JSON 块放在最后，不要在正文里解释 JSON。

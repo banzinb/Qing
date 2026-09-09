@@ -1,10 +1,17 @@
 package com.zhousl.aether.ui
 
 import androidx.compose.animation.core.CubicBezierEasing
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
@@ -35,20 +42,130 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.BlurredEdgeTreatment
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.zhousl.aether.ui.theme.AetherOnSurface
 import com.zhousl.aether.ui.theme.AetherOnSurfaceVariant
+import com.zhousl.aether.ui.theme.AetherPrimary
 import com.zhousl.aether.platform.LocalReduceMotion
 import com.zhousl.aether.ui.theme.AetherSurface
 
 private val ConversationControlShadow = Color(0x14000000)
 private val ConversationControlHalo = Color(0x18000000)
 private val ConversationMotionEasing = CubicBezierEasing(0.22f, 0.84f, 0.18f, 1f)
+
+// ── Qing glass design system (IB-inspired: floating capsule + liquid glass) ──
+enum class AetherAgentStatus { Idle, Working, Connecting }
+
+@Composable
+private fun isGlassDarkTheme(): Boolean =
+    MaterialTheme.colorScheme.background.luminance() < 0.5f
+
+@Composable
+fun aetherGlassSurfaceColor(): Color {
+    val dark = isGlassDarkTheme()
+    return if (dark) Color(0xE61B2230) else Color(0xE8FFFFFF)
+}
+
+@Composable
+fun aetherGlassBorderColor(): Color {
+    val dark = isGlassDarkTheme()
+    return if (dark) Color(0x52A5BCE6) else Color(0x668E8E93)
+}
+
+@Composable
+fun aetherGlassShadowColor(): Color {
+    val dark = isGlassDarkTheme()
+    return if (dark) Color(0x66000000) else Color(0x33000000)
+}
+
+@Composable
+fun aetherGlassControlColor(): Color {
+    val dark = isGlassDarkTheme()
+    return if (dark) Color(0xB8232C3C) else Color(0xB8FFFFFF)
+}
+
+@Composable
+fun AetherGlassCapsule(
+    modifier: Modifier = Modifier,
+    cornerRadius: Dp = 20.dp,
+    content: @Composable BoxScope.() -> Unit,
+) {
+    val shape = RoundedCornerShape(cornerRadius)
+    val surface = aetherGlassSurfaceColor()
+    val border = aetherGlassBorderColor()
+    val shadow = aetherGlassShadowColor()
+    Box(
+        modifier = modifier
+            .shadow(10.dp, shape, ambientColor = shadow, spotColor = shadow)
+            .clip(shape)
+            .background(
+                Brush.verticalGradient(
+                    colors = listOf(surface, surface.copy(alpha = surface.alpha * 0.80f)),
+                ),
+            )
+            .border(1.dp, border, shape),
+    ) {
+        content()
+    }
+}
+
+@Composable
+fun AetherGlassStatusDot(
+    status: AetherAgentStatus,
+    modifier: Modifier = Modifier,
+) {
+    val reduceMotion = LocalReduceMotion.current
+    val transition = rememberInfiniteTransition()
+    val pulseAlpha by transition.animateFloat(
+        initialValue = 0.30f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(
+                durationMillis = if (status == AetherAgentStatus.Connecting) 700 else 1100,
+                easing = LinearEasing,
+            ),
+            repeatMode = RepeatMode.Reverse,
+        ),
+    )
+    val dotColor = when (status) {
+        AetherAgentStatus.Idle -> AetherOnSurfaceVariant.copy(alpha = 0.55f)
+        AetherAgentStatus.Working -> AetherPrimary
+        AetherAgentStatus.Connecting -> Color(0xFFE8A33D)
+    }
+    Box(
+        modifier = modifier.size(13.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (status != AetherAgentStatus.Idle && !reduceMotion) {
+            Box(
+                modifier = Modifier
+                    .size(13.dp)
+                    .clip(CircleShape)
+                    .background(dotColor.copy(alpha = pulseAlpha * 0.30f)),
+            )
+        }
+        Box(
+            modifier = Modifier
+                .size(7.dp)
+                .clip(CircleShape)
+                .background(
+                    if (status == AetherAgentStatus.Idle || reduceMotion) {
+                        dotColor
+                    } else {
+                        dotColor.copy(alpha = pulseAlpha)
+                    },
+                ),
+        )
+    }
+}
 
 @Composable
 fun AetherConversationTopBarFrame(
@@ -60,40 +177,48 @@ fun AetherConversationTopBarFrame(
     modifier: Modifier = Modifier,
     centerContent: @Composable BoxScope.() -> Unit,
 ) {
-    val reduceMotion = LocalReduceMotion.current
-    Row(
+    AetherGlassCapsule(
         modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = 15.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
+            .padding(horizontal = 12.dp, vertical = 6.dp),
+        cornerRadius = 20.dp,
     ) {
-        if (showMenu) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (showMenu) {
+                HeaderCircleButton(
+                    icon = Icons.Rounded.Menu,
+                    contentDescription = menuDescription,
+                    onClick = onMenu,
+                    size = 38.dp,
+                    iconSize = 19.dp,
+                    containerColor = aetherGlassControlColor(),
+                    borderColor = aetherGlassBorderColor(),
+                )
+            }
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(
+                        start = if (showMenu) 10.dp else 5.dp,
+                        end = 10.dp,
+                    ),
+                content = centerContent,
+            )
             HeaderCircleButton(
-                icon = Icons.Rounded.Menu,
-                contentDescription = menuDescription,
-                onClick = onMenu,
+                icon = LucideIcons.SquarePen,
+                contentDescription = newChatDescription,
+                onClick = onNewChat,
                 size = 38.dp,
                 iconSize = 19.dp,
-                containerColor = AetherSurface.copy(alpha = 0.96f),
+                containerColor = aetherGlassControlColor(),
+                borderColor = aetherGlassBorderColor(),
             )
         }
-        Box(
-            modifier = Modifier
-                .weight(1f)
-                .padding(
-                    start = if (showMenu) 12.dp else 5.dp,
-                    end = 12.dp,
-                ),
-            content = centerContent,
-        )
-        HeaderCircleButton(
-            icon = LucideIcons.SquarePen,
-            contentDescription = newChatDescription,
-            onClick = onNewChat,
-            size = 38.dp,
-            iconSize = 19.dp,
-            containerColor = AetherSurface.copy(alpha = 0.96f),
-        )
     }
 }
 

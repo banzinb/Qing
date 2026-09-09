@@ -12,6 +12,7 @@ import com.zhousl.aether.data.McpServerConfig
 import com.zhousl.aether.data.InstalledPiExtension
 import com.zhousl.aether.data.PiExtensionCatalogEntry
 import com.zhousl.aether.data.PiPackageDetails
+import com.zhousl.aether.data.PresencePushSettings
 import com.zhousl.aether.data.RootSetupState
 import com.zhousl.aether.data.ScheduledTask
 import com.zhousl.aether.data.SessionExecutionState
@@ -28,6 +29,7 @@ enum class AppScreen {
     Chat,
     Settings,
     PcCodex,
+    DataOverview,
 }
 
 enum class OnboardingStep {
@@ -305,6 +307,7 @@ data class AetherUiState(
     val piPackageDetailsError: String = "",
     val mcpServers: List<McpServerConfig> = emptyList(),
     val scheduledTasks: List<ScheduledTask> = emptyList(),
+    val presenceSettings: PresencePushSettings = PresencePushSettings(),
     val providerConfigs: List<LlmProviderConfig> = emptyList(),
     val modelCatalogInfo: Map<String, com.zhousl.aether.data.ModelCatalogInfo> = emptyMap(),
     val thinkingLevelsByProviderModel: Map<String, List<String>> = emptyMap(),
