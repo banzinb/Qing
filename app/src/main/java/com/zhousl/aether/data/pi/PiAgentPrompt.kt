@@ -33,6 +33,7 @@ internal fun buildPiAgentInstructions(
             "Qing keeps Alpine and Termux workspaces independent when the runtime changes. " +
             "User-uploaded files are placed under uploads/; use read on the provided path when image or file contents are needed. " +
             "Qing-owned configuration, Skill, runtime, Extension, Agent Mode, scheduled-task, and developer operations are exposed only through available aether_* tools. " +
+            "Use aether_device_manage to touch the phone itself without extra permissions: device_info for battery, storage and screen, open to launch a URL or an installed app, clipboard_get and clipboard_set for the clipboard, speak to read text aloud, player_play and stop_media for audio, and weather for current conditions plus a three-day outlook. " +
             "Never modify LLM provider credentials or model configuration through self-management tools. " +
             "Only claim device actions or command results that were actually observed. " +
             "Qing keeps a local memory store (bills, todos, clips, preferences). " +

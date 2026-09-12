@@ -22,6 +22,7 @@ class AetherSelfManagementTool(
     private val piKernelBridge: PiKernelBridge,
     private val sessionId: String,
     private val diagnosticLogger: AetherDiagnosticLogger = AetherDiagnosticLogger.NoOp,
+    private val deviceCapabilities: DeviceCapabilityHandler? = null,
 ) {
     fun toolDefinitions(): List<JSONObject> = listOf(
         buildAetherToolDefinition(
@@ -246,6 +247,77 @@ class AetherSelfManagementTool(
             },
             required = listOf("action"),
         ),
+
+        buildAetherToolDefinition(
+            name = "aether_device_manage",
+            description = "Use the phone itself, with no extra permissions: read device, battery, storage and screen info; open a URL or an installed app; read or write the clipboard; read text out loud; play or stop audio; look up the weather. Required fields: open needs value (a URL, or a package name when target=app), clipboard_set needs text, speak needs text, player_play needs url, weather needs either city or both latitude and longitude.",
+            properties = JSONObject().apply {
+                put(
+                    "action",
+                    JSONObject().apply {
+                        put("type", "string")
+                        put(
+                            "enum",
+                            JSONArray(
+                                listOf(
+                                    "device_info",
+                                    "open",
+                                    "clipboard_get",
+                                    "clipboard_set",
+                                    "speak",
+                                    "stop_media",
+                                    "player_play",
+                                    "weather",
+                                )
+                            ),
+                        )
+                        put(
+                            "description",
+                            "device_info: read device state. open: launch a URL or app. clipboard_get / clipboard_set: read or replace the clipboard. speak: read text aloud. player_play: stream audio from a URL. stop_media: stop speech or audio. weather: current conditions and a 3-day outlook.",
+                        )
+                    },
+                )
+                put(
+                    "target",
+                    JSONObject().apply {
+                        put("type", "string")
+                        put("enum", JSONArray(listOf("url", "app")))
+                        put("description", "For action=open. Defaults to url; use app with a package name such as com.tencent.mm.")
+                    },
+                )
+                put(
+                    "value",
+                    JSONObject().apply {
+                        put("type", "string")
+                        put("description", "For action=open: the URL, or the package name when target=app.")
+                    },
+                )
+                put(
+                    "text",
+                    JSONObject().apply {
+                        put("type", "string")
+                        put("description", "For action=clipboard_set: the text to copy. For action=speak: the text to read aloud.")
+                    },
+                )
+                put(
+                    "url",
+                    JSONObject().apply {
+                        put("type", "string")
+                        put("description", "For action=player_play: an http(s) audio stream URL.")
+                    },
+                )
+                put(
+                    "city",
+                    JSONObject().apply {
+                        put("type", "string")
+                        put("description", "For action=weather: a place name, for example 北京 or Shanghai.")
+                    },
+                )
+                put("latitude", JSONObject().apply { put("type", "number") })
+                put("longitude", JSONObject().apply { put("type", "number") })
+            },
+            required = listOf("action"),
+        ),
     )
 
     suspend fun execute(
@@ -257,10 +329,36 @@ class AetherSelfManagementTool(
         "aether_skill_manage" -> executeSkillManage(argumentsJson)
         "aether_termux_manage" -> executeTermuxManage(argumentsJson)
         "aether_agent_mode_manage" -> executeAgentModeManage(argumentsJson)
+        "aether_device_manage" -> executeDeviceManage(argumentsJson)
         "aether_scheduled_task_manage" -> executeScheduledTaskManage(argumentsJson)
         "aether_extension_manage" -> executeExtensionManage(argumentsJson)
         "aether_developer_manage" -> executeDeveloperManage(argumentsJson)
         else -> failure("Unknown Qing self-management tool '$toolName'.")
+    }
+
+    private suspend fun executeDeviceManage(argumentsJson: String): String {
+        val arguments = parseArguments(argumentsJson) ?: return invalidJson()
+        val capabilities = deviceCapabilities
+            ?: return failure("Device capabilities are not available on this platform.")
+        val action = arguments.optString("action").trim().lowercase(Locale.US)
+        return when (action) {
+            "device_info" -> capabilities.deviceInfo()
+            "open" -> capabilities.open(
+                target = arguments.optString("target").ifBlank { "url" },
+                value = arguments.optString("value"),
+            )
+            "clipboard_get" -> capabilities.readClipboard()
+            "clipboard_set" -> capabilities.writeClipboard(arguments.optString("text"))
+            "speak" -> capabilities.speak(arguments.optString("text"))
+            "stop_media" -> capabilities.stopMedia()
+            "player_play" -> capabilities.playAudio(arguments.optString("url"))
+            "weather" -> capabilities.weather(
+                city = arguments.optString("city"),
+                latitude = arguments.optionalDouble("latitude"),
+                longitude = arguments.optionalDouble("longitude"),
+            )
+            else -> return failure("Unsupported device action '$action'.")
+        }.toString()
     }
 
     private suspend fun executeConfigGet(argumentsJson: String): String {
@@ -972,6 +1070,9 @@ class AetherSelfManagementTool(
 
     private fun JSONObject.hasAny(vararg names: String): Boolean =
         names.any(::has)
+
+    private fun JSONObject.optionalDouble(name: String): Double? =
+        if (has(name) && !isNull(name)) optDouble(name) else null
 
     private fun JSONObject.optStringAny(vararg names: String): String =
         names.firstOrNull(::has)?.let(::optString).orEmpty()

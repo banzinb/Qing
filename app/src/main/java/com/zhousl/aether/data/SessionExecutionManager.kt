@@ -561,6 +561,7 @@ class SessionExecutionManager(
             piKernelBridge = piKernelBridge,
             sessionId = handle.sessionId,
             diagnosticLogger = diagnosticLogger,
+            deviceCapabilities = DeviceCapabilityHandler(application),
         )
 
         updateExecutionState(handle.sessionId) {

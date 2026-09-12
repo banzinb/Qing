@@ -608,6 +608,7 @@ private val SelfManagementToolNames = setOf(
     "aether_termux_manage",
     "aether_runtime_manage",
     "aether_agent_mode_manage",
+    "aether_device_manage",
     "aether_scheduled_task_manage",
     "aether_extension_manage",
     "aether_developer_manage",

@@ -13,4 +13,9 @@ class AetherSelfManagementToolRoutingTest {
     fun piExtensionToolIsRoutedByPiHostExecutor() {
         assertTrue(AetherToolExecutor.supports("aether_extension_manage"))
     }
+
+    @Test
+    fun deviceCapabilityToolIsRoutedByPiHostExecutor() {
+        assertTrue(AetherToolExecutor.supports("aether_device_manage"))
+    }
 }

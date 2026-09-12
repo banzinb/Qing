@@ -3622,6 +3622,7 @@ private fun formatPendingToolTitle(
     "aether_skill_manage",
     "aether_termux_manage",
     "aether_agent_mode_manage",
+    "aether_device_manage",
     "aether_scheduled_task_manage",
     "aether_developer_manage" -> formatAetherToolTitle(toolName, isRunning, arguments)
     "agent_display" -> formatAgentDisplayToolTitle(isRunning, arguments)
@@ -3701,6 +3702,16 @@ private fun formatAetherToolTitle(
             else -> toolStatusLabel(isRunning, R.string.tool_title_reading_scheduled_tasks, R.string.tool_title_read_scheduled_tasks)
         }
         "aether_developer_manage" -> toolStatusLabel(isRunning, R.string.tool_title_reading_aether_diagnostics, R.string.tool_title_read_aether_diagnostics)
+        "aether_device_manage" -> when (action.lowercase()) {
+            "open" -> formatArgumentDrivenToolTitle(isRunning, R.string.tool_title_launching, R.string.tool_title_launched, arguments?.optString("value").orEmpty(), R.string.tool_title_device_fallback)
+            "clipboard_get" -> toolStatusLabel(isRunning, R.string.tool_title_reading_clipboard, R.string.tool_title_read_clipboard)
+            "clipboard_set" -> toolStatusLabel(isRunning, R.string.tool_title_writing_clipboard, R.string.tool_title_written_clipboard)
+            "speak" -> formatArgumentDrivenToolTitle(isRunning, R.string.tool_title_speaking_text, R.string.tool_title_spoke_text, arguments?.optString("text").orEmpty(), R.string.tool_title_device_fallback)
+            "player_play" -> formatArgumentDrivenToolTitle(isRunning, R.string.tool_title_playing_audio, R.string.tool_title_played_audio, arguments?.optString("url").orEmpty(), R.string.tool_title_device_fallback)
+            "stop_media" -> toolStatusLabel(isRunning, R.string.tool_title_stopping_media, R.string.tool_title_stopped_media)
+            "weather" -> formatArgumentDrivenToolTitle(isRunning, R.string.tool_title_checking_weather, R.string.tool_title_checked_weather, arguments?.optString("city").orEmpty(), R.string.tool_title_weather_fallback)
+            else -> toolStatusLabel(isRunning, R.string.tool_title_reading_device_info, R.string.tool_title_read_device_info)
+        }
         else -> toolStatusLabel(isRunning, R.string.tool_title_managing_aether, R.string.tool_title_managed_aether)
     }
 }

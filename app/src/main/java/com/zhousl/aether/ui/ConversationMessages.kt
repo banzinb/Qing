@@ -4274,6 +4274,16 @@ private fun formatAetherToolTitle(
             else -> context.getString(if (isRunning) R.string.tool_title_checking_agent_mode_authorization else R.string.tool_title_checked_agent_mode_authorization)
         }
         "aether_developer_manage" -> context.getString(if (isRunning) R.string.tool_title_reading_aether_diagnostics else R.string.tool_title_read_aether_diagnostics)
+        "aether_device_manage" -> when (action.lowercase()) {
+            "open" -> formatArgumentDrivenTitle(isRunning, context.getString(R.string.tool_title_launching), context.getString(R.string.tool_title_launched), arguments?.optString("value").orEmpty(), context.getString(R.string.tool_title_device_fallback))
+            "clipboard_get" -> context.getString(if (isRunning) R.string.tool_title_reading_clipboard else R.string.tool_title_read_clipboard)
+            "clipboard_set" -> context.getString(if (isRunning) R.string.tool_title_writing_clipboard else R.string.tool_title_written_clipboard)
+            "speak" -> formatArgumentDrivenTitle(isRunning, context.getString(R.string.tool_title_speaking_text), context.getString(R.string.tool_title_spoke_text), arguments?.optString("text").orEmpty(), context.getString(R.string.tool_title_device_fallback))
+            "player_play" -> formatArgumentDrivenTitle(isRunning, context.getString(R.string.tool_title_playing_audio), context.getString(R.string.tool_title_played_audio), arguments?.optString("url").orEmpty(), context.getString(R.string.tool_title_device_fallback))
+            "stop_media" -> context.getString(if (isRunning) R.string.tool_title_stopping_media else R.string.tool_title_stopped_media)
+            "weather" -> formatArgumentDrivenTitle(isRunning, context.getString(R.string.tool_title_checking_weather), context.getString(R.string.tool_title_checked_weather), arguments?.optString("city").orEmpty(), context.getString(R.string.tool_title_weather_fallback))
+            else -> context.getString(if (isRunning) R.string.tool_title_reading_device_info else R.string.tool_title_read_device_info)
+        }
         else -> context.getString(if (isRunning) R.string.tool_title_managing_aether else R.string.tool_title_managed_aether)
     }
 }
@@ -4314,6 +4324,14 @@ private fun summarizeAetherToolCommand(
             append(action.ifBlank { "read_diagnostics" })
             appendAetherKeyValue(arguments, "include")
             appendAetherKeyValue(arguments, "max_chars", "maxChars")
+        }.trim()
+        "aether_device_manage" -> buildString {
+            append("aether_device_manage action=")
+            append(action.ifBlank { "device_info" })
+            appendAetherKeyValue(arguments, "target")
+            appendAetherKeyValue(arguments, "value")
+            appendAetherKeyValue(arguments, "url")
+            appendAetherKeyValue(arguments, "city")
         }.trim()
         else -> toolName
     }
