@@ -92,9 +92,12 @@ import { bridgeDebug, bridgeDebugEnabled, elapsedMillis } from "./debug.js";
 import { ToolLoopDetector, type LoopCheckResult } from "./tool-loop-detector.js";
 import {
   approvalRequirement,
+  isApprovalGranted,
   normalizeApprovalMode,
+  normalizeToolApprovalDecision,
   type ApprovalMode,
   type ApprovalSubject,
+  type ToolApprovalDecision,
 } from "./tool-approval-policy.js";
 
 registerBunOAuthFlows();
@@ -172,19 +175,6 @@ interface PendingToolApproval {
   scopeKey: string;
   resolve: (decision: ToolApprovalDecision) => void;
   reject: (error: Error) => void;
-}
-
-type ToolApprovalDecision = "approved" | "approved_for_session" | "denied" | "timed_out";
-
-const TOOL_APPROVAL_DECISIONS: readonly ToolApprovalDecision[] = [
-  "approved",
-  "approved_for_session",
-  "denied",
-  "timed_out",
-];
-
-function isToolApprovalDecision(value: string): value is ToolApprovalDecision {
-  return TOOL_APPROVAL_DECISIONS.includes(value as ToolApprovalDecision);
 }
 
 interface AgentSessionState {
@@ -1591,7 +1581,7 @@ async function requestAgentHostTool(
     },
     signal,
   );
-  if (approval !== "approved") {
+  if (!isApprovalGranted(approval)) {
     throw new Error(approvalDeniedMessage(definition.name, approval));
   }
   const toolRequestId = `host-tool-${Date.now()}-${++hostToolCounter}`;
@@ -1753,7 +1743,7 @@ function resolveToolApproval(payload: JsonObject): boolean {
   }
   const raw = asString(payload.decision).trim().toLowerCase();
   pendingToolApprovals.delete(approvalId);
-  pending.resolve(isToolApprovalDecision(raw) ? raw : "denied");
+  pending.resolve(normalizeToolApprovalDecision(raw));
   return true;
 }
 
@@ -1774,7 +1764,7 @@ async function requestRuntimeOperation(
     { kind: "runtime", name: kind, detail: runtimeApprovalDetail(kind, payload) },
     options.signal,
   );
-  if (approval !== "approved") {
+  if (!isApprovalGranted(approval)) {
     throw new Error(approvalDeniedMessage(runtimeApprovalLabel(kind), approval));
   }
   const requestId = state.currentRequestId;

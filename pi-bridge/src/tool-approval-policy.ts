@@ -16,6 +16,36 @@ export type ApprovalMode = "off" | "relaxed" | "balanced" | "strict";
 
 const APPROVAL_MODES: readonly ApprovalMode[] = ["off", "relaxed", "balanced", "strict"];
 
+export type ToolApprovalDecision = "approved" | "approved_for_session" | "denied" | "timed_out";
+
+const TOOL_APPROVAL_DECISIONS: readonly ToolApprovalDecision[] = [
+  "approved",
+  "approved_for_session",
+  "denied",
+  "timed_out",
+];
+
+/**
+ * Anything unrecognized counts as a refusal, so a garbled answer never runs a
+ * tool by accident.
+ */
+export function normalizeToolApprovalDecision(value: unknown): ToolApprovalDecision {
+  const raw = typeof value === "string" ? value.trim().toLowerCase() : "";
+  return TOOL_APPROVAL_DECISIONS.includes(raw as ToolApprovalDecision)
+    ? (raw as ToolApprovalDecision)
+    : "denied";
+}
+
+/**
+ * There are two ways to say yes. "approved_for_session" also remembers the
+ * decision for the rest of the session; treating it as anything other than a
+ * yes makes the run it answered for fail while the memory silently sticks,
+ * which reads to the user as "it refused, then did it anyway".
+ */
+export function isApprovalGranted(decision: ToolApprovalDecision): boolean {
+  return decision === "approved" || decision === "approved_for_session";
+}
+
 export function normalizeApprovalMode(raw: unknown): ApprovalMode {
   const value = typeof raw === "string" ? raw.trim().toLowerCase() : "";
   return APPROVAL_MODES.includes(value as ApprovalMode) ? (value as ApprovalMode) : "balanced";

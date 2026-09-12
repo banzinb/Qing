@@ -3,9 +3,12 @@ import { test } from "node:test";
 import { createJiti } from "jiti";
 
 const jiti = createJiti(import.meta.url);
-const { approvalRequirement, normalizeApprovalMode } = await jiti.import(
-  "../src/tool-approval-policy.ts",
-);
+const {
+  approvalRequirement,
+  isApprovalGranted,
+  normalizeApprovalMode,
+  normalizeToolApprovalDecision,
+} = await jiti.import("../src/tool-approval-policy.ts");
 
 const bash = (command) => ({ kind: "runtime", name: "bash", detail: command });
 const runtime = (name, detail = "") => ({ kind: "runtime", name, detail });
@@ -138,4 +141,24 @@ test("approval mode parsing falls back to balanced", () => {
   assert.equal(normalizeApprovalMode("nonsense"), "balanced");
   assert.equal(normalizeApprovalMode(undefined), "balanced");
   assert.equal(normalizeApprovalMode(7), "balanced");
+});
+
+test("both ways of saying yes let the tool run", () => {
+  assert.equal(isApprovalGranted("approved"), true);
+  // Regression: this once fell through to the refusal branch, so the run the
+  // user had just waved through failed while the session pass quietly stuck.
+  assert.equal(isApprovalGranted("approved_for_session"), true);
+});
+
+test("a refusal or a timeout never runs the tool", () => {
+  assert.equal(isApprovalGranted("denied"), false);
+  assert.equal(isApprovalGranted("timed_out"), false);
+});
+
+test("an unrecognized decision is read as a refusal", () => {
+  assert.equal(normalizeToolApprovalDecision("approved_for_session"), "approved_for_session");
+  assert.equal(normalizeToolApprovalDecision("  APPROVED "), "approved");
+  assert.equal(normalizeToolApprovalDecision("maybe"), "denied");
+  assert.equal(normalizeToolApprovalDecision(undefined), "denied");
+  assert.equal(normalizeToolApprovalDecision({ decision: "approved" }), "denied");
 });
