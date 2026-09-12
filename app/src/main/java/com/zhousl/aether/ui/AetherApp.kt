@@ -119,6 +119,7 @@ import com.zhousl.aether.data.AetherPrivacyPolicyUrl
 import com.zhousl.aether.data.AetherGitHubUrl
 import com.zhousl.aether.data.AetherWebsiteUrl
 import com.zhousl.aether.data.AgentModeAuthorizationMethod
+import com.zhousl.aether.data.FallbackContextWindowTokens
 import com.zhousl.aether.data.AppLanguage
 import com.zhousl.aether.data.AppSettings
 import com.zhousl.aether.data.AutomaticModelPurpose
@@ -957,6 +958,9 @@ private fun AetherAppContent(
                         ConversationScreen(
                     conversationStateKey = uiState.currentSessionId,
                     messages = currentMessages,
+                    contextWindowTokens = uiState.contextWindowTokens
+                        .takeIf { it > 0 }
+                        ?: FallbackContextWindowTokens,
                     workspaceDirectory = currentRuntimeWorkspaceDirectory,
                     pendingToolInvocations = pendingToolInvocations,
                     pendingToolInvocationStateKey = "pending-tools-${uiState.currentSessionId}",

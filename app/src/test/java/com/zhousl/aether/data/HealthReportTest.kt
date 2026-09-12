@@ -14,8 +14,19 @@ class HealthReportTest {
 
         assertEquals(HealthStatus.Attention, item(HealthSnapshot(), HealthCheckId.Model).status)
         assertEquals(HealthStatus.Attention, item(HealthSnapshot(), HealthCheckId.Runtime).status)
-        assertEquals(8, report.size)
+        assertEquals(9, report.size)
         assertEquals(HealthCheckId.Model, report.first().id)
+    }
+
+    @Test
+    fun `the context window is reported as a fact and never as a fault`() {
+        val known = item(HealthSnapshot(contextWindowTokens = 1_000_000), HealthCheckId.ContextWindow)
+        val unknown = item(HealthSnapshot(), HealthCheckId.ContextWindow)
+
+        assertEquals(HealthStatus.Ok, known.status)
+        assertEquals("1000000", known.detail)
+        assertEquals(HealthStatus.Ok, unknown.status)
+        assertEquals("", unknown.detail)
     }
 
     @Test

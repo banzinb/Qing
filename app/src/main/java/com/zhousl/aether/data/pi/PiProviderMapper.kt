@@ -10,7 +10,6 @@ import com.zhousl.aether.data.ProviderAuthMethod
 import org.json.JSONObject
 import java.util.Locale
 
-private const val DefaultContextWindow = 128_000
 private const val DefaultMaxTokens = 16_384
 private const val DefaultMaxRetries = 5
 private const val DefaultMaxRetryDelayMillis = 60_000
@@ -26,7 +25,12 @@ data class PiModelConfig(
     val customHeaders: Map<String, String> = emptyMap(),
     val reasoning: Boolean = true,
     val thinkingLevelMap: Map<String, String> = emptyMap(),
-    val contextWindow: Int = DefaultContextWindow,
+    /**
+     * Null means "not specified": the kernel then reads the real window from
+     * the Pi model catalog (DeepSeek V4 is 1M, Claude 200K) and only falls back
+     * to a default when the model is a custom endpoint it does not know.
+     */
+    val contextWindow: Int? = null,
     val maxTokens: Int = DefaultMaxTokens,
     val timeoutMillis: Int = 360_000,
     val maxRetries: Int = DefaultMaxRetries,
@@ -53,7 +57,7 @@ data class PiModelConfig(
                 thinkingLevelMap.forEach { (name, value) -> put(name, value) }
             })
         }
-        put("context_window", contextWindow)
+        contextWindow?.let { put("context_window", it) }
         put("max_tokens", maxTokens)
         put("timeout_ms", timeoutMillis)
         put("max_retries", maxRetries)

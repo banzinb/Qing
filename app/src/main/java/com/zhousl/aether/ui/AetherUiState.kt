@@ -283,6 +283,7 @@ data class AetherUiState(
     val pendingStatusDetail: String = "",
     val toolApprovalRequest: ToolApprovalRequest? = null,
     val healthChecks: List<HealthCheckItem> = emptyList(),
+    val contextWindowTokens: Int = 0,
     val settingsRequestedPage: String = "",
     val compactingSessionId: String? = null,
     val sessionExecutionStates: Map<String, SessionExecutionState> = emptyMap(),

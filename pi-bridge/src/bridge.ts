@@ -90,6 +90,7 @@ import {
 } from "./aether-extensions.js";
 import { bridgeDebug, bridgeDebugEnabled, elapsedMillis } from "./debug.js";
 import { ToolLoopDetector, type LoopCheckResult } from "./tool-loop-detector.js";
+import { resolveContextWindow } from "./context-window.js";
 import {
   approvalRequirement,
   isApprovalGranted,
@@ -774,7 +775,9 @@ function normalizeModelConfig(rawValue: unknown): ModelConfig {
     custom_headers: normalizeHeaders(raw.custom_headers),
     reasoning: asBoolean(raw.reasoning, false),
     thinking_level_map: normalizeThinkingLevelMap(raw.thinking_level_map),
-    context_window: asNumber(raw.context_window, 128000),
+    // Zero means "the caller did not say"; modelFromConfig resolves the real
+    // window from the Pi catalog before it reaches the kernel.
+    context_window: asNumber(raw.context_window, 0),
     max_tokens: asNumber(raw.max_tokens, 16384),
     timeout_ms: asNumber(raw.timeout_ms, 360000),
     max_retries: Math.max(0, asNumber(raw.max_retries, DEFAULT_AGENT_RETRY_MAX_RETRIES)),
@@ -868,7 +871,7 @@ function createAetherModel(config: ModelConfig): Model<string> {
       cacheRead: 0,
       cacheWrite: 0,
     },
-    contextWindow: config.context_window ?? 128000,
+    contextWindow: resolveContextWindow(config),
     maxTokens: config.max_tokens ?? 16384,
     headers: config.custom_headers,
   };
@@ -898,7 +901,7 @@ function buildModels(config: ModelConfig): {
           id: config.model_id,
           reasoning: config.reasoning ?? true,
           input: ["text", "image"],
-          contextWindow: config.context_window ?? 128000,
+          contextWindow: resolveContextWindow(config),
           maxTokens: config.max_tokens ?? 16384,
         },
       ],
@@ -966,7 +969,7 @@ function buildModels(config: ModelConfig): {
             id: config.model_id,
             name: config.model_id,
             reasoning: config.reasoning ?? false,
-            contextWindow: config.context_window ?? 128000,
+            contextWindow: resolveContextWindow(config),
             maxTokens: config.max_tokens ?? 16384,
             cost: {
               input: 0,
@@ -3323,6 +3326,16 @@ async function handleRequest(request: BridgeRequest): Promise<void> {
     case "list_providers":
       writeResponse(id, providerCatalogPayload());
       return;
+    case "resolve_context_window": {
+      // Cheap, offline, and side-effect free: lets the app show the same number
+      // the kernel plans against instead of hard-coding 128K.
+      const config = normalizeModelConfig(payload.model_config);
+      writeResponse(id, {
+        context_window: resolveContextWindow(config),
+        max_tokens: config.max_tokens ?? 16384,
+      });
+      return;
+    }
     case "login_provider":
       writeResponse(id, await loginProvider(id, payload));
       return;

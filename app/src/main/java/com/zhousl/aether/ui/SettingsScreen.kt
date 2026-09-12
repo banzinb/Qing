@@ -7941,6 +7941,7 @@ private fun healthCheckTitle(id: HealthCheckId): String = stringResource(
         HealthCheckId.Battery -> R.string.health_check_battery_title
         HealthCheckId.ExactAlarm -> R.string.health_check_exact_alarm_title
         HealthCheckId.PhonePermissions -> R.string.health_check_phone_permissions_title
+        HealthCheckId.ContextWindow -> R.string.health_check_context_window_title
         HealthCheckId.LastCrash -> R.string.health_check_last_crash_title
     },
 )
@@ -8003,6 +8004,15 @@ private fun healthCheckDetail(item: HealthCheckItem): String {
                 R.string.health_check_notifications_attention
             },
         )
+
+        HealthCheckId.ContextWindow -> if (item.detail.toLongOrNull()?.let { it > 0L } == true) {
+            stringResource(
+                R.string.health_check_context_window_ok,
+                formatCompactTokens(item.detail.toLong()),
+            )
+        } else {
+            stringResource(R.string.health_check_context_window_unknown)
+        }
 
         HealthCheckId.Battery -> stringResource(
             if (item.status == HealthStatus.Ok) {

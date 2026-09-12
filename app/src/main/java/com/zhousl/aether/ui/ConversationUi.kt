@@ -161,6 +161,9 @@ import androidx.compose.ui.window.PopupProperties
 import androidx.core.graphics.PathParser
 import com.zhousl.aether.R
 import com.zhousl.aether.data.InstalledSkill
+import com.zhousl.aether.data.FallbackContextWindowTokens
+import com.zhousl.aether.data.contextUsagePercent
+import com.zhousl.aether.data.estimateTokens
 import com.zhousl.aether.data.AppLanguage
 import com.zhousl.aether.data.AgentModeDisplayState
 import com.zhousl.aether.data.AlpineChromeViewerUrl
@@ -311,6 +314,7 @@ private fun topOverlayTailGradient(): Brush = Brush.verticalGradient(
 fun ConversationScreen(
     conversationStateKey: String,
     messages: List<ChatMessage>,
+    contextWindowTokens: Int = FallbackContextWindowTokens,
     workspaceDirectory: String,
     pendingToolInvocations: List<ChatToolInvocation>,
     pendingToolInvocationStateKey: String,
@@ -389,7 +393,9 @@ fun ConversationScreen(
         LazyListState()
     }
     val conversationItems = remember(messages) { buildConversationListItems(messages) }
-    val compactSuggestion = remember(messages) { compactCommandSuggestion(messages) }
+    val compactSuggestion = remember(messages, contextWindowTokens) {
+        compactCommandSuggestion(messages, contextWindowTokens)
+    }
     val sessionTotalTokens = remember(messages) {
         messages.sumOf { message -> message.usageStatistics?.totalTokens ?: 0L }
             .takeIf { it > 0L }
@@ -2034,22 +2040,29 @@ private data class CompactCommandSuggestion(
     val percent: Int?,
 )
 
-private fun compactCommandSuggestion(messages: List<ChatMessage>): CompactCommandSuggestion {
+private fun compactCommandSuggestion(
+    messages: List<ChatMessage>,
+    contextWindowTokens: Int,
+): CompactCommandSuggestion {
     val visibleMessages = messages.filter {
         it.displayKind != MessageDisplayKind.HiddenContext &&
             it.displayKind != MessageDisplayKind.CompactStatus
     }
     if (visibleMessages.size < 2) return CompactCommandSuggestion(percent = null)
-    val estimatedChars = visibleMessages.sumOf { message ->
-        message.text.length +
+    val estimatedTokens = visibleMessages.sumOf { message ->
+        estimateTokens(message.text) +
             message.attachments.sumOf { attachment ->
-                attachment.name.length + attachment.mimeType.length + attachment.workspacePath.length
+                estimateTokens(attachment.name) +
+                    estimateTokens(attachment.mimeType) +
+                    estimateTokens(attachment.workspacePath)
             } +
             message.toolInvocations.sumOf { invocation ->
-                invocation.toolName.length + invocation.argumentsJson.length + invocation.outputJson.length
+                estimateTokens(invocation.toolName) +
+                    estimateTokens(invocation.argumentsJson) +
+                    estimateTokens(invocation.outputJson)
             }
     }
-    val percent = ((estimatedChars * 100L) / 120_000L).toInt().coerceIn(1, 100)
+    val percent = contextUsagePercent(estimatedTokens, contextWindowTokens).coerceIn(1, 100)
     return CompactCommandSuggestion(percent = percent)
 }
 

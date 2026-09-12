@@ -1293,6 +1293,9 @@
     <string name="health_check_phone_permissions_title">Phone permissions</string>
     <string name="health_check_phone_permissions_ok">Location, contacts and calendar are all readable</string>
     <string name="health_check_phone_permissions_attention">Missing: %1$s</string>
+    <string name="health_check_context_window_title">Context window</string>
+    <string name="health_check_context_window_ok">The kernel plans against %1$s tokens, so Qing remembers more before compacting</string>
+    <string name="health_check_context_window_unknown">Not resolved yet, falling back to 128K for now</string>
     <string name="health_check_last_crash_title">Last crash</string>
     <string name="health_check_last_crash_ok">No crash on record</string>
     <string name="health_check_last_crash_attention">Something went wrong on %1$s</string>

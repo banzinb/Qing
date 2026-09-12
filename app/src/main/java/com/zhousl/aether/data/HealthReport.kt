@@ -21,6 +21,7 @@ enum class HealthCheckId {
     Battery,
     ExactAlarm,
     PhonePermissions,
+    ContextWindow,
     LastCrash,
 }
 
@@ -35,6 +36,8 @@ enum class HealthCheckId {
  * - [HealthCheckId.AgentMode]: `disabled` or `not_authorized`, empty when ready
  * - [HealthCheckId.PhonePermissions]: the missing ones, comma-separated, from
  *   `location`, `contacts`, `calendar`
+ * - [HealthCheckId.ContextWindow]: the window the kernel plans against, in
+ *   tokens, empty when the app has not asked yet
  * - [HealthCheckId.LastCrash]: the crash time as epoch millis, empty when there is none
  */
 data class HealthCheckItem(
@@ -57,6 +60,7 @@ data class HealthSnapshot(
     val locationGranted: Boolean = false,
     val contactsGranted: Boolean = false,
     val calendarGranted: Boolean = false,
+    val contextWindowTokens: Int = 0,
     val lastCrashAtMillis: Long = 0L,
 )
 
@@ -128,6 +132,13 @@ fun buildHealthReport(snapshot: HealthSnapshot): List<HealthCheckItem> {
             id = HealthCheckId.PhonePermissions,
             status = if (missingPermissions.isEmpty()) HealthStatus.Ok else HealthStatus.Attention,
             detail = missingPermissions.joinToString(","),
+        ),
+        // Informational: a big window means Qing can remember more before the
+        // kernel compacts, and a small one explains why it compacts early.
+        HealthCheckItem(
+            id = HealthCheckId.ContextWindow,
+            status = HealthStatus.Ok,
+            detail = snapshot.contextWindowTokens.takeIf { it > 0 }?.toString().orEmpty(),
         ),
         HealthCheckItem(
             id = HealthCheckId.LastCrash,

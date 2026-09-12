@@ -1291,6 +1291,9 @@
     <string name="health_check_phone_permissions_title">手机权限</string>
     <string name="health_check_phone_permissions_ok">位置、联系人和日历都能读</string>
     <string name="health_check_phone_permissions_attention">还差：%1$s</string>
+    <string name="health_check_context_window_title">上下文窗口</string>
+    <string name="health_check_context_window_ok">内核按 %1$s token 安排上下文，聊满才会压缩</string>
+    <string name="health_check_context_window_unknown">还没问到，暂时按 128K 兜底</string>
     <string name="health_check_last_crash_title">上次异常</string>
     <string name="health_check_last_crash_ok">没有异常记录</string>
     <string name="health_check_last_crash_attention">%1$s 出过一次问题</string>

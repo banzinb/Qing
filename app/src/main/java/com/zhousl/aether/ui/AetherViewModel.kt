@@ -104,6 +104,7 @@ import com.zhousl.aether.data.pi.ToolApprovalGate
 import com.zhousl.aether.data.ToolApprovalMode
 import com.zhousl.aether.data.pi.toPiProviderEnvironmentVariables
 import com.zhousl.aether.data.pi.toPiModelConfig
+import com.zhousl.aether.data.pi.toPiModelConfig
 import com.zhousl.aether.data.isProviderSetupValid
 import com.zhousl.aether.data.isNightlyUpdateNewer
 import com.zhousl.aether.data.isVersionNewer
@@ -187,6 +188,8 @@ class AetherViewModel(
 ) : AndroidViewModel(application) {
     private val runtime = application.aetherRuntime
     private val diagnosticLogger = runtime.diagnosticLogger
+    /** Last resolved context window and the model it belongs to. */
+    private var resolvedContextWindow: Pair<String, Int>? = null
     private val settingsRepository = runtime.settingsRepository
     private val modKernel = runtime.modKernel
     private val chatStateStore = runtime.chatStateStore
@@ -1802,9 +1805,38 @@ class AetherViewModel(
                 isPermissionGranted(context, Manifest.permission.ACCESS_COARSE_LOCATION),
             contactsGranted = isPermissionGranted(context, Manifest.permission.READ_CONTACTS),
             calendarGranted = isPermissionGranted(context, Manifest.permission.READ_CALENDAR),
+            contextWindowTokens = snapshot.contextWindowTokens,
             lastCrashAtMillis = diagnosticLogger.lastCrashMillis(),
         )
         _uiState.update { it.copy(healthChecks = buildHealthReport(health)) }
+        refreshContextWindow()
+    }
+
+    /**
+     * Asks the kernel which context window it plans against, so the UI can stop
+     * pretending every model has 128K. Cached per model: the answer only changes
+     * when the user switches provider or model.
+     */
+    fun refreshContextWindow() {
+        val settings = _uiState.value.settings
+        val cacheKey = "${settings.providerConfigId}|${settings.piProviderId}|${settings.modelId}"
+        resolvedContextWindow?.let { (cachedKey, cachedTokens) ->
+            if (cachedKey == cacheKey) {
+                if (_uiState.value.contextWindowTokens != cachedTokens) {
+                    _uiState.update { it.copy(contextWindowTokens = cachedTokens) }
+                }
+                return
+            }
+        }
+        val modelConfig = runCatching { settings.toPiModelConfig().toJson() }.getOrNull() ?: return
+        viewModelScope.launch {
+            val tokens = runCatching {
+                piKernelBridge.resolveContextWindow(modelConfig).optInt("context_window", 0)
+            }.getOrDefault(0)
+            if (tokens <= 0) return@launch
+            resolvedContextWindow = cacheKey to tokens
+            _uiState.update { it.copy(contextWindowTokens = tokens) }
+        }
     }
 
     fun openPcCodex() {

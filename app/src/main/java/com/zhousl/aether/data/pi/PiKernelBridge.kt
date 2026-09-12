@@ -180,6 +180,18 @@ class PiKernelBridge(
             abortOnCancellation = false,
         )
 
+    /**
+     * Asks the kernel which context window it will plan against for this model.
+     * Offline: the Pi model catalog ships with the kernel.
+     */
+    suspend fun resolveContextWindow(modelConfig: JSONObject): JSONObject =
+        request(
+            type = "resolve_context_window",
+            payload = JSONObject().put("model_config", modelConfig),
+            timeoutMillis = PiBridgePingTimeoutMillis,
+            abortOnCancellation = false,
+        )
+
     suspend fun compactSession(
         sessionId: String,
         customInstructions: String = "",
