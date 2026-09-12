@@ -1230,4 +1230,13 @@
     <string name="tool_approval_mode_relaxed_subtitle">只在执行命令行、改动青自身之前先问</string>
     <string name="tool_approval_mode_off">从不询问</string>
     <string name="tool_approval_mode_off_subtitle">所有操作直接执行</string>
+    <string name="settings_tool_audit">动手记录</string>
+    <string name="settings_tool_audit_subtitle">青问过你什么、你怎么答的</string>
+    <string name="tool_audit_empty">还没有记录。青第一次要问你的时候，就会出现在这里。</string>
+    <string name="tool_audit_clear">清空记录</string>
+    <string name="tool_audit_clear_subtitle">删掉本机保存的全部记录</string>
+    <string name="tool_audit_decision_approved">允许</string>
+    <string name="tool_audit_decision_approved_for_session">本次对话都允许</string>
+    <string name="tool_audit_decision_denied">拒绝</string>
+    <string name="tool_audit_decision_timed_out">没等到回答</string>
 </resources>

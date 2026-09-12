@@ -1232,4 +1232,13 @@
     <string name="tool_approval_mode_relaxed_subtitle">Ask only before shell commands and changes to Qing itself</string>
     <string name="tool_approval_mode_off">Never</string>
     <string name="tool_approval_mode_off_subtitle">Run everything without asking</string>
+    <string name="settings_tool_audit">Action log</string>
+    <string name="settings_tool_audit_subtitle">What Qing asked before acting, and how you answered</string>
+    <string name="tool_audit_empty">Nothing yet. The first time Qing has to ask you, it shows up here.</string>
+    <string name="tool_audit_clear">Clear the log</string>
+    <string name="tool_audit_clear_subtitle">Deletes every entry saved on this device</string>
+    <string name="tool_audit_decision_approved">Allowed</string>
+    <string name="tool_audit_decision_approved_for_session">Allowed for this chat</string>
+    <string name="tool_audit_decision_denied">Refused</string>
+    <string name="tool_audit_decision_timed_out">No answer</string>
 </resources>

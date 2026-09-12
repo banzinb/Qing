@@ -67,6 +67,7 @@ import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Extension
 import androidx.compose.material.icons.rounded.FileUpload
 import androidx.compose.material.icons.rounded.Folder
+import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.Link
 import androidx.compose.material.icons.rounded.NotificationsActive
@@ -143,6 +144,8 @@ import androidx.lifecycle.compose.LifecycleEventEffect
 import com.zhousl.aether.BuildConfig
 
 import com.zhousl.aether.R
+import java.text.SimpleDateFormat
+import java.util.Date
 import java.util.Locale
 import java.time.Instant
 import java.time.LocalDate
@@ -170,6 +173,8 @@ import com.zhousl.aether.data.InstalledSkill
 import com.zhousl.aether.data.PetProfile
 import com.zhousl.aether.data.PetProfileStore
 import com.zhousl.aether.data.SkillUsageStore
+import com.zhousl.aether.data.ToolAuditEntry
+import com.zhousl.aether.data.ToolAuditStore
 import com.zhousl.aether.data.PiExtensionCatalogEntry
 import com.zhousl.aether.data.PiExtensionInstallKind
 import com.zhousl.aether.data.PiPackageCompatibilityIssue
@@ -269,6 +274,7 @@ private enum class SettingsPage {
     EmbeddedTermuxTerminal,
     RuntimeDefaults,
     AgentMode,
+    ToolAudit,
     Statistics,
     MyData,
     RootSetupProgress,
@@ -313,6 +319,7 @@ private fun SettingsPage.depth(): Int = when (this) {
     SettingsPage.AlpineFiles,
     SettingsPage.AlpineChrome,
     SettingsPage.EmbeddedTermuxTerminal,
+    SettingsPage.ToolAudit,
     SettingsPage.RootSetupProgress -> 2
     SettingsPage.ExtensionSettingsCategory -> 2
     SettingsPage.DefaultChatModel,
@@ -901,6 +908,7 @@ fun SettingsScreen(
         SettingsPage.AlpineFiles,
         SettingsPage.AlpineChrome -> SettingsPage.Alpine
         SettingsPage.EmbeddedTermuxTerminal -> SettingsPage.EmbeddedTermux
+        SettingsPage.ToolAudit -> SettingsPage.AgentMode
         SettingsPage.RootSetupProgress -> rootSetupReturnPageValue()
         else -> SettingsPage.Hub
     }
@@ -1520,7 +1528,13 @@ fun SettingsScreen(
                 onConfigureWithRoot = { openRootSetupProgress(SettingsPage.AgentMode) },
                 onStopAgentModeDisplay = onStopAgentModeDisplay,
                 onRefreshAgentModeDisplays = onRefreshAgentModeDisplays,
+                onOpenToolAudit = { currentPage = SettingsPage.ToolAudit.name },
                 onBack = { currentPage = SettingsPage.Hub.name },
+            )
+
+            SettingsPage.ToolAudit -> ToolAuditSettingsPage(
+                title = stringResource(R.string.settings_tool_audit),
+                onBack = { currentPage = SettingsPage.AgentMode.name },
             )
 
             SettingsPage.Statistics -> StatisticsSettingsPage(
@@ -7274,6 +7288,7 @@ private fun AgentModeSettingsPage(
     onConfigureWithRoot: () -> Unit,
     onStopAgentModeDisplay: () -> Unit,
     onRefreshAgentModeDisplays: (AgentModeAuthorizationMethod) -> Unit,
+    onOpenToolAudit: () -> Unit,
     onBack: () -> Unit,
 ) {
     var showAlreadyConfiguredDialog by rememberSaveable { mutableStateOf(false) }
@@ -7552,6 +7567,17 @@ private fun AgentModeSettingsPage(
                 }
             }
         }
+
+        Spacer(Modifier.height(16.dp))
+
+        SettingsCardGroup {
+            SettingsNavRow(
+                icon = Icons.Rounded.History,
+                title = stringResource(R.string.settings_tool_audit),
+                subtitle = stringResource(R.string.settings_tool_audit_subtitle),
+                onClick = onOpenToolAudit,
+            )
+        }
     }
 }
 
@@ -7579,6 +7605,104 @@ private fun toolApprovalModeSubtitle(mode: ToolApprovalMode): String = stringRes
         ToolApprovalMode.Balanced -> R.string.tool_approval_mode_balanced_subtitle
         ToolApprovalMode.Relaxed -> R.string.tool_approval_mode_relaxed_subtitle
         ToolApprovalMode.Off -> R.string.tool_approval_mode_off_subtitle
+    },
+)
+
+private const val ToolAuditVisibleEntries = 50
+
+private val ToolAuditDeniedColor = Color(0xFFD25757)
+
+/**
+ * The approval trail: one row per time Qing had to ask before acting.
+ *
+ * The summary text is redacted before it is written, so nothing here has to be
+ * filtered again on the way out.
+ */
+@Composable
+private fun ToolAuditSettingsPage(
+    title: String,
+    onBack: () -> Unit,
+) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val store = remember(context) { ToolAuditStore(context.applicationContext) }
+    val storedEntries by store.entries.collectAsStateWithLifecycle(initialValue = emptyList())
+    val entries = remember(storedEntries) {
+        storedEntries.asReversed().take(ToolAuditVisibleEntries)
+    }
+    val timestampFormat = remember { SimpleDateFormat("MM-dd HH:mm", Locale.getDefault()) }
+
+    SubPageScaffold(title = title, onBack = onBack) {
+        if (entries.isEmpty()) {
+            SettingsCardGroup {
+                Text(
+                    text = stringResource(R.string.tool_audit_empty),
+                    modifier = Modifier.fillMaxWidth().padding(16.dp),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = AetherOnSurfaceVariant,
+                )
+            }
+        } else {
+            SettingsCardGroup {
+                entries.forEachIndexed { index, entry ->
+                    if (index > 0) CardDivider()
+                    ToolAuditEntryRow(
+                        entry = entry,
+                        timestamp = timestampFormat.format(Date(entry.atMillis)),
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(16.dp))
+
+            SettingsCardGroup {
+                SettingsNavRow(
+                    icon = Icons.Rounded.Delete,
+                    title = stringResource(R.string.tool_audit_clear),
+                    subtitle = stringResource(R.string.tool_audit_clear_subtitle),
+                    showChevron = false,
+                    onClick = { scope.launch { store.clear() } },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ToolAuditEntryRow(
+    entry: ToolAuditEntry,
+    timestamp: String,
+) {
+    Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = toolAuditDecisionLabel(entry.decision),
+                style = MaterialTheme.typography.labelLarge,
+                color = if (entry.decision == "denied") ToolAuditDeniedColor else AetherOnSurface,
+            )
+            Spacer(Modifier.weight(1f))
+            Text(
+                text = timestamp,
+                style = MaterialTheme.typography.bodySmall,
+                color = AetherOnSurfaceVariant,
+            )
+        }
+        Spacer(Modifier.height(4.dp))
+        Text(
+            text = entry.summary.ifBlank { entry.toolName },
+            style = MaterialTheme.typography.bodySmall,
+            color = AetherOnSurfaceVariant,
+        )
+    }
+}
+
+@Composable
+private fun toolAuditDecisionLabel(decision: String): String = stringResource(
+    when (decision) {
+        "approved" -> R.string.tool_audit_decision_approved
+        "approved_for_session" -> R.string.tool_audit_decision_approved_for_session
+        "timed_out" -> R.string.tool_audit_decision_timed_out
+        else -> R.string.tool_audit_decision_denied
     },
 )
 

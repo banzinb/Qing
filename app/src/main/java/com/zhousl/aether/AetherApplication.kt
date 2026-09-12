@@ -22,6 +22,7 @@ import com.zhousl.aether.data.PiExtensionStateRepository
 import com.zhousl.aether.data.PresencePushManager
 import com.zhousl.aether.data.PresencePushRepository
 import com.zhousl.aether.data.PresencePushScheduler
+import com.zhousl.aether.data.ToolAuditStore
 import com.zhousl.aether.data.RootSetupController
 import com.zhousl.aether.data.RuntimeWorkspaceFileBridge
 import com.zhousl.aether.data.ChatStateStore
@@ -210,6 +211,7 @@ class AetherAppRuntime(
         alpineChromeController = alpineChromeController,
         termuxRuntimeOperations = TermuxRuntimeOperations(bashTool),
         diagnosticLogger = diagnosticLogger,
+        toolAuditStore = ToolAuditStore(application),
         toolExecutor = AetherToolExecutor(
             runtimeRouter = runtimeRouter,
             webToolsClient = webToolsClient,

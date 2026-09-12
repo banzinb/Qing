@@ -15,6 +15,9 @@ import com.zhousl.aether.data.LocalRuntimeId
 import com.zhousl.aether.data.PiExtensionStateRepository
 import com.zhousl.aether.data.StreamingStatus
 import com.zhousl.aether.data.SettingsRepository
+import com.zhousl.aether.data.ToolAuditEntry
+import com.zhousl.aether.data.ToolAuditStore
+import com.zhousl.aether.data.summarizeToolAuditEntry
 import com.zhousl.aether.termux.TermuxRuntimeOperations
 import java.util.Base64
 import java.util.concurrent.ConcurrentHashMap
@@ -45,6 +48,7 @@ class PiAgentRunner(
     private val alpineChromeController: AlpineChromeController? = null,
     private val termuxRuntimeOperations: TermuxRuntimeOperations? = null,
     private val diagnosticLogger: AetherDiagnosticLogger = AetherDiagnosticLogger.NoOp,
+    private val toolAuditStore: ToolAuditStore? = null,
 ) {
     suspend fun runTurn(
         settings: AppSettings,
@@ -176,6 +180,32 @@ class PiAgentRunner(
                     }
 
                     /**
+                     * Writes the decision to the on-device audit trail. Failing to
+                     * log must never fail the turn, so the write is best effort.
+                     */
+                    suspend fun recordToolAudit(
+                        request: ToolApprovalRequest,
+                        decision: ToolApprovalDecision,
+                    ) {
+                        val store = toolAuditStore ?: return
+                        runCatching {
+                            store.record(
+                                ToolAuditEntry(
+                                    atMillis = System.currentTimeMillis(),
+                                    toolName = request.toolName,
+                                    scopeKey = request.scopeKey,
+                                    summary = summarizeToolAuditEntry(
+                                        toolName = request.toolName,
+                                        argumentsJson = request.argumentsJson,
+                                        preview = request.preview,
+                                    ),
+                                    decision = decision.storageValue,
+                                ),
+                            )
+                        }
+                    }
+
+                    /**
                      * Hands a parked tool call to the UI, then answers once the user
                      * decides. It runs on its own job because the event handler has to
                      * stay free to deliver the abort that cancels this very prompt.
@@ -185,6 +215,7 @@ class PiAgentRunner(
                         if (!handledToolApprovalIds.add(request.id)) return
                         val job = launch(start = CoroutineStart.LAZY) {
                             val decision = ToolApprovalGate.await(request)
+                            recordToolAudit(request, decision)
                             runCatching {
                                 bridge.sendToolApprovalDecision(
                                     approvalId = request.id,
