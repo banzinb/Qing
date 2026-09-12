@@ -89,6 +89,9 @@ import com.zhousl.aether.data.pi.PiCoreSetupUpdate
 import com.zhousl.aether.data.pi.PiProviderAuthState
 import com.zhousl.aether.data.pi.toProviderPayloadJson
 import com.zhousl.aether.data.pi.toPiOAuthPrompt
+import com.zhousl.aether.data.pi.ToolApprovalDecision
+import com.zhousl.aether.data.pi.ToolApprovalGate
+import com.zhousl.aether.data.ToolApprovalMode
 import com.zhousl.aether.data.pi.toPiProviderEnvironmentVariables
 import com.zhousl.aether.data.pi.toPiModelConfig
 import com.zhousl.aether.data.isProviderSetupValid
@@ -221,6 +224,12 @@ class AetherViewModel(
         refreshTermuxSetup()
         refreshRootSetup()
         refreshImportedPiExtensions()
+
+        viewModelScope.launch {
+            ToolApprovalGate.pending.collect { request ->
+                _uiState.update { current -> current.copy(toolApprovalRequest = request) }
+            }
+        }
 
         viewModelScope.launch {
             settingsRepository.initializeLanguageIfNeeded()
@@ -2982,6 +2991,31 @@ class AetherViewModel(
                     }
                 },
             )
+        }
+    }
+
+    /**
+     * Answers the tool call that is waiting on the user.
+     *
+     * The gate decides whether the answer still applies, so a stale tap from a
+     * prompt the turn already moved past is ignored rather than dismissing a
+     * newer one.
+     */
+    fun submitToolApproval(decision: ToolApprovalDecision) {
+        val requestId = _uiState.value.toolApprovalRequest?.id ?: return
+        if (!ToolApprovalGate.submit(requestId, decision)) return
+        _uiState.update { current ->
+            if (current.toolApprovalRequest?.id == requestId) {
+                current.copy(toolApprovalRequest = null)
+            } else {
+                current
+            }
+        }
+    }
+
+    fun setToolApprovalMode(mode: ToolApprovalMode) {
+        viewModelScope.launch {
+            settingsRepository.updateSettings(_uiState.value.settings.copy(toolApprovalMode = mode))
         }
     }
 

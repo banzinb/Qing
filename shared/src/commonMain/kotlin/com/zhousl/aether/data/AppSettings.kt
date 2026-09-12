@@ -39,6 +39,28 @@ enum class AgentModeAuthorizationMethod(
     }
 }
 
+/**
+ * How eagerly Qing asks before a tool call touches the phone.
+ *
+ * The gate itself lives in the Pi bridge, because that is the side that sees
+ * every tool call. These values travel with the turn payload instead of being
+ * enforced here.
+ */
+@Serializable
+enum class ToolApprovalMode(
+    val storageValue: String,
+) {
+    Off("off"),
+    Relaxed("relaxed"),
+    Balanced("balanced"),
+    Strict("strict");
+
+    companion object {
+        fun fromStorage(value: String?): ToolApprovalMode =
+            entries.firstOrNull { it.storageValue == value?.trim()?.lowercase() } ?: Balanced
+    }
+}
+
 @Serializable
 enum class AppLanguage(
     val storageValue: String,
@@ -207,6 +229,7 @@ data class AppSettings(
     val alpineEnvironmentVariables: List<AlpineEnvironmentVariable> = emptyList(),
     val agentModeAuthorizationEnabled: Boolean = false,
     val agentModeAuthorizationMethod: AgentModeAuthorizationMethod = AgentModeAuthorizationMethod.Shizuku,
+    val toolApprovalMode: ToolApprovalMode = ToolApprovalMode.Balanced,
     val language: AppLanguage = defaultAppLanguage(),
     val themeMode: AppThemeMode = AppThemeMode.System,
     val accent: AppAccent = AppAccent.Teal,
@@ -813,4 +836,3 @@ private fun JsonObject.boolean(name: String, defaultValue: Boolean): Boolean =
 
 private fun JsonObject.long(name: String, defaultValue: Long): Long =
     this[name]?.jsonPrimitive?.longOrNull ?: defaultValue
-

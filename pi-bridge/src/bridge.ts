@@ -90,6 +90,12 @@ import {
 } from "./aether-extensions.js";
 import { bridgeDebug, bridgeDebugEnabled, elapsedMillis } from "./debug.js";
 import { ToolLoopDetector, type LoopCheckResult } from "./tool-loop-detector.js";
+import {
+  approvalRequirement,
+  normalizeApprovalMode,
+  type ApprovalMode,
+  type ApprovalSubject,
+} from "./tool-approval-policy.js";
 
 registerBunOAuthFlows();
 
@@ -161,6 +167,26 @@ interface PendingAetherHostCall {
   timeout: NodeJS.Timeout;
 }
 
+interface PendingToolApproval {
+  sessionId: string;
+  scopeKey: string;
+  resolve: (decision: ToolApprovalDecision) => void;
+  reject: (error: Error) => void;
+}
+
+type ToolApprovalDecision = "approved" | "approved_for_session" | "denied" | "timed_out";
+
+const TOOL_APPROVAL_DECISIONS: readonly ToolApprovalDecision[] = [
+  "approved",
+  "approved_for_session",
+  "denied",
+  "timed_out",
+];
+
+function isToolApprovalDecision(value: string): value is ToolApprovalDecision {
+  return TOOL_APPROVAL_DECISIONS.includes(value as ToolApprovalDecision);
+}
+
 interface AgentSessionState {
   sessionId: string;
   configSignature: string;
@@ -186,6 +212,9 @@ interface AgentSessionState {
   firstAssistantEventAtMillis?: number;
   toolArgsById: Map<string, unknown>;
   loopDetector: ToolLoopDetector;
+  approvalMode: ApprovalMode;
+  /** Scope keys the user waved through for the lifetime of this session. */
+  approvalGrants: Set<string>;
   lastAccessedAt: number;
 }
 
@@ -204,6 +233,7 @@ const pendingAuthPrompts = new Map<
     requestId: string;
   }
 >();
+const pendingToolApprovals = new Map<string, PendingToolApproval>();
 const agentSessions = new Map<string, AgentSessionState>();
 let currentExtensionLoadOptions = {
   disabledExtensionPaths: [] as string[],
@@ -244,6 +274,7 @@ let defaultModelConfig: ModelConfig | undefined;
 let hostToolCounter = 0;
 let runtimeOperationCounter = 0;
 let authPromptCounter = 0;
+let approvalCounter = 0;
 let aetherHostCallCounter = 0;
 let compileCacheFlushed = false;
 
@@ -1540,7 +1571,7 @@ function allowedHostToolDefinitions(rawTools: unknown, platform: "android" | "io
   });
 }
 
-function requestAgentHostTool(
+async function requestAgentHostTool(
   state: AgentSessionState,
   definition: HostToolDefinition,
   toolCallId: string,
@@ -1550,6 +1581,19 @@ function requestAgentHostTool(
 ): Promise<AgentToolResult<JsonObject>> {
   const runRequestId = state.currentRequestId;
   if (!runRequestId) throw new Error(`Host tool ${definition.name} was called outside an active turn.`);
+  const approval = await requestToolApproval(
+    state,
+    {
+      kind: "host_tool",
+      name: definition.name,
+      detail: "",
+      argumentsJson: JSON.stringify(normalizeToolArguments(args)),
+    },
+    signal,
+  );
+  if (approval !== "approved") {
+    throw new Error(approvalDeniedMessage(definition.name, approval));
+  }
   const toolRequestId = `host-tool-${Date.now()}-${++hostToolCounter}`;
   const startedAt = Date.now();
   bridgeDebug("host_tool_request_sent", {
@@ -1620,12 +1664,119 @@ function createAgentHostToolDefinition(
   };
 }
 
-function requestRuntimeOperation(
+function approvalDeniedMessage(name: string, decision: ToolApprovalDecision): string {
+  return decision === "timed_out"
+    ? `The user did not answer the approval prompt for ${name}, so it was not run. Do not retry it on your own; ask the user what to do instead.`
+    : `The user declined ${name}, so it was not run. Do not retry it; ask the user what to do instead.`;
+}
+
+function runtimeApprovalDetail(kind: string, payload: JsonObject): string {
+  if (kind === "bash") return asString(payload.command);
+  return asString(payload.path);
+}
+
+/**
+ * Ask the app to confirm a tool call before it touches anything.
+ *
+ * A refusal is turned into an ordinary tool error by the caller, so the model
+ * learns the user said no instead of seeing a silent no-op and trying again.
+ * Anything unrecognized fails closed: if the app cannot answer, nothing runs.
+ */
+function requestToolApproval(
+  state: AgentSessionState,
+  subject: ApprovalSubject,
+  signal?: AbortSignal,
+): Promise<ToolApprovalDecision> {
+  const requirement = approvalRequirement(subject, state.approvalMode);
+  if (!requirement.required || state.approvalGrants.has(requirement.scopeKey)) {
+    return Promise.resolve("approved");
+  }
+  const requestId = state.currentRequestId;
+  if (!requestId) {
+    bridgeDebug("tool_approval_without_turn", {
+      session_id: state.sessionId,
+      name: subject.name,
+    });
+    return Promise.resolve("denied");
+  }
+  const approvalId = `approval-${Date.now()}-${++approvalCounter}`;
+  bridgeDebug("tool_approval_requested", {
+    approval_id: approvalId,
+    session_id: state.sessionId,
+    kind: subject.kind,
+    name: subject.name,
+    scope_key: requirement.scopeKey,
+  });
+  writeEvent(requestId, "aether_approval_request", {
+    approval_id: approvalId,
+    session_id: state.sessionId,
+    kind: subject.kind,
+    name: subject.name,
+    scope_key: requirement.scopeKey,
+    preview: requirement.preview,
+    arguments_json: requirement.argumentsJson,
+  });
+  return new Promise<ToolApprovalDecision>((resolve, reject) => {
+    const abort = () => {
+      if (!pendingToolApprovals.delete(approvalId)) return;
+      bridgeDebug("tool_approval_aborted", { approval_id: approvalId, name: subject.name });
+      reject(new Error(`Approval for ${subject.name} was cancelled.`));
+    };
+    signal?.addEventListener("abort", abort, { once: true });
+    pendingToolApprovals.set(approvalId, {
+      sessionId: state.sessionId,
+      scopeKey: requirement.scopeKey,
+      resolve: (decision) => {
+        signal?.removeEventListener("abort", abort);
+        if (decision === "approved_for_session") state.approvalGrants.add(requirement.scopeKey);
+        bridgeDebug("tool_approval_resolved", {
+          approval_id: approvalId,
+          name: subject.name,
+          decision,
+        });
+        resolve(decision);
+      },
+      reject: (error) => {
+        signal?.removeEventListener("abort", abort);
+        reject(error);
+      },
+    });
+  });
+}
+
+function resolveToolApproval(payload: JsonObject): boolean {
+  const approvalId = asString(payload.approval_id).trim();
+  const pending = approvalId ? pendingToolApprovals.get(approvalId) : undefined;
+  if (!pending) {
+    bridgeDebug("tool_approval_orphaned", { approval_id: approvalId });
+    return false;
+  }
+  const raw = asString(payload.decision).trim().toLowerCase();
+  pendingToolApprovals.delete(approvalId);
+  pending.resolve(isToolApprovalDecision(raw) ? raw : "denied");
+  return true;
+}
+
+function runtimeApprovalLabel(kind: string): string {
+  if (kind === "bash") return "running a shell command";
+  if (kind === "writeFile") return "writing a file";
+  return `the ${kind} runtime operation`;
+}
+
+async function requestRuntimeOperation(
   state: AgentSessionState,
   kind: string,
   payload: JsonObject,
   options: { signal?: AbortSignal; onChunk?: (chunk: Buffer) => void; input?: Buffer } = {},
 ): Promise<JsonObject> {
+  const approval = await requestToolApproval(
+    state,
+    { kind: "runtime", name: kind, detail: runtimeApprovalDetail(kind, payload) },
+    options.signal,
+  );
+  if (approval !== "approved") {
+    throw new Error(approvalDeniedMessage(runtimeApprovalLabel(kind), approval));
+  }
   const requestId = state.currentRequestId;
   if (!requestId) throw new Error(`Runtime operation ${kind} was called outside an active turn.`);
   const operationId = `runtime-op-${Date.now()}-${++runtimeOperationCounter}`;
@@ -2329,6 +2480,8 @@ async function createNativeAgentSession(
     currentRequestId: "",
     toolArgsById: new Map<string, unknown>(),
     loopDetector: new ToolLoopDetector(),
+    approvalMode: normalizeApprovalMode(payload.approval_mode),
+    approvalGrants: new Set<string>(),
     lastAccessedAt: Date.now(),
   } satisfies AgentSessionState;
   const customTools = [
@@ -2608,6 +2761,7 @@ async function prepareNativeAgentSession(
   }
   existing.lastAccessedAt = Date.now();
   existing.chromeEnabled = platform === "android" && asBoolean(payload.chrome_enabled, false);
+  existing.approvalMode = normalizeApprovalMode(payload.approval_mode);
   setActiveSessionTools(existing);
   return { state: existing, reused: true };
 }
@@ -3152,6 +3306,12 @@ async function abortBridgeTarget(payload: JsonObject): Promise<JsonObject> {
       pendingAuthPrompts.delete(promptId);
     }
   }
+  for (const [approvalId, pending] of pendingToolApprovals) {
+    if (sessionId && pending.sessionId === sessionId) {
+      pending.reject(new Error("Tool approval was cancelled with the Pi session."));
+      pendingToolApprovals.delete(approvalId);
+    }
+  }
   return { aborted: Boolean(aborter || state) };
 }
 
@@ -3181,6 +3341,9 @@ async function handleRequest(request: BridgeRequest): Promise<void> {
       return;
     case "auth_prompt_result":
       writeResponse(id, { accepted: resolveAuthPrompt(payload) });
+      return;
+    case "approval_result":
+      writeResponse(id, { accepted: resolveToolApproval(payload) });
       return;
     case "set_model_config":
       defaultModelConfig = normalizeModelConfig(payload.model_config);

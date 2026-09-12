@@ -151,6 +151,7 @@ import kotlin.math.roundToInt
 import com.zhousl.aether.data.AetherAppExtensionError
 import com.zhousl.aether.data.AgentModeAuthorizationIssue
 import com.zhousl.aether.data.AgentModeAuthorizationMethod
+import com.zhousl.aether.data.ToolApprovalMode
 import com.zhousl.aether.data.AgentModeAuthorizationState
 import com.zhousl.aether.data.AgentModeDisplayState
 import com.zhousl.aether.data.AgentWorkspaceMode
@@ -534,6 +535,7 @@ fun SettingsScreen(
     agentModeAuthorizationEnabled: Boolean,
     agentModeAuthorizationMethod: AgentModeAuthorizationMethod,
     agentModeAuthorizationState: AgentModeAuthorizationState,
+    toolApprovalMode: ToolApprovalMode,
     rootSetupState: RootSetupState,
     rootSetupProgressReturnPage: RootSetupProgressReturnPage?,
     language: AppLanguage,
@@ -603,6 +605,7 @@ fun SettingsScreen(
     onUpdateAccent: (AppAccent) -> Unit,
     onUpdatePetId: (String) -> Unit,
     onUpdatePetVisible: (Boolean) -> Unit,
+    onUpdateToolApprovalMode: (ToolApprovalMode) -> Unit,
     onUpsertProviderConfig: (LlmProviderConfig) -> Unit,
     onRemoveProviderConfig: (String) -> Unit,
     onSetProviderEnabled: (String, Boolean) -> Unit,
@@ -1497,9 +1500,11 @@ fun SettingsScreen(
                 agentModeAuthorizationEnabled = agentModeAuthorizationEnabledValue,
                 agentModeAuthorizationMethod = agentModeAuthorizationMethodValue,
                 agentModeAuthorizationState = agentModeAuthorizationState,
+                toolApprovalMode = toolApprovalMode,
                 rootSetupState = rootSetupState,
                 onAgentModeAuthorizationEnabledChanged = { agentModeAuthorizationEnabledValue = it },
                 onAgentModeAuthorizationMethodChanged = { agentModeAuthorizationMethodValue = it },
+                onToolApprovalModeChanged = onUpdateToolApprovalMode,
                 agentModeDisplayState = agentModeDisplayState,
                 onRequestShizukuPermission = onRequestShizukuPermission,
                 onRefreshAgentModeAuthorization = onRefreshAgentModeAuthorization,
@@ -7249,9 +7254,11 @@ private fun AgentModeSettingsPage(
     agentModeAuthorizationEnabled: Boolean,
     agentModeAuthorizationMethod: AgentModeAuthorizationMethod,
     agentModeAuthorizationState: AgentModeAuthorizationState,
+    toolApprovalMode: ToolApprovalMode,
     rootSetupState: RootSetupState,
     onAgentModeAuthorizationEnabledChanged: (Boolean) -> Unit,
     onAgentModeAuthorizationMethodChanged: (AgentModeAuthorizationMethod) -> Unit,
+    onToolApprovalModeChanged: (ToolApprovalMode) -> Unit,
     agentModeDisplayState: AgentModeDisplayState,
     onRequestShizukuPermission: () -> Unit,
     onRefreshAgentModeAuthorization: (Boolean, AgentModeAuthorizationMethod) -> Unit,
@@ -7516,8 +7523,64 @@ private fun AgentModeSettingsPage(
                 )
             }
         }
+
+        Spacer(Modifier.height(16.dp))
+
+        SettingsCardGroup {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text(
+                    text = stringResource(R.string.settings_tool_approval),
+                    style = MaterialTheme.typography.labelLarge,
+                    color = AetherOnSurface,
+                )
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    text = stringResource(R.string.settings_tool_approval_subtitle),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = AetherOnSurfaceVariant,
+                )
+                Spacer(Modifier.height(10.dp))
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    ToolApprovalSettingsOrder.forEach { mode ->
+                        SettingsChoiceRow(
+                            title = toolApprovalModeTitle(mode),
+                            subtitle = toolApprovalModeSubtitle(mode),
+                            selected = toolApprovalMode == mode,
+                            onClick = { onToolApprovalModeChanged(mode) },
+                        )
+                    }
+                }
+            }
+        }
     }
 }
+
+private val ToolApprovalSettingsOrder = listOf(
+    ToolApprovalMode.Strict,
+    ToolApprovalMode.Balanced,
+    ToolApprovalMode.Relaxed,
+    ToolApprovalMode.Off,
+)
+
+@Composable
+private fun toolApprovalModeTitle(mode: ToolApprovalMode): String = stringResource(
+    when (mode) {
+        ToolApprovalMode.Strict -> R.string.tool_approval_mode_strict
+        ToolApprovalMode.Balanced -> R.string.tool_approval_mode_balanced
+        ToolApprovalMode.Relaxed -> R.string.tool_approval_mode_relaxed
+        ToolApprovalMode.Off -> R.string.tool_approval_mode_off
+    },
+)
+
+@Composable
+private fun toolApprovalModeSubtitle(mode: ToolApprovalMode): String = stringResource(
+    when (mode) {
+        ToolApprovalMode.Strict -> R.string.tool_approval_mode_strict_subtitle
+        ToolApprovalMode.Balanced -> R.string.tool_approval_mode_balanced_subtitle
+        ToolApprovalMode.Relaxed -> R.string.tool_approval_mode_relaxed_subtitle
+        ToolApprovalMode.Off -> R.string.tool_approval_mode_off_subtitle
+    },
+)
 
 @Composable
 private fun RootSetupAlreadyConfiguredDialog(

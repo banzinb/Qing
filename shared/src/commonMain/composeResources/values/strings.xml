@@ -1211,4 +1211,25 @@
     <string name="common_confirm">Confirm</string>
     <string name="data_overview_title">My Data</string>
     <string name="data_overview_drawer_subtitle">Bills / Todos / Clips</string>
+    <string name="tool_approval_title">Confirm this action</string>
+    <string name="tool_approval_message">Qing will not run it until you answer. Refusing is fine — it will ask you what to do instead.</string>
+    <string name="tool_approval_allow">Allow</string>
+    <string name="tool_approval_allow_session">Always in this chat</string>
+    <string name="tool_approval_deny">Refuse</string>
+    <string name="tool_approval_tool_shell">Run a shell command</string>
+    <string name="tool_approval_tool_file_write">Write a file</string>
+    <string name="tool_approval_tool_runtime">Touch files on this device</string>
+    <string name="tool_approval_tool_device">Use the phone</string>
+    <string name="tool_approval_tool_browser">Control the browser</string>
+    <string name="tool_approval_tool_unknown">Run a tool</string>
+    <string name="settings_tool_approval">Confirm before acting</string>
+    <string name="settings_tool_approval_subtitle">When Qing should ask you first</string>
+    <string name="tool_approval_mode_strict">Always</string>
+    <string name="tool_approval_mode_strict_subtitle">Ask before every tool call, including reads</string>
+    <string name="tool_approval_mode_balanced">Risky only</string>
+    <string name="tool_approval_mode_balanced_subtitle">Ask before shell commands, file writes, opening apps and pages, and settings changes</string>
+    <string name="tool_approval_mode_relaxed">System only</string>
+    <string name="tool_approval_mode_relaxed_subtitle">Ask only before shell commands and changes to Qing itself</string>
+    <string name="tool_approval_mode_off">Never</string>
+    <string name="tool_approval_mode_off_subtitle">Run everything without asking</string>
 </resources>

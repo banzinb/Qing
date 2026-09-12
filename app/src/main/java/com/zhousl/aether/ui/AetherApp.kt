@@ -128,6 +128,8 @@ import com.zhousl.aether.data.availableModelOptions
 import com.zhousl.aether.data.isOnboardingComplete
 import com.zhousl.aether.data.resolveAutomaticModelKey
 import com.zhousl.aether.data.LocalRuntimeId
+import com.zhousl.aether.data.pi.ToolApprovalDecision
+import com.zhousl.aether.data.pi.ToolApprovalRequest
 import com.zhousl.aether.platform.LocalReduceMotion
 import com.zhousl.aether.mod.AetherNativeModState
 import com.zhousl.aether.runtime.LocalRuntimeIssue
@@ -1088,6 +1090,7 @@ private fun AetherAppContent(
                     agentModeAuthorizationEnabled = uiState.settings.agentModeAuthorizationEnabled,
                     agentModeAuthorizationMethod = uiState.settings.agentModeAuthorizationMethod,
                     agentModeAuthorizationState = uiState.agentModeAuthorizationState,
+                    toolApprovalMode = uiState.settings.toolApprovalMode,
                     rootSetupState = uiState.rootSetupState,
                     rootSetupProgressReturnPage = uiState.rootSetupProgressReturnPage,
                     language = language,
@@ -1137,6 +1140,7 @@ private fun AetherAppContent(
                     onUpdateAccent = viewModel::updateAppAccent,
                     onUpdatePetId = viewModel::updateAppPet,
                     onUpdatePetVisible = viewModel::updateAppPetVisible,
+                    onUpdateToolApprovalMode = viewModel::setToolApprovalMode,
                     onUpsertProviderConfig = viewModel::upsertProviderConfig,
                     onRemoveProviderConfig = viewModel::removeProviderConfig,
                     onSetProviderEnabled = viewModel::setProviderEnabled,
@@ -1261,6 +1265,12 @@ private fun AetherAppContent(
             }
         }
 
+        uiState.toolApprovalRequest?.let { request ->
+            ToolApprovalDialog(
+                request = request,
+                onDecision = viewModel::submitToolApproval,
+            )
+        }
         if (uiState.isStartupRouteResolved && !uiState.settings.privacyPolicyAccepted) {
             PrivacyPolicyConsentDialog(
                 onOpenPolicy = { openPrivacyPolicy(context) },
@@ -1377,6 +1387,111 @@ private fun PrivacyPolicyConsentDialog(
         },
     )
 }
+
+/**
+ * Asks the user to confirm a tool call before it touches the phone.
+ *
+ * Dismissing is deliberately not wired to a decision: the kernel parks the tool
+ * call until it hears back, so the only ways out are these buttons or the
+ * kernel's own timeout.
+ */
+@Composable
+private fun ToolApprovalDialog(
+    request: ToolApprovalRequest,
+    onDecision: (ToolApprovalDecision) -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = {},
+        containerColor = AetherSurface,
+        titleContentColor = AetherOnSurface,
+        textContentColor = AetherOnSurfaceVariant,
+        title = {
+            Text(
+                text = stringResource(R.string.tool_approval_title),
+                style = MaterialTheme.typography.titleLarge,
+            )
+        },
+        text = {
+            Column {
+                Text(
+                    text = toolApprovalToolLabel(request),
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = AetherOnSurface,
+                )
+                val preview = toolApprovalPreview(request)
+                if (preview.isNotBlank()) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        text = preview,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = AetherOnSurfaceVariant,
+                    )
+                }
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    text = stringResource(R.string.tool_approval_message),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = AetherOnSurfaceVariant,
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { onDecision(ToolApprovalDecision.Approved) },
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = AetherPrimary,
+                    contentColor = Color.White,
+                ),
+            ) {
+                Text(text = stringResource(R.string.tool_approval_allow))
+            }
+        },
+        dismissButton = {
+            Row {
+                TextButton(onClick = { onDecision(ToolApprovalDecision.ApprovedForSession) }) {
+                    Text(
+                        text = stringResource(R.string.tool_approval_allow_session),
+                        color = AetherPrimary,
+                    )
+                }
+                TextButton(onClick = { onDecision(ToolApprovalDecision.Denied) }) {
+                    Text(
+                        text = stringResource(R.string.tool_approval_deny),
+                        color = AetherOnSurfaceVariant,
+                    )
+                }
+            }
+        },
+    )
+}
+
+@Composable
+private fun toolApprovalToolLabel(request: ToolApprovalRequest): String = when {
+    request.subjectKind == "runtime" && request.toolName == "bash" ->
+        stringResource(R.string.tool_approval_tool_shell)
+
+    request.subjectKind == "runtime" && request.toolName == "writeFile" ->
+        stringResource(R.string.tool_approval_tool_file_write)
+
+    request.subjectKind == "runtime" -> stringResource(R.string.tool_approval_tool_runtime)
+    request.toolName == "aether_device_manage" -> stringResource(R.string.tool_approval_tool_device)
+    request.toolName == "browser" -> stringResource(R.string.tool_approval_tool_browser)
+    request.toolName.isNotBlank() -> request.toolName
+    else -> stringResource(R.string.tool_approval_tool_unknown)
+}
+
+private fun toolApprovalPreview(request: ToolApprovalRequest): String {
+    val preview = request.preview.trim()
+    if (preview.isNotBlank() && preview != request.toolName) return preview
+    val arguments = request.argumentsJson.trim()
+    return if (arguments.length > ToolApprovalPreviewLimit) {
+        arguments.take(ToolApprovalPreviewLimit) + "…"
+    } else {
+        arguments
+    }
+}
+
+private const val ToolApprovalPreviewLimit = 300
 
 @Composable
 private fun AppUpdateAvailableDialog(

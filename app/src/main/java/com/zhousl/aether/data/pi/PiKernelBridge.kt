@@ -448,6 +448,26 @@ class PiKernelBridge(
         )
     }
 
+    /**
+     * Answers a tool call the kernel parked for user confirmation.
+     *
+     * The decision stays a plain string so the kernel keeps its own vocabulary;
+     * "approved_for_session" is the one that earns a session-wide pass.
+     */
+    suspend fun sendToolApprovalDecision(
+        approvalId: String,
+        decision: String,
+    ) {
+        request(
+            type = "approval_result",
+            payload = JSONObject()
+                .put("approval_id", approvalId)
+                .put("decision", decision),
+            timeoutMillis = PiBridgePingTimeoutMillis,
+            abortOnCancellation = false,
+        )
+    }
+
     suspend fun sendHostToolProgress(payload: JSONObject) {
         request(
             type = "host_tool_progress",

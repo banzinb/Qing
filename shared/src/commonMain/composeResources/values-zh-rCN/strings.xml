@@ -1209,4 +1209,25 @@
     <string name="common_confirm">确定</string>
     <string name="data_overview_title">我的数据</string>
     <string name="data_overview_drawer_subtitle">账单 · 待办 · 剪藏</string>
+    <string name="tool_approval_title">确认这次操作</string>
+    <string name="tool_approval_message">你不回答，青就不会执行。拒绝也没关系——它会改问你接下来怎么做。</string>
+    <string name="tool_approval_allow">允许</string>
+    <string name="tool_approval_allow_session">本次对话都允许</string>
+    <string name="tool_approval_deny">拒绝</string>
+    <string name="tool_approval_tool_shell">执行命令行</string>
+    <string name="tool_approval_tool_file_write">写入文件</string>
+    <string name="tool_approval_tool_runtime">操作本机文件</string>
+    <string name="tool_approval_tool_device">操作手机</string>
+    <string name="tool_approval_tool_browser">操作浏览器</string>
+    <string name="tool_approval_tool_unknown">执行工具</string>
+    <string name="settings_tool_approval">动手前先问</string>
+    <string name="settings_tool_approval_subtitle">青在什么时候需要先征得你同意</string>
+    <string name="tool_approval_mode_strict">每次都问</string>
+    <string name="tool_approval_mode_strict_subtitle">任何工具调用都先问，包括只是读一下</string>
+    <string name="tool_approval_mode_balanced">只问要紧的</string>
+    <string name="tool_approval_mode_balanced_subtitle">执行命令行、写文件、打开应用或网页、改设置之前先问</string>
+    <string name="tool_approval_mode_relaxed">只问系统级</string>
+    <string name="tool_approval_mode_relaxed_subtitle">只在执行命令行、改动青自身之前先问</string>
+    <string name="tool_approval_mode_off">从不询问</string>
+    <string name="tool_approval_mode_off_subtitle">所有操作直接执行</string>
 </resources>

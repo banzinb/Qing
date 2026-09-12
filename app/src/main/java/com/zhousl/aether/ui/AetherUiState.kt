@@ -18,6 +18,7 @@ import com.zhousl.aether.data.ScheduledTask
 import com.zhousl.aether.data.SessionExecutionState
 import com.zhousl.aether.data.pi.PiCoreSetupState
 import com.zhousl.aether.data.pi.PiProviderAuthState
+import com.zhousl.aether.data.pi.ToolApprovalRequest
 import com.zhousl.aether.runtime.AlpineSetupProgress
 import com.zhousl.aether.runtime.LocalRuntimeSetupState
 import com.zhousl.aether.termux.TermuxSetupState
@@ -279,6 +280,7 @@ data class AetherUiState(
     val pendingAssistantText: String = "",
     val pendingStatusText: String = "",
     val pendingStatusDetail: String = "",
+    val toolApprovalRequest: ToolApprovalRequest? = null,
     val compactingSessionId: String? = null,
     val sessionExecutionStates: Map<String, SessionExecutionState> = emptyMap(),
     val unviewedCompletedSessionIds: Set<String> = emptySet(),

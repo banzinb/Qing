@@ -135,6 +135,7 @@ class SettingsRepository(
                 preferences[AGENT_MODE_AUTHORIZATION_METHOD],
                 defaultValue = defaultAgentModeAuthorizationMethod(context),
             ),
+            toolApprovalMode = ToolApprovalMode.fromStorage(preferences[TOOL_APPROVAL_MODE]),
             language = AppLanguage.fromStorage(preferences[LANGUAGE]),
             themeMode = AppThemeMode.fromStorage(preferences[THEME_MODE]),
             accent = AppAccent.fromStorage(preferences[ACCENT]),
@@ -403,6 +404,7 @@ class SettingsRepository(
                 serializeAlpineEnvironmentVariables(settings.alpineEnvironmentVariables)
             it[AGENT_MODE_AUTHORIZATION_ENABLED] = settings.agentModeAuthorizationEnabled
             it[AGENT_MODE_AUTHORIZATION_METHOD] = settings.agentModeAuthorizationMethod.storageValue
+            it[TOOL_APPROVAL_MODE] = settings.toolApprovalMode.storageValue
             it[LANGUAGE] = settings.language.storageValue
             it[THEME_MODE] = settings.themeMode.storageValue
             it[ACCENT] = settings.accent.storageValue
@@ -502,6 +504,7 @@ class SettingsRepository(
                 serializeAlpineEnvironmentVariables(settings.alpineEnvironmentVariables)
             it[AGENT_MODE_AUTHORIZATION_ENABLED] = settings.agentModeAuthorizationEnabled
             it[AGENT_MODE_AUTHORIZATION_METHOD] = settings.agentModeAuthorizationMethod.storageValue
+            it[TOOL_APPROVAL_MODE] = settings.toolApprovalMode.storageValue
             it[LANGUAGE] = settings.language.storageValue
             it[THEME_MODE] = settings.themeMode.storageValue
             it[ACCENT] = settings.accent.storageValue
@@ -606,6 +609,7 @@ class SettingsRepository(
             booleanPreferencesKey("agent_mode_authorization_enabled")
         val AGENT_MODE_AUTHORIZATION_METHOD =
             stringPreferencesKey("agent_mode_authorization_method")
+        val TOOL_APPROVAL_MODE = stringPreferencesKey("tool_approval_mode")
         val LANGUAGE = stringPreferencesKey("language")
         val THEME_MODE = stringPreferencesKey("theme_mode")
         val ACCENT = stringPreferencesKey("accent")

@@ -129,6 +129,7 @@ class PiAgentRunner(
                     put("runtime", runtimeId.storageValue)
                     put("platform", "android")
                     put("chrome_enabled", chromeEnabled)
+                    put("approval_mode", settings.toolApprovalMode.storageValue)
                     put("reasoning", settings.toPiThinkingLevel())
                     put(
                         "disabled_extension_paths",
@@ -154,6 +155,8 @@ class PiAgentRunner(
                     val pendingRuntimeOperationChunks =
                         ConcurrentHashMap<String, ConcurrentHashMap<Int, ByteArray>>()
                     val handledHostToolRequestIds = ConcurrentHashMap.newKeySet<String>()
+                    val toolApprovalJobs = ConcurrentHashMap<String, Job>()
+                    val handledToolApprovalIds = ConcurrentHashMap.newKeySet<String>()
                     val sequentialHostToolRequests = Channel<JSONObject>(Channel.UNLIMITED)
                     val sequentialHostToolWorker = launch {
                         for (requestPayload in sequentialHostToolRequests) {
@@ -170,6 +173,27 @@ class PiAgentRunner(
                                 updatedSystemPrompt = prompt,
                             )
                         }
+                    }
+
+                    /**
+                     * Hands a parked tool call to the UI, then answers once the user
+                     * decides. It runs on its own job because the event handler has to
+                     * stay free to deliver the abort that cancels this very prompt.
+                     */
+                    suspend fun dispatchToolApprovalRequest(eventPayload: JSONObject) {
+                        val request = ToolApprovalRequest.fromPayload(eventPayload) ?: return
+                        if (!handledToolApprovalIds.add(request.id)) return
+                        val job = launch(start = CoroutineStart.LAZY) {
+                            val decision = ToolApprovalGate.await(request)
+                            runCatching {
+                                bridge.sendToolApprovalDecision(
+                                    approvalId = request.id,
+                                    decision = decision.storageValue,
+                                )
+                            }
+                        }
+                        toolApprovalJobs[request.id] = job
+                        job.start()
                     }
 
                     suspend fun dispatchHostToolRequest(eventPayload: JSONObject) {
@@ -338,6 +362,8 @@ class PiAgentRunner(
                                 onToolEvent(eventPayload.toToolEvent(isRunning = false))
 
                             "host_tool_request" -> dispatchHostToolRequest(eventPayload)
+
+                            "aether_approval_request" -> dispatchToolApprovalRequest(eventPayload)
 
                             "aether_host_call" -> dispatchAetherHostCall(eventPayload, resolvedSessionId)
 
