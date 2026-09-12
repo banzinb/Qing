@@ -7,6 +7,7 @@ import com.zhousl.aether.data.AppSettings
 import com.zhousl.aether.data.AppUpdateRelease
 import com.zhousl.aether.data.ChatUsageStatisticsSnapshot
 import com.zhousl.aether.data.InstalledSkill
+import com.zhousl.aether.data.HealthCheckItem
 import com.zhousl.aether.data.LlmProviderConfig
 import com.zhousl.aether.data.McpServerConfig
 import com.zhousl.aether.data.InstalledPiExtension
@@ -281,6 +282,8 @@ data class AetherUiState(
     val pendingStatusText: String = "",
     val pendingStatusDetail: String = "",
     val toolApprovalRequest: ToolApprovalRequest? = null,
+    val healthChecks: List<HealthCheckItem> = emptyList(),
+    val settingsRequestedPage: String = "",
     val compactingSessionId: String? = null,
     val sessionExecutionStates: Map<String, SessionExecutionState> = emptyMap(),
     val unviewedCompletedSessionIds: Set<String> = emptySet(),

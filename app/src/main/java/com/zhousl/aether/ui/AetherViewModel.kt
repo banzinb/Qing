@@ -1,9 +1,17 @@
 package com.zhousl.aether.ui
 
 import android.app.Application
+import android.Manifest
+import android.app.AlarmManager
+import android.content.Context
+import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
+import android.os.PowerManager
 import android.provider.OpenableColumns
 import android.view.Surface
+import androidx.core.app.NotificationManagerCompat
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import java.io.FileOutputStream
@@ -14,6 +22,8 @@ import com.zhousl.aether.data.ActiveSkillContext
 import com.zhousl.aether.data.AetherAnalytics
 import com.zhousl.aether.data.AetherModOperationDecision
 import com.zhousl.aether.data.AetherModServiceMethod
+import com.zhousl.aether.data.HealthSnapshot
+import com.zhousl.aether.data.buildHealthReport
 import com.zhousl.aether.data.AppUpdateManager
 import com.zhousl.aether.data.AutomaticModelPurpose
 import com.zhousl.aether.data.AgentModeAuthorizationMethod
@@ -1752,8 +1762,49 @@ class AetherViewModel(
         _uiState.update { current -> current.withFinalizedPausedSession(finalizedSession, executionStates) }
     }
 
-    fun openSettings() {
-        _uiState.update { it.copy(currentScreen = AppScreen.Settings) }
+    fun openSettings(page: String = "") {
+        _uiState.update {
+            it.copy(currentScreen = AppScreen.Settings, settingsRequestedPage = page)
+        }
+    }
+
+    fun consumeSettingsRequestedPage() {
+        if (_uiState.value.settingsRequestedPage.isEmpty()) return
+        _uiState.update { it.copy(settingsRequestedPage = "") }
+    }
+
+    /**
+     * Ran when the self-check page opens. Every value is a local read, so this
+     * stays cheap and never touches the network.
+     */
+    fun refreshHealthReport() {
+        val context = getApplication<Application>()
+        val snapshot = _uiState.value
+        val powerManager = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
+        val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as? AlarmManager
+        val health = HealthSnapshot(
+            providerCount = snapshot.providerConfigs.size,
+            defaultModel = snapshot.settings.modelId,
+            alpineReady = snapshot.alpineSetupState.isReady,
+            termuxReady = snapshot.termuxSetupState.isReady,
+            agentModeEnabled = snapshot.settings.agentModeAuthorizationEnabled,
+            agentModeReady = snapshot.agentModeAuthorizationState.isReady,
+            notificationsAllowed = areNotificationsAllowed(context),
+            batteryUnrestricted = powerManager
+                ?.isIgnoringBatteryOptimizations(context.packageName)
+                ?: true,
+            exactAlarmAllowed = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                alarmManager?.canScheduleExactAlarms() ?: true
+            } else {
+                true
+            },
+            locationGranted = isPermissionGranted(context, Manifest.permission.ACCESS_FINE_LOCATION) ||
+                isPermissionGranted(context, Manifest.permission.ACCESS_COARSE_LOCATION),
+            contactsGranted = isPermissionGranted(context, Manifest.permission.READ_CONTACTS),
+            calendarGranted = isPermissionGranted(context, Manifest.permission.READ_CALENDAR),
+            lastCrashAtMillis = diagnosticLogger.lastCrashMillis(),
+        )
+        _uiState.update { it.copy(healthChecks = buildHealthReport(health)) }
     }
 
     fun openPcCodex() {
@@ -6927,3 +6978,13 @@ private fun JSONArray?.toStringList(): List<String> {
         }
     }.distinct()
 }
+
+private fun isPermissionGranted(context: Context, permission: String): Boolean =
+    ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
+
+private fun areNotificationsAllowed(context: Context): Boolean =
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        isPermissionGranted(context, Manifest.permission.POST_NOTIFICATIONS)
+    } else {
+        NotificationManagerCompat.from(context).areNotificationsEnabled()
+    }

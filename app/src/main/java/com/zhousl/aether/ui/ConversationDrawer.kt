@@ -60,6 +60,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.BarChart
+import androidx.compose.material.icons.rounded.Bolt
 import androidx.compose.material.icons.rounded.ArrowDropDown
 import androidx.compose.material.icons.rounded.ArrowUpward
 import androidx.compose.material.icons.rounded.AttachFile
@@ -192,6 +193,8 @@ fun ConversationDrawer(
     onSettingsSelected: () -> Unit,
     onPcCodexSelected: () -> Unit,
     onDataOverviewSelected: () -> Unit,
+    usageCard: UsageCardSummary?,
+    onUsageCardSelected: () -> Unit,
 ) {
     AetherConversationDrawer(
         sessions = sessions.map { session ->
@@ -225,6 +228,13 @@ fun ConversationDrawer(
         extraContent = { dismissSearch ->
             AetherExtensionSlot(AetherExtensionSlotDrawer)
             AetherExtensionSlot(AetherExtensionSlotDrawerListEnd)
+            usageCard?.let { summary ->
+                UsageCardDrawerItem(
+                    summary = summary,
+                    onClick = onUsageCardSelected,
+                    modifier = Modifier.padding(top = 10.dp),
+                )
+            }
             DataOverviewDrawerLauncher(
                 onClick = onDataOverviewSelected,
                 modifier = Modifier.padding(top = 10.dp),
@@ -726,6 +736,76 @@ private fun DrawerFloatingChatButton(
             style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Medium),
             color = Color.White,
         )
+    }
+}
+
+/**
+ * Today's spend, one line, tappable straight into the statistics page. Shown
+ * only when there is something to show.
+ */
+@Composable
+private fun UsageCardDrawerItem(
+    summary: UsageCardSummary,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val subtitle = if (summary.todayTurnCount == 0) {
+        stringResource(R.string.usage_card_empty)
+    } else {
+        buildString {
+            append(
+                stringResource(
+                    R.string.usage_card_tokens,
+                    formatCompactTokens(summary.todayTokens),
+                    summary.todayTurnCount,
+                )
+            )
+            summary.todayAverageTokensPerSecond?.let { speed ->
+                append(" · ")
+                append(stringResource(R.string.usage_card_speed, formatTokensPerSecond(speed)))
+            }
+        }
+    }
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(18.dp))
+            .background(AetherSurfaceHigh)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Box(
+            modifier = Modifier
+                .size(34.dp)
+                .clip(CircleShape)
+                .background(AetherSurfaceHigher),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.Bolt,
+                contentDescription = null,
+                tint = AetherOnSurface,
+                modifier = Modifier.size(18.dp),
+            )
+        }
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = stringResource(R.string.usage_card_title),
+                style = MaterialTheme.typography.bodyLarge,
+                color = AetherOnSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = AetherOnSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
     }
 }
 

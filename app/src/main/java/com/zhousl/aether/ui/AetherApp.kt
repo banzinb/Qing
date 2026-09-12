@@ -831,6 +831,15 @@ private fun AetherAppContent(
                         viewModel.openDataOverview()
                     }
                 },
+                usageCard = remember(uiState.usageStatisticsSnapshots) {
+                    buildUsageCardSummary(uiState.usageStatisticsSnapshots)
+                },
+                onUsageCardSelected = {
+                    scope.launch {
+                        drawerState.close()
+                        viewModel.openSettings(SettingsRoutes.Statistics)
+                    }
+                },
             )
         },
     ) {
@@ -1250,6 +1259,10 @@ private fun AetherAppContent(
                     onForceUpdateCheckForTesting = viewModel::forceUpdateCheckForTesting,
                     onSetDeveloperTermuxReadyOverride = viewModel::setDeveloperTermuxReadyOverride,
                     onDownloadAndInstallUpdate = viewModel::downloadAndInstallUpdate,
+                    healthChecks = uiState.healthChecks,
+                    onRefreshHealthChecks = viewModel::refreshHealthReport,
+                    initialPage = uiState.settingsRequestedPage,
+                    onInitialPageConsumed = viewModel::consumeSettingsRequestedPage,
                             onBack = viewModel::closeSettings,
                         )
                     }

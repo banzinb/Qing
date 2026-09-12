@@ -124,6 +124,13 @@ class AetherDiagnosticLogger private constructor(
                 .orEmpty()
         }
 
+    /** When the last crash happened, or 0 when there is no breadcrumb. */
+    fun lastCrashMillis(): Long {
+        val raw = readLastCrashText()
+        if (raw.isBlank()) return 0L
+        return runCatching { JSONObject(raw).optLong("timestampMillis", 0L) }.getOrDefault(0L)
+    }
+
     fun installUncaughtExceptionHandler() {
         if (eventsFile == null) return
         val previous = Thread.getDefaultUncaughtExceptionHandler()

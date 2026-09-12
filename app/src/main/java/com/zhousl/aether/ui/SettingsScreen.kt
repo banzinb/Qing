@@ -70,6 +70,7 @@ import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.MyLocation
+import androidx.compose.material.icons.rounded.MonitorHeart
 import androidx.compose.material.icons.rounded.Link
 import androidx.compose.material.icons.rounded.NotificationsActive
 import androidx.compose.material.icons.rounded.Person
@@ -166,6 +167,17 @@ import com.zhousl.aether.data.AgentModeDisplayState
 import com.zhousl.aether.data.AgentWorkspaceMode
 import com.zhousl.aether.data.AutomaticModelPurpose
 import com.zhousl.aether.data.ChatUsageStatisticsSnapshot
+import com.zhousl.aether.data.HealthCheckId
+import com.zhousl.aether.data.HealthCheckItem
+import com.zhousl.aether.data.HealthStatus
+import com.zhousl.aether.data.HealthAgentModeDisabled
+import com.zhousl.aether.data.HealthAgentModeNotAuthorized
+import com.zhousl.aether.data.HealthPermissionCalendar
+import com.zhousl.aether.data.HealthPermissionContacts
+import com.zhousl.aether.data.HealthPermissionLocation
+import com.zhousl.aether.data.HealthRuntimeAlpine
+import com.zhousl.aether.data.HealthRuntimeBoth
+import com.zhousl.aether.data.HealthRuntimeTermux
 import com.zhousl.aether.data.AppLanguage
 import com.zhousl.aether.data.AppAccent
 import com.zhousl.aether.data.AppThemeMode
@@ -225,6 +237,7 @@ import com.zhousl.aether.ui.theme.AetherOnPrimary
 import com.zhousl.aether.ui.theme.AetherOnSurfaceVariant
 import com.zhousl.aether.ui.theme.AetherPrimary
 import com.zhousl.aether.ui.theme.AetherScrim
+import com.zhousl.aether.ui.theme.AetherSettingsIcon
 import com.zhousl.aether.ui.theme.AetherSettingsBackground
 import com.zhousl.aether.ui.theme.AetherSurface
 import com.zhousl.aether.ui.theme.AetherSurfaceHigh
@@ -282,6 +295,7 @@ private enum class SettingsPage {
     AgentMode,
     ToolAudit,
     DevicePermissions,
+    Health,
     Statistics,
     MyData,
     RootSetupProgress,
@@ -309,6 +323,7 @@ private fun SettingsPage.depth(): Int = when (this) {
     SettingsPage.EmbeddedTermux,
     SettingsPage.RuntimeDefaults,
     SettingsPage.AgentMode,
+    SettingsPage.Health,
     SettingsPage.Statistics,
     SettingsPage.MyData,
     SettingsPage.Developer,
@@ -334,6 +349,15 @@ private fun SettingsPage.depth(): Int = when (this) {
     SettingsPage.DefaultTitleModel,
     SettingsPage.DefaultNamingModel,
     SettingsPage.DefaultCompactingModel -> 3
+}
+
+/**
+ * Deep links into settings from other screens. Each value has to match the
+ * name of a [SettingsPage] entry.
+ */
+object SettingsRoutes {
+    const val Health = "Health"
+    const val Statistics = "Statistics"
 }
 
 private fun SettingsPage.toRootSetupProgressReturnPage(): RootSetupProgressReturnPage =
@@ -693,6 +717,10 @@ fun SettingsScreen(
     onForceUpdateCheckForTesting: () -> Unit,
     onSetDeveloperTermuxReadyOverride: (Boolean) -> Unit,
     onDownloadAndInstallUpdate: () -> Unit,
+    healthChecks: List<HealthCheckItem> = emptyList(),
+    onRefreshHealthChecks: () -> Unit = {},
+    initialPage: String = "",
+    onInitialPageConsumed: () -> Unit = {},
     onBack: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -864,6 +892,16 @@ fun SettingsScreen(
     // Local page navigation
     var currentPage by rememberSaveable { mutableStateOf(SettingsPage.Hub.name) }
     val page = SettingsPage.valueOf(currentPage)
+
+    // A deep link from the drawer (usage card) or anywhere else that sends the
+    // user straight to one page. The request is consumed so going back later
+    // does not bounce them here again.
+    LaunchedEffect(initialPage) {
+        if (initialPage.isBlank()) return@LaunchedEffect
+        val requested = SettingsPage.entries.firstOrNull { it.name == initialPage }
+        onInitialPageConsumed()
+        if (requested != null) currentPage = requested.name
+    }
     var rootSetupReturnPage by rememberSaveable { mutableStateOf(SettingsPage.Termux.name) }
     var selectedPiPackageSourceValue by rememberSaveable { mutableStateOf("") }
     var selectedExtensionSettingsId by rememberSaveable { mutableStateOf("") }
@@ -1002,6 +1040,7 @@ fun SettingsScreen(
                 scheduledTaskCount = scheduledTasks.size,
                 presencePushEnabled = presenceSettings.enabled,
                 statisticsSummary = buildSettingsStatisticsSummary(usageStatisticsSnapshots),
+                healthSummary = healthSummaryLabel(healthChecks),
                 onReplayOnboarding = ::persistAndReplayOnboarding,
                 onNavigate = { page ->
                     if (page == SettingsPage.AgentMode && !termuxSetupState.isReady && !alpineSetupState.isReady) {
@@ -1558,6 +1597,15 @@ fun SettingsScreen(
                 onBack = { currentPage = SettingsPage.Hub.name },
             )
 
+            SettingsPage.Health -> HealthSettingsPage(
+                title = stringResource(R.string.settings_health),
+                checks = healthChecks,
+                onRefresh = onRefreshHealthChecks,
+                onNavigate = { page -> currentPage = page.name },
+                onExportLogs = onExportLogs,
+                onBack = { currentPage = SettingsPage.Hub.name },
+            )
+
             SettingsPage.MyData -> MyDataSettingsPage(
                 title = stringResource(R.string.settings_my_data),
                 petId = petIdValue,
@@ -1637,6 +1685,7 @@ private fun SettingsHub(
     scheduledTaskCount: Int,
     presencePushEnabled: Boolean,
     statisticsSummary: String,
+    healthSummary: String,
     onReplayOnboarding: () -> Unit,
     onNavigate: (SettingsPage) -> Unit,
     onBack: () -> Unit,
@@ -1838,6 +1887,13 @@ private fun SettingsHub(
                     title = stringResource(R.string.settings_statistics),
                     subtitle = statisticsSummary.ifBlank { stringResource(R.string.settings_statistics_empty) },
                     onClick = { onNavigate(SettingsPage.Statistics) },
+                )
+                CardDivider()
+                SettingsNavRow(
+                    icon = Icons.Rounded.MonitorHeart,
+                    title = stringResource(R.string.settings_health),
+                    subtitle = healthSummary,
+                    onClick = { onNavigate(SettingsPage.Health) },
                 )
             }
 
@@ -7726,6 +7782,253 @@ private fun toolAuditDecisionLabel(decision: String): String = stringResource(
         "approved_for_session" -> R.string.tool_audit_decision_approved_for_session
         "timed_out" -> R.string.tool_audit_decision_timed_out
         else -> R.string.tool_audit_decision_denied
+    },
+)
+
+/**
+ * The one-line state of the self-check, shown both on the hub row and at the
+ * top of the page itself.
+ */
+@Composable
+private fun healthSummaryLabel(checks: List<HealthCheckItem>): String {
+    if (checks.isEmpty()) return stringResource(R.string.health_summary_unknown)
+    val attention = checks.count { it.status == HealthStatus.Attention }
+    return if (attention == 0) {
+        stringResource(R.string.health_summary_all_ok)
+    } else {
+        stringResource(R.string.health_summary_attention, attention)
+    }
+}
+
+/**
+ * The self-check page. Each row is something that has actually broken for
+ * someone, worded so the next step is obvious. Rows that are fine are still
+ * listed, so an empty-ish page never leaves the user wondering what was tested.
+ */
+@Composable
+private fun HealthSettingsPage(
+    title: String,
+    checks: List<HealthCheckItem>,
+    onRefresh: () -> Unit,
+    onNavigate: (SettingsPage) -> Unit,
+    onExportLogs: () -> Unit,
+    onBack: () -> Unit,
+) {
+    val context = LocalContext.current
+
+    // Re-read everything each time the page opens: permissions and runtime
+    // state change while the app is in the background.
+    LaunchedEffect(Unit) { onRefresh() }
+
+    SubPageScaffold(
+        title = title,
+        onBack = onBack,
+        trailingIcon = Icons.Rounded.Refresh,
+        trailingContentDescription = stringResource(R.string.health_refresh),
+        onTrailingAction = onRefresh,
+    ) {
+        SettingsCardGroup {
+            Text(
+                text = healthSummaryLabel(checks),
+                modifier = Modifier.fillMaxWidth().padding(16.dp),
+                style = MaterialTheme.typography.bodyMedium,
+                color = AetherOnSurface,
+            )
+        }
+
+        Spacer(Modifier.height(16.dp))
+
+        SettingsCardGroup {
+            checks.forEachIndexed { index, item ->
+                if (index > 0) CardDivider()
+                HealthCheckRow(
+                    item = item,
+                    onClick = healthCheckAction(item.id, context, onNavigate),
+                )
+            }
+        }
+
+        Spacer(Modifier.height(16.dp))
+
+        SettingsCardGroup {
+            SettingsNavRow(
+                icon = Icons.Rounded.FileUpload,
+                title = stringResource(R.string.health_export_logs),
+                subtitle = stringResource(R.string.health_export_logs_subtitle),
+                showChevron = false,
+                onClick = onExportLogs,
+            )
+        }
+    }
+}
+
+/**
+ * Where tapping a row goes, or null when the row is informational only. The
+ * three system rows open the relevant Android settings screen, because that is
+ * the only place they can be changed.
+ */
+private fun healthCheckAction(
+    id: HealthCheckId,
+    context: Context,
+    onNavigate: (SettingsPage) -> Unit,
+): (() -> Unit)? = when (id) {
+    HealthCheckId.Model -> SettingsPage.Providers
+    HealthCheckId.Runtime -> SettingsPage.Alpine
+    HealthCheckId.AgentMode -> SettingsPage.AgentMode
+    HealthCheckId.PhonePermissions -> SettingsPage.DevicePermissions
+    else -> null
+}?.let { page ->
+    { onNavigate(page) }
+} ?: when (id) {
+    HealthCheckId.Notifications -> ({ openQingNotificationSettings(context) })
+    HealthCheckId.Battery -> ({ openQingIgnoreBatteryOptimizations(context) })
+    HealthCheckId.ExactAlarm -> ({ openQingExactAlarmSettings(context) })
+    else -> null
+}
+
+@Composable
+private fun HealthCheckRow(
+    item: HealthCheckItem,
+    onClick: (() -> Unit)?,
+) {
+    val needsAttention = item.status == HealthStatus.Attention
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
+            .padding(horizontal = 16.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            imageVector = if (needsAttention) Icons.Rounded.WarningAmber else Icons.Rounded.Check,
+            contentDescription = null,
+            tint = if (needsAttention) ToolAuditDeniedColor else AetherSettingsIcon,
+            modifier = Modifier.size(22.dp),
+        )
+        Spacer(Modifier.width(14.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = healthCheckTitle(item.id),
+                style = MaterialTheme.typography.bodyLarge,
+                color = AetherOnSurface,
+            )
+            Spacer(Modifier.height(2.dp))
+            Text(
+                text = healthCheckDetail(item),
+                style = MaterialTheme.typography.bodySmall,
+                color = AetherOnSurfaceVariant,
+            )
+        }
+        if (onClick != null) {
+            Spacer(Modifier.width(8.dp))
+            Icon(
+                imageVector = Icons.AutoMirrored.Rounded.ArrowForwardIos,
+                contentDescription = null,
+                tint = AetherOnSurfaceVariant.copy(alpha = 0.5f),
+                modifier = Modifier.size(14.dp),
+            )
+        }
+    }
+}
+
+@Composable
+private fun healthCheckTitle(id: HealthCheckId): String = stringResource(
+    when (id) {
+        HealthCheckId.Model -> R.string.health_check_model_title
+        HealthCheckId.Runtime -> R.string.health_check_runtime_title
+        HealthCheckId.AgentMode -> R.string.health_check_agent_mode_title
+        HealthCheckId.Notifications -> R.string.health_check_notifications_title
+        HealthCheckId.Battery -> R.string.health_check_battery_title
+        HealthCheckId.ExactAlarm -> R.string.health_check_exact_alarm_title
+        HealthCheckId.PhonePermissions -> R.string.health_check_phone_permissions_title
+        HealthCheckId.LastCrash -> R.string.health_check_last_crash_title
+    },
+)
+
+/**
+ * Turns the language-neutral [HealthCheckItem.detail] token into a sentence in
+ * the current locale.
+ */
+@Composable
+private fun healthCheckDetail(item: HealthCheckItem): String {
+    val crashFormat = remember { SimpleDateFormat("MM-dd HH:mm", Locale.getDefault()) }
+    return when (item.id) {
+        HealthCheckId.Model -> if (item.detail.isBlank()) {
+            stringResource(R.string.health_check_model_attention)
+        } else {
+            stringResource(R.string.health_check_model_ok, item.detail)
+        }
+
+        HealthCheckId.Runtime -> when (item.detail) {
+            HealthRuntimeAlpine -> stringResource(R.string.health_check_runtime_ok_alpine)
+            HealthRuntimeTermux -> stringResource(R.string.health_check_runtime_ok_termux)
+            HealthRuntimeBoth -> stringResource(R.string.health_check_runtime_ok_both)
+            else -> stringResource(R.string.health_check_runtime_attention)
+        }
+
+        HealthCheckId.AgentMode -> when (item.detail) {
+            HealthAgentModeNotAuthorized -> stringResource(R.string.health_check_agent_mode_attention)
+            HealthAgentModeDisabled -> stringResource(R.string.health_check_agent_mode_ok_off)
+            else -> stringResource(R.string.health_check_agent_mode_ok)
+        }
+
+        HealthCheckId.PhonePermissions -> if (item.detail.isBlank()) {
+            stringResource(R.string.health_check_phone_permissions_ok)
+        } else {
+            val separator = stringResource(R.string.health_list_separator)
+            val missing = item.detail
+                .split(",")
+                .map { it.trim() }
+                .filter { it.isNotEmpty() }
+            val labels = missing.map { permission -> healthPermissionLabel(permission) }
+            stringResource(
+                R.string.health_check_phone_permissions_attention,
+                labels.joinToString(separator),
+            )
+        }
+
+        HealthCheckId.LastCrash -> if (item.detail.toLongOrNull()?.let { it > 0L } == true) {
+            stringResource(
+                R.string.health_check_last_crash_attention,
+                crashFormat.format(Date(item.detail.toLong())),
+            )
+        } else {
+            stringResource(R.string.health_check_last_crash_ok)
+        }
+
+        HealthCheckId.Notifications -> stringResource(
+            if (item.status == HealthStatus.Ok) {
+                R.string.health_check_notifications_ok
+            } else {
+                R.string.health_check_notifications_attention
+            },
+        )
+
+        HealthCheckId.Battery -> stringResource(
+            if (item.status == HealthStatus.Ok) {
+                R.string.health_check_battery_ok
+            } else {
+                R.string.health_check_battery_attention
+            },
+        )
+
+        HealthCheckId.ExactAlarm -> stringResource(
+            if (item.status == HealthStatus.Ok) {
+                R.string.health_check_exact_alarm_ok
+            } else {
+                R.string.health_check_exact_alarm_attention
+            },
+        )
+    }
+}
+
+@Composable
+private fun healthPermissionLabel(permission: String): String = stringResource(
+    when (permission) {
+        HealthPermissionLocation -> R.string.device_permission_location
+        HealthPermissionContacts -> R.string.device_permission_contacts
+        HealthPermissionCalendar -> R.string.device_permission_calendar
+        else -> R.string.health_check_phone_permissions_title
     },
 )
 
