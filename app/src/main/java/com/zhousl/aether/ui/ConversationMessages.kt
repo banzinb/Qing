@@ -4282,6 +4282,12 @@ private fun formatAetherToolTitle(
             "player_play" -> formatArgumentDrivenTitle(isRunning, context.getString(R.string.tool_title_playing_audio), context.getString(R.string.tool_title_played_audio), arguments?.optString("url").orEmpty(), context.getString(R.string.tool_title_device_fallback))
             "stop_media" -> context.getString(if (isRunning) R.string.tool_title_stopping_media else R.string.tool_title_stopped_media)
             "weather" -> formatArgumentDrivenTitle(isRunning, context.getString(R.string.tool_title_checking_weather), context.getString(R.string.tool_title_checked_weather), arguments?.optString("city").orEmpty(), context.getString(R.string.tool_title_weather_fallback))
+            "location_get" -> context.getString(if (isRunning) R.string.tool_title_locating else R.string.tool_title_located)
+            "contacts_search" -> formatArgumentDrivenTitle(isRunning, context.getString(R.string.tool_title_searching_contacts), context.getString(R.string.tool_title_searched_contacts), arguments?.optString("query").orEmpty(), context.getString(R.string.tool_title_device_fallback))
+            "calendar_read" -> context.getString(if (isRunning) R.string.tool_title_reading_calendar else R.string.tool_title_read_calendar)
+            "calendar_add" -> formatArgumentDrivenTitle(isRunning, context.getString(R.string.tool_title_opening_calendar_event), context.getString(R.string.tool_title_opened_calendar_event), arguments?.optString("title").orEmpty(), context.getString(R.string.tool_title_device_fallback))
+            "alarm_set" -> context.getString(if (isRunning) R.string.tool_title_setting_alarm else R.string.tool_title_set_alarm)
+            "timer_set" -> context.getString(if (isRunning) R.string.tool_title_setting_timer else R.string.tool_title_set_timer)
             else -> context.getString(if (isRunning) R.string.tool_title_reading_device_info else R.string.tool_title_read_device_info)
         }
         else -> context.getString(if (isRunning) R.string.tool_title_managing_aether else R.string.tool_title_managed_aether)
@@ -4332,6 +4338,10 @@ private fun summarizeAetherToolCommand(
             appendAetherKeyValue(arguments, "value")
             appendAetherKeyValue(arguments, "url")
             appendAetherKeyValue(arguments, "city")
+            appendAetherKeyValue(arguments, "query")
+            appendAetherKeyValue(arguments, "title")
+            appendAetherKeyValue(arguments, "start")
+            appendAetherKeyValue(arguments, "message")
         }.trim()
         else -> toolName
     }

@@ -1,26 +1,43 @@
 package com.zhousl.aether.data
 
+import android.Manifest
 import android.content.ClipData
 import android.content.ClipboardManager
+import android.content.ContentUris
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.PackageManager
+import android.location.Location
+import android.location.LocationListener
+import android.location.LocationManager
 import android.net.Uri
 import android.os.BatteryManager
 import android.os.Build
+import android.os.Bundle
 import android.os.Environment
+import android.os.Looper
 import android.os.StatFs
 import android.os.SystemClock
+import android.provider.AlarmClock
+import android.provider.CalendarContract
+import android.provider.ContactsContract
+import androidx.core.content.ContextCompat
 import java.net.URLEncoder
+import java.text.ParsePosition
+import java.text.SimpleDateFormat
 import java.util.Locale
 import java.util.TimeZone
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONArray
 import org.json.JSONObject
+import kotlin.coroutines.resume
 
 /**
  * Android capability offload for Qing's host tools (v2, device batch 1).
@@ -145,6 +162,330 @@ class DeviceCapabilityHandler(private val context: Context) {
         return forecastJson(payload, place)
     }
 
+    /**
+     * Where the phone is right now (device batch 2).
+     *
+     * A ten-minute-old fix is good enough to answer "what's the weather here",
+     * so this only pays for a fresh fix when the cached one is stale.
+     */
+    @Suppress("DEPRECATION")
+    suspend fun location(): JSONObject = withContext(Dispatchers.Main) {
+        if (!hasPermission(Manifest.permission.ACCESS_FINE_LOCATION) &&
+            !hasPermission(Manifest.permission.ACCESS_COARSE_LOCATION)
+        ) {
+            return@withContext missingPermission("定位", "位置信息")
+        }
+        val manager = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager
+            ?: return@withContext failure("Location service is unavailable on this device.")
+        val providers = listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)
+        if (providers.none { runCatching { manager.isProviderEnabled(it) }.getOrDefault(false) }) {
+            return@withContext failure(
+                "The phone's location switch is off. Turn on Location in system settings and try again.",
+            )
+        }
+        val lastKnown = providers
+            .mapNotNull { provider -> runCatching { manager.getLastKnownLocation(provider) }.getOrNull() }
+            .maxByOrNull { it.time }
+        val now = System.currentTimeMillis()
+        if (lastKnown != null && now - lastKnown.time <= LastKnownFixFreshMillis) {
+            return@withContext locationJson(lastKnown, stale = false)
+        }
+        val fix = requestSingleLocation(manager, providers)
+        when {
+            fix != null -> locationJson(fix, stale = false)
+            lastKnown != null -> locationJson(lastKnown, stale = true)
+            else -> failure("No location fix within ${LocationFixTimeoutMillis / 1000} seconds. Indoors or a restricted device can do this; try again near a window.")
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    private suspend fun requestSingleLocation(
+        manager: LocationManager,
+        providers: List<String>,
+    ): Location? = withTimeoutOrNull(LocationFixTimeoutMillis) {
+        suspendCancellableCoroutine { continuation ->
+            val listener = object : LocationListener {
+                override fun onLocationChanged(location: Location) {
+                    if (continuation.isActive) continuation.resume(location)
+                }
+
+                override fun onProviderEnabled(provider: String) = Unit
+
+                override fun onProviderDisabled(provider: String) = Unit
+
+                override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) = Unit
+            }
+            val provider = providers.firstOrNull {
+                runCatching { manager.isProviderEnabled(it) }.getOrDefault(false)
+            }
+            if (provider == null) {
+                continuation.resume(null)
+                return@suspendCancellableCoroutine
+            }
+            continuation.invokeOnCancellation {
+                runCatching { manager.removeUpdates(listener) }
+            }
+            runCatching { manager.requestSingleUpdate(provider, listener, Looper.getMainLooper()) }
+                .onFailure { if (continuation.isActive) continuation.resume(null) }
+        }
+    }
+
+    private fun locationJson(fix: Location, stale: Boolean): JSONObject = JSONObject().apply {
+        put("ok", true)
+        putFinite("latitude", fix.latitude)
+        putFinite("longitude", fix.longitude)
+        if (fix.hasAccuracy()) putFinite("accuracy_m", fix.accuracy.toDouble())
+        put("provider", fix.provider ?: "")
+        put("fix_age_seconds", (System.currentTimeMillis() - fix.time) / 1000)
+        put("stale", stale)
+        if (stale) {
+            put(
+                "note",
+                "This is the last known fix, not a fresh one: no new location arrived in time. Say so if it matters.",
+            )
+        }
+    }
+
+    /**
+     * Looks a person up by name and returns their numbers. Capped at
+     * [ContactLimit] people so a broad query cannot dump the whole address book
+     * into the conversation.
+     */
+    suspend fun searchContacts(query: String): JSONObject = withContext(Dispatchers.IO) {
+        val trimmed = query.trim()
+        if (trimmed.isEmpty()) {
+            return@withContext failure("'query' is required: the name (or part of a name) to look for.")
+        }
+        if (!hasPermission(Manifest.permission.READ_CONTACTS)) {
+            return@withContext missingPermission("联系人", "联系人")
+        }
+        val numbersByName = linkedMapOf<String, MutableList<String>>()
+        val projection = arrayOf(
+            ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME,
+            ContactsContract.CommonDataKinds.Phone.NUMBER,
+        )
+        val failureReason = runCatching {
+            context.contentResolver.query(
+                ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
+                projection,
+                "${ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME} LIKE ?",
+                arrayOf("%${escapeLike(trimmed)}%"),
+                "${ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME} ASC",
+            )?.use { cursor ->
+                val nameIndex = cursor.getColumnIndex(ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME)
+                val numberIndex = cursor.getColumnIndex(ContactsContract.CommonDataKinds.Phone.NUMBER)
+                while (cursor.moveToNext()) {
+                    val name = cursor.getString(nameIndex).orEmpty()
+                    val number = cursor.getString(numberIndex).orEmpty()
+                    if (name.isBlank()) continue
+                    if (name !in numbersByName && numbersByName.size >= ContactLimit) break
+                    val numbers = numbersByName.getOrPut(name) { mutableListOf() }
+                    if (number.isNotBlank() && numbers.size < ContactNumbersPerPerson) {
+                        numbers += number.replace(ContactNumberSeparator, "")
+                    }
+                }
+            }
+        }.exceptionOrNull()
+        if (failureReason != null) {
+            return@withContext failure("Could not read contacts: ${failureReason.message ?: failureReason::class.java.simpleName}")
+        }
+        JSONObject().apply {
+            put("ok", true)
+            put("query", trimmed)
+            put("count", numbersByName.size)
+            if (numbersByName.isEmpty()) {
+                put("note", "No contact name matched '$trimmed'.")
+            }
+            put(
+                "contacts",
+                JSONArray().apply {
+                    numbersByName.forEach { (name, numbers) ->
+                        put(
+                            JSONObject().apply {
+                                put("name", name)
+                                put("phones", JSONArray(numbers))
+                            },
+                        )
+                    }
+                },
+            )
+        }
+    }
+
+    /**
+     * Reads the calendar for the next [days] days. Instances (not events) so
+     * recurring entries show up on the day they actually happen.
+     */
+    suspend fun readCalendar(days: Int): JSONObject = withContext(Dispatchers.IO) {
+        if (!hasPermission(Manifest.permission.READ_CALENDAR)) {
+            return@withContext missingPermission("日历", "日历")
+        }
+        val windowDays = days.coerceIn(1, CalendarWindowMaxDays)
+        val fromMillis = System.currentTimeMillis()
+        val toMillis = fromMillis + windowDays * DayMillis
+        val uri = CalendarContract.Instances.CONTENT_URI.buildUpon()
+            .also { builder ->
+                ContentUris.appendId(builder, fromMillis)
+                ContentUris.appendId(builder, toMillis)
+            }
+            .build()
+        val projection = arrayOf(
+            CalendarContract.Instances.TITLE,
+            CalendarContract.Instances.BEGIN,
+            CalendarContract.Instances.END,
+            CalendarContract.Instances.ALL_DAY,
+            CalendarContract.Instances.EVENT_LOCATION,
+            CalendarContract.Instances.CALENDAR_DISPLAY_NAME,
+        )
+        val events = JSONArray()
+        val failureReason = runCatching {
+            context.contentResolver.query(
+                uri,
+                projection,
+                "${CalendarContract.Instances.VISIBLE} = 1",
+                null,
+                "${CalendarContract.Instances.BEGIN} ASC",
+            )?.use { cursor ->
+                val titleIndex = cursor.getColumnIndex(CalendarContract.Instances.TITLE)
+                val beginIndex = cursor.getColumnIndex(CalendarContract.Instances.BEGIN)
+                val endIndex = cursor.getColumnIndex(CalendarContract.Instances.END)
+                val allDayIndex = cursor.getColumnIndex(CalendarContract.Instances.ALL_DAY)
+                val locationIndex = cursor.getColumnIndex(CalendarContract.Instances.EVENT_LOCATION)
+                val calendarIndex = cursor.getColumnIndex(CalendarContract.Instances.CALENDAR_DISPLAY_NAME)
+                while (cursor.moveToNext() && events.length() < CalendarEventLimit) {
+                    events.put(
+                        JSONObject().apply {
+                            put("title", cursor.getString(titleIndex).orEmpty())
+                            put("begin_millis", cursor.getLong(beginIndex))
+                            put("end_millis", cursor.getLong(endIndex))
+                            put("all_day", cursor.getInt(allDayIndex) == 1)
+                            put("location", cursor.getString(locationIndex).orEmpty())
+                            put("calendar", cursor.getString(calendarIndex).orEmpty())
+                        },
+                    )
+                }
+            }
+        }.exceptionOrNull()
+        if (failureReason != null) {
+            return@withContext failure("Could not read the calendar: ${failureReason.message ?: failureReason::class.java.simpleName}")
+        }
+        JSONObject().apply {
+            put("ok", true)
+            put("from_millis", fromMillis)
+            put("to_millis", toMillis)
+            put("days", windowDays)
+            put("count", events.length())
+            put("events", events)
+        }
+    }
+
+    /**
+     * Hands a new event to the system calendar.
+     *
+     * Qing cannot save it itself without WRITE_CALENDAR, and it must not claim
+     * the event exists: the answer says the editor was opened.
+     */
+    fun addCalendarEvent(
+        title: String,
+        start: String,
+        durationMinutes: Int,
+        description: String,
+        location: String,
+    ): JSONObject {
+        val trimmedTitle = title.trim()
+        if (trimmedTitle.isEmpty()) return failure("'title' is required.")
+        val begin = parseLocalDateTimeMillis(start)
+            ?: return failure("'start' should look like 2026-09-13 15:00 (local time), or 2026-09-13 for a whole day.")
+        val minutes = durationMinutes.coerceIn(1, CalendarDurationMaxMinutes)
+        val intent = Intent(Intent.ACTION_INSERT)
+            .setData(CalendarContract.Events.CONTENT_URI)
+            .putExtra(CalendarContract.Events.TITLE, trimmedTitle)
+            .putExtra(CalendarContract.EXTRA_EVENT_BEGIN_TIME, begin)
+            .putExtra(CalendarContract.EXTRA_EVENT_END_TIME, begin + minutes * 60_000L)
+            .putExtra(CalendarContract.Events.DESCRIPTION, description.trim())
+            .putExtra(CalendarContract.Events.EVENT_LOCATION, location.trim())
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        return runCatching {
+            context.startActivity(intent)
+            launchResult(
+                app = "calendar",
+                detail = JSONObject()
+                    .put("title", trimmedTitle)
+                    .put("begin_millis", begin)
+                    .put("duration_minutes", minutes),
+            )
+        }.getOrElse { error ->
+            failure("No calendar app accepted the new event: ${error.message ?: error::class.java.simpleName}")
+        }
+    }
+
+    /** Opens the clock app's alarm screen with the time filled in. */
+    fun setAlarm(hour: Int, minute: Int, message: String): JSONObject {
+        if (hour !in 0..23 || minute !in 0..59) {
+            return failure("'hour' must be 0-23 and 'minute' 0-59.")
+        }
+        val intent = Intent(AlarmClock.ACTION_SET_ALARM)
+            .putExtra(AlarmClock.EXTRA_HOUR, hour)
+            .putExtra(AlarmClock.EXTRA_MINUTES, minute)
+            .putExtra(AlarmClock.EXTRA_MESSAGE, message.trim())
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        return runCatching {
+            context.startActivity(intent)
+            launchResult(
+                app = "clock",
+                detail = JSONObject()
+                    .put("hour", hour)
+                    .put("minute", minute)
+                    .put("message", message.trim()),
+            )
+        }.getOrElse { error ->
+            failure("No clock app accepted the alarm: ${error.message ?: error::class.java.simpleName}")
+        }
+    }
+
+    /** Opens the clock app's timer screen with the length filled in. */
+    fun setTimer(seconds: Int, message: String): JSONObject {
+        if (seconds !in 1..TimerMaxSeconds) {
+            return failure("'seconds' must be between 1 and $TimerMaxSeconds.")
+        }
+        val intent = Intent(AlarmClock.ACTION_SET_TIMER)
+            .putExtra(AlarmClock.EXTRA_LENGTH, seconds)
+            .putExtra(AlarmClock.EXTRA_MESSAGE, message.trim())
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        return runCatching {
+            context.startActivity(intent)
+            launchResult(
+                app = "clock",
+                detail = JSONObject().put("seconds", seconds).put("message", message.trim()),
+            )
+        }.getOrElse { error ->
+            failure("No clock app accepted the timer: ${error.message ?: error::class.java.simpleName}")
+        }
+    }
+
+    /**
+     * The shared shape for "handed this to another app" results. `requested`
+     * says Qing filled the screen in; it never means the user saved it.
+     */
+    private fun launchResult(app: String, detail: JSONObject): JSONObject = JSONObject().apply {
+        put("ok", true)
+        put("requested", true)
+        put("app", app)
+        put("detail", detail)
+        put(
+            "note",
+            "Qing opened the $app app with these values filled in. It cannot confirm the user saved it, so do not say it is done.",
+        )
+    }
+
+    private fun hasPermission(permission: String): Boolean =
+        ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
+
+    private fun missingPermission(capability: String, label: String): JSONObject = failure(
+        "Qing does not have the $capability permission yet, so it cannot read this. " +
+            "The user can grant it in Qing: settings, Agent mode, phone permissions ($label).",
+    )
+
     private suspend fun resolvePlace(city: String): Place? {
         val query = runCatching { URLEncoder.encode(city, "UTF-8") }.getOrNull() ?: return null
         val payload = fetchJson(
@@ -268,6 +609,46 @@ private data class Place(
     val longitude: Double,
     val label: String?,
 )
+
+private const val LastKnownFixFreshMillis = 10 * 60_000L
+private const val LocationFixTimeoutMillis = 10_000L
+private const val ContactLimit = 10
+private const val ContactNumbersPerPerson = 3
+private const val CalendarEventLimit = 20
+private const val CalendarWindowMaxDays = 30
+private const val CalendarDurationMaxMinutes = 24 * 60
+private const val TimerMaxSeconds = 24 * 60 * 60
+private const val DayMillis = 24 * 60 * 60 * 1000L
+
+private val ContactNumberSeparator = Regex("""[\s\-()]""")
+
+private val LocalDateTimeFormats = listOf(
+    "yyyy-MM-dd HH:mm:ss",
+    "yyyy-MM-dd HH:mm",
+    "yyyy-MM-dd'T'HH:mm",
+    "yyyy-MM-dd",
+)
+
+/** Keeps user text from turning into a wildcard match-all query. */
+internal fun escapeLike(raw: String): String =
+    raw.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+/**
+ * Reads a local date-time the way a person writes one. Returns null for
+ * anything ambiguous, so the tool answers "use this format" instead of booking
+ * an event at an accidental time.
+ */
+internal fun parseLocalDateTimeMillis(raw: String): Long? {
+    val text = raw.trim()
+    if (text.isEmpty()) return null
+    LocalDateTimeFormats.forEach { pattern ->
+        val format = SimpleDateFormat(pattern, Locale.US).apply { isLenient = false }
+        val position = ParsePosition(0)
+        val parsed = format.parse(text, position) ?: return@forEach
+        if (position.index == text.length) return parsed.time
+    }
+    return null
+}
 
 private fun JSONObject.putFinite(key: String, value: Double): JSONObject {
     if (value.isFinite()) put(key, value)

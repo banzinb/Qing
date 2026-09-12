@@ -3710,6 +3710,12 @@ private fun formatAetherToolTitle(
             "player_play" -> formatArgumentDrivenToolTitle(isRunning, R.string.tool_title_playing_audio, R.string.tool_title_played_audio, arguments?.optString("url").orEmpty(), R.string.tool_title_device_fallback)
             "stop_media" -> toolStatusLabel(isRunning, R.string.tool_title_stopping_media, R.string.tool_title_stopped_media)
             "weather" -> formatArgumentDrivenToolTitle(isRunning, R.string.tool_title_checking_weather, R.string.tool_title_checked_weather, arguments?.optString("city").orEmpty(), R.string.tool_title_weather_fallback)
+            "location_get" -> toolStatusLabel(isRunning, R.string.tool_title_locating, R.string.tool_title_located)
+            "contacts_search" -> formatArgumentDrivenToolTitle(isRunning, R.string.tool_title_searching_contacts, R.string.tool_title_searched_contacts, arguments?.optString("query").orEmpty(), R.string.tool_title_device_fallback)
+            "calendar_read" -> toolStatusLabel(isRunning, R.string.tool_title_reading_calendar, R.string.tool_title_read_calendar)
+            "calendar_add" -> formatArgumentDrivenToolTitle(isRunning, R.string.tool_title_opening_calendar_event, R.string.tool_title_opened_calendar_event, arguments?.optString("title").orEmpty(), R.string.tool_title_device_fallback)
+            "alarm_set" -> toolStatusLabel(isRunning, R.string.tool_title_setting_alarm, R.string.tool_title_set_alarm)
+            "timer_set" -> toolStatusLabel(isRunning, R.string.tool_title_setting_timer, R.string.tool_title_set_timer)
             else -> toolStatusLabel(isRunning, R.string.tool_title_reading_device_info, R.string.tool_title_read_device_info)
         }
         else -> toolStatusLabel(isRunning, R.string.tool_title_managing_aether, R.string.tool_title_managed_aether)

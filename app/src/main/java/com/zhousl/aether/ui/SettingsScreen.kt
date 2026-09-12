@@ -69,6 +69,7 @@ import androidx.compose.material.icons.rounded.FileUpload
 import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.Info
+import androidx.compose.material.icons.rounded.MyLocation
 import androidx.compose.material.icons.rounded.Link
 import androidx.compose.material.icons.rounded.NotificationsActive
 import androidx.compose.material.icons.rounded.Person
@@ -140,6 +141,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.Lifecycle
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
+import android.Manifest
+import android.content.pm.PackageManager
 import androidx.lifecycle.compose.LifecycleEventEffect
 import com.zhousl.aether.BuildConfig
 
@@ -275,6 +281,7 @@ private enum class SettingsPage {
     RuntimeDefaults,
     AgentMode,
     ToolAudit,
+    DevicePermissions,
     Statistics,
     MyData,
     RootSetupProgress,
@@ -320,6 +327,7 @@ private fun SettingsPage.depth(): Int = when (this) {
     SettingsPage.AlpineChrome,
     SettingsPage.EmbeddedTermuxTerminal,
     SettingsPage.ToolAudit,
+    SettingsPage.DevicePermissions,
     SettingsPage.RootSetupProgress -> 2
     SettingsPage.ExtensionSettingsCategory -> 2
     SettingsPage.DefaultChatModel,
@@ -909,6 +917,7 @@ fun SettingsScreen(
         SettingsPage.AlpineChrome -> SettingsPage.Alpine
         SettingsPage.EmbeddedTermuxTerminal -> SettingsPage.EmbeddedTermux
         SettingsPage.ToolAudit -> SettingsPage.AgentMode
+        SettingsPage.DevicePermissions -> SettingsPage.AgentMode
         SettingsPage.RootSetupProgress -> rootSetupReturnPageValue()
         else -> SettingsPage.Hub
     }
@@ -1529,11 +1538,17 @@ fun SettingsScreen(
                 onStopAgentModeDisplay = onStopAgentModeDisplay,
                 onRefreshAgentModeDisplays = onRefreshAgentModeDisplays,
                 onOpenToolAudit = { currentPage = SettingsPage.ToolAudit.name },
+                onOpenDevicePermissions = { currentPage = SettingsPage.DevicePermissions.name },
                 onBack = { currentPage = SettingsPage.Hub.name },
             )
 
             SettingsPage.ToolAudit -> ToolAuditSettingsPage(
                 title = stringResource(R.string.settings_tool_audit),
+                onBack = { currentPage = SettingsPage.AgentMode.name },
+            )
+
+            SettingsPage.DevicePermissions -> DevicePermissionsSettingsPage(
+                title = stringResource(R.string.settings_device_permissions),
                 onBack = { currentPage = SettingsPage.AgentMode.name },
             )
 
@@ -7289,6 +7304,7 @@ private fun AgentModeSettingsPage(
     onStopAgentModeDisplay: () -> Unit,
     onRefreshAgentModeDisplays: (AgentModeAuthorizationMethod) -> Unit,
     onOpenToolAudit: () -> Unit,
+    onOpenDevicePermissions: () -> Unit,
     onBack: () -> Unit,
 ) {
     var showAlreadyConfiguredDialog by rememberSaveable { mutableStateOf(false) }
@@ -7577,6 +7593,13 @@ private fun AgentModeSettingsPage(
                 subtitle = stringResource(R.string.settings_tool_audit_subtitle),
                 onClick = onOpenToolAudit,
             )
+            CardDivider()
+            SettingsNavRow(
+                icon = Icons.Rounded.MyLocation,
+                title = stringResource(R.string.settings_device_permissions),
+                subtitle = stringResource(R.string.settings_device_permissions_subtitle),
+                onClick = onOpenDevicePermissions,
+            )
         }
     }
 }
@@ -7705,6 +7728,99 @@ private fun toolAuditDecisionLabel(decision: String): String = stringResource(
         else -> R.string.tool_audit_decision_denied
     },
 )
+
+/**
+ * The three runtime permissions Qing's device tools need. Calendar events and
+ * alarms stay out of this list: those are handed to the system app, which needs
+ * no permission from us.
+ */
+private enum class DevicePermission(
+    val permission: String,
+    val titleRes: Int,
+    val subtitleRes: Int,
+) {
+    Location(
+        permission = Manifest.permission.ACCESS_FINE_LOCATION,
+        titleRes = R.string.device_permission_location,
+        subtitleRes = R.string.device_permission_location_subtitle,
+    ),
+    Contacts(
+        permission = Manifest.permission.READ_CONTACTS,
+        titleRes = R.string.device_permission_contacts,
+        subtitleRes = R.string.device_permission_contacts_subtitle,
+    ),
+    Calendar(
+        permission = Manifest.permission.READ_CALENDAR,
+        titleRes = R.string.device_permission_calendar,
+        subtitleRes = R.string.device_permission_calendar_subtitle,
+    ),
+}
+
+@Composable
+private fun DevicePermissionsSettingsPage(
+    title: String,
+    onBack: () -> Unit,
+) {
+    val context = LocalContext.current
+    var refreshToken by remember { mutableIntStateOf(0) }
+    val permissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions(),
+        onResult = { refreshToken += 1 },
+    )
+
+    SubPageScaffold(title = title, onBack = onBack) {
+        SettingsCardGroup {
+            DevicePermission.entries.forEachIndexed { index, spec ->
+                if (index > 0) CardDivider()
+                DevicePermissionRow(
+                    spec = spec,
+                    granted = remember(context, spec, refreshToken) {
+                        ContextCompat.checkSelfPermission(context, spec.permission) ==
+                            PackageManager.PERMISSION_GRANTED
+                    },
+                    onGrant = { permissionLauncher.launch(arrayOf(spec.permission)) },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun DevicePermissionRow(
+    spec: DevicePermission,
+    granted: Boolean,
+    onGrant: () -> Unit,
+) {
+    Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = stringResource(spec.titleRes),
+                style = MaterialTheme.typography.titleSmall,
+                color = AetherOnSurface,
+            )
+            Spacer(Modifier.weight(1f))
+            Text(
+                text = stringResource(
+                    if (granted) R.string.device_permission_granted else R.string.device_permission_not_granted,
+                ),
+                style = MaterialTheme.typography.labelMedium,
+                color = if (granted) AetherOnSurfaceVariant else ToolAuditDeniedColor,
+            )
+        }
+        Spacer(Modifier.height(4.dp))
+        Text(
+            text = stringResource(spec.subtitleRes),
+            style = MaterialTheme.typography.bodySmall,
+            color = AetherOnSurfaceVariant,
+        )
+        if (!granted) {
+            Spacer(Modifier.height(10.dp))
+            Button(onClick = onGrant) {
+                Text(stringResource(R.string.device_permission_grant))
+            }
+        }
+    }
+}
 
 @Composable
 private fun RootSetupAlreadyConfiguredDialog(

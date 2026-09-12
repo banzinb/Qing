@@ -250,7 +250,7 @@ class AetherSelfManagementTool(
 
         buildAetherToolDefinition(
             name = "aether_device_manage",
-            description = "Use the phone itself, with no extra permissions: read device, battery, storage and screen info; open a URL or an installed app; read or write the clipboard; read text out loud; play or stop audio; look up the weather. Required fields: open needs value (a URL, or a package name when target=app), clipboard_set needs text, speak needs text, player_play needs url, weather needs either city or both latitude and longitude.",
+            description = "Use the phone itself: read device, battery, storage and screen info; open a URL or an installed app; read or write the clipboard; read text out loud; play or stop audio; look up the weather; ask where the phone is; search contacts; read the calendar; hand a new event to the calendar; set an alarm or a timer. Required fields: open needs value (a URL, or a package name when target=app), clipboard_set needs text, speak needs text, player_play needs url, weather needs either city or both latitude and longitude, contacts_search needs query, calendar_add needs title and start, alarm_set needs hour and minute, timer_set needs seconds. location_get, contacts_search and calendar_read need the matching phone permission; if Qing lacks it, the result says so and the user can grant it in settings, Agent mode, phone permissions.",
             properties = JSONObject().apply {
                 put(
                     "action",
@@ -268,12 +268,18 @@ class AetherSelfManagementTool(
                                     "stop_media",
                                     "player_play",
                                     "weather",
+                                    "location_get",
+                                    "contacts_search",
+                                    "calendar_read",
+                                    "calendar_add",
+                                    "alarm_set",
+                                    "timer_set",
                                 )
                             ),
                         )
                         put(
                             "description",
-                            "device_info: read device state. open: launch a URL or app. clipboard_get / clipboard_set: read or replace the clipboard. speak: read text aloud. player_play: stream audio from a URL. stop_media: stop speech or audio. weather: current conditions and a 3-day outlook.",
+                            "device_info: read device state. open: launch a URL or app. clipboard_get / clipboard_set: read or replace the clipboard. speak: read text aloud. player_play: stream audio from a URL. stop_media: stop speech or audio. weather: current conditions and a 3-day outlook. location_get: where the phone is. contacts_search: find a person's number by name. calendar_read: what is coming up. calendar_add: open the calendar with a new event filled in. alarm_set / timer_set: open the clock with an alarm or timer filled in.",
                         )
                     },
                 )
@@ -315,6 +321,86 @@ class AetherSelfManagementTool(
                 )
                 put("latitude", JSONObject().apply { put("type", "number") })
                 put("longitude", JSONObject().apply { put("type", "number") })
+                put(
+                    "query",
+                    JSONObject().apply {
+                        put("type", "string")
+                        put("description", "For action=contacts_search: the name, or part of a name, to look for.")
+                    },
+                )
+                put(
+                    "days",
+                    JSONObject().apply {
+                        put("type", "integer")
+                        put("description", "For action=calendar_read: how many days ahead to read. Defaults to 1.")
+                    },
+                )
+                put(
+                    "title",
+                    JSONObject().apply {
+                        put("type", "string")
+                        put("description", "For action=calendar_add: the event title.")
+                    },
+                )
+                put(
+                    "start",
+                    JSONObject().apply {
+                        put("type", "string")
+                        put(
+                            "description",
+                            "For action=calendar_add: local start time, for example 2026-09-13 15:00 or 2026-09-13.",
+                        )
+                    },
+                )
+                put(
+                    "duration_minutes",
+                    JSONObject().apply {
+                        put("type", "integer")
+                        put("description", "For action=calendar_add: length in minutes. Defaults to 60.")
+                    },
+                )
+                put(
+                    "location",
+                    JSONObject().apply {
+                        put("type", "string")
+                        put("description", "For action=calendar_add: where the event happens.")
+                    },
+                )
+                put(
+                    "message",
+                    JSONObject().apply {
+                        put("type", "string")
+                        put("description", "For action=alarm_set or timer_set: the label shown with it.")
+                    },
+                )
+                put(
+                    "hour",
+                    JSONObject().apply {
+                        put("type", "integer")
+                        put("description", "For action=alarm_set: hour in 24-hour time, 0-23.")
+                    },
+                )
+                put(
+                    "minute",
+                    JSONObject().apply {
+                        put("type", "integer")
+                        put("description", "For action=alarm_set: minute, 0-59.")
+                    },
+                )
+                put(
+                    "seconds",
+                    JSONObject().apply {
+                        put("type", "integer")
+                        put("description", "For action=timer_set: length in seconds.")
+                    },
+                )
+                put(
+                    "description",
+                    JSONObject().apply {
+                        put("type", "string")
+                        put("description", "For action=calendar_add: optional notes for the event.")
+                    },
+                )
             },
             required = listOf("action"),
         ),
@@ -356,6 +442,27 @@ class AetherSelfManagementTool(
                 city = arguments.optString("city"),
                 latitude = arguments.optionalDouble("latitude"),
                 longitude = arguments.optionalDouble("longitude"),
+            )
+            "location_get" -> capabilities.location()
+            "contacts_search" -> capabilities.searchContacts(arguments.optString("query"))
+            "calendar_read" -> capabilities.readCalendar(
+                days = arguments.optionalInt("days") ?: 1,
+            )
+            "calendar_add" -> capabilities.addCalendarEvent(
+                title = arguments.optString("title"),
+                start = arguments.optString("start"),
+                durationMinutes = arguments.optionalInt("duration_minutes") ?: 60,
+                description = arguments.optString("description"),
+                location = arguments.optString("location"),
+            )
+            "alarm_set" -> capabilities.setAlarm(
+                hour = arguments.optionalInt("hour") ?: return failure("'hour' is required for action=alarm_set."),
+                minute = arguments.optionalInt("minute") ?: 0,
+                message = arguments.optString("message"),
+            )
+            "timer_set" -> capabilities.setTimer(
+                seconds = arguments.optionalInt("seconds") ?: return failure("'seconds' is required for action=timer_set."),
+                message = arguments.optString("message"),
             )
             else -> return failure("Unsupported device action '$action'.")
         }.toString()
@@ -1073,6 +1180,9 @@ class AetherSelfManagementTool(
 
     private fun JSONObject.optionalDouble(name: String): Double? =
         if (has(name) && !isNull(name)) optDouble(name) else null
+
+    private fun JSONObject.optionalInt(name: String): Int? =
+        if (has(name) && !isNull(name)) optInt(name) else null
 
     private fun JSONObject.optStringAny(vararg names: String): String =
         names.firstOrNull(::has)?.let(::optString).orEmpty()

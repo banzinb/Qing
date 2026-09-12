@@ -49,10 +49,26 @@ test("balanced gates device actions that change something", () => {
     ).required,
     true,
   );
+  for (const action of ["calendar_add", "alarm_set", "timer_set"]) {
+    assert.equal(
+      approvalRequirement(hostTool("aether_device_manage", { action }), "balanced").required,
+      true,
+      action,
+    );
+  }
 });
 
 test("balanced lets the harmless device actions through", () => {
-  for (const action of ["device_info", "weather", "clipboard_get", "speak", "stop_media"]) {
+  for (const action of [
+    "device_info",
+    "weather",
+    "clipboard_get",
+    "speak",
+    "stop_media",
+    "location_get",
+    "contacts_search",
+    "calendar_read",
+  ]) {
     assert.equal(
       approvalRequirement(hostTool("aether_device_manage", { action }), "balanced").required,
       false,

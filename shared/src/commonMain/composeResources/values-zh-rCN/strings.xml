@@ -864,6 +864,18 @@
     <string name="tool_title_stopped_media">已停止播放</string>
     <string name="tool_title_checking_weather">正在查询天气</string>
     <string name="tool_title_checked_weather">已查询天气</string>
+    <string name="tool_title_locating">正在定位</string>
+    <string name="tool_title_located">已获取位置</string>
+    <string name="tool_title_searching_contacts">正在查询联系人</string>
+    <string name="tool_title_searched_contacts">已查询联系人</string>
+    <string name="tool_title_reading_calendar">正在查看日程</string>
+    <string name="tool_title_read_calendar">已查看日程</string>
+    <string name="tool_title_opening_calendar_event">正在打开日历新建日程</string>
+    <string name="tool_title_opened_calendar_event">已打开日历新建日程</string>
+    <string name="tool_title_setting_alarm">正在打开闹钟</string>
+    <string name="tool_title_set_alarm">已打开闹钟</string>
+    <string name="tool_title_setting_timer">正在打开计时器</string>
+    <string name="tool_title_set_timer">已打开计时器</string>
     <string name="tool_title_reading_agent_skills">正在读取 Agent Skills</string>
     <string name="tool_title_read_agent_skills">已读取 Agent Skills</string>
     <string name="tool_title_reading_mcp_servers">正在读取 MCP 服务器</string>
@@ -1239,4 +1251,15 @@
     <string name="tool_audit_decision_approved_for_session">本次对话都允许</string>
     <string name="tool_audit_decision_denied">拒绝</string>
     <string name="tool_audit_decision_timed_out">没等到回答</string>
+    <string name="settings_device_permissions">手机权限</string>
+    <string name="settings_device_permissions_subtitle">让青能看位置、联系人和日程</string>
+    <string name="device_permission_location">位置信息</string>
+    <string name="device_permission_location_subtitle">用 GPS 或网络定位，回答「我在哪」和查本地天气。只在你要的时候取一次。</string>
+    <string name="device_permission_contacts">联系人</string>
+    <string name="device_permission_contacts_subtitle">按名字查号码，最多返回 10 个人。只读，不修改、不上传。</string>
+    <string name="device_permission_calendar">日历</string>
+    <string name="device_permission_calendar_subtitle">读未来几天的日程。新建行程走系统日历，不需要额外授权。</string>
+    <string name="device_permission_granted">已授权</string>
+    <string name="device_permission_not_granted">未授权</string>
+    <string name="device_permission_grant">去授权</string>
 </resources>

@@ -866,6 +866,18 @@
     <string name="tool_title_stopped_media">Stopped playback</string>
     <string name="tool_title_checking_weather">Checking the weather</string>
     <string name="tool_title_checked_weather">Checked the weather</string>
+    <string name="tool_title_locating">Finding the phone</string>
+    <string name="tool_title_located">Found the phone</string>
+    <string name="tool_title_searching_contacts">Searching contacts</string>
+    <string name="tool_title_searched_contacts">Searched contacts</string>
+    <string name="tool_title_reading_calendar">Reading the calendar</string>
+    <string name="tool_title_read_calendar">Read the calendar</string>
+    <string name="tool_title_opening_calendar_event">Opening a new calendar event</string>
+    <string name="tool_title_opened_calendar_event">Opened a new calendar event</string>
+    <string name="tool_title_setting_alarm">Opening the alarm</string>
+    <string name="tool_title_set_alarm">Opened the alarm</string>
+    <string name="tool_title_setting_timer">Opening the timer</string>
+    <string name="tool_title_set_timer">Opened the timer</string>
     <string name="tool_title_reading_agent_skills">Reading Agent Skills</string>
     <string name="tool_title_read_agent_skills">Read Agent Skills</string>
     <string name="tool_title_reading_mcp_servers">Reading MCP servers</string>
@@ -1241,4 +1253,15 @@
     <string name="tool_audit_decision_approved_for_session">Allowed for this chat</string>
     <string name="tool_audit_decision_denied">Refused</string>
     <string name="tool_audit_decision_timed_out">No answer</string>
+    <string name="settings_device_permissions">Phone permissions</string>
+    <string name="settings_device_permissions_subtitle">Let Qing see location, contacts and the calendar</string>
+    <string name="device_permission_location">Location</string>
+    <string name="device_permission_location_subtitle">GPS or network fix, so Qing can answer where you are and check local weather. One fix at a time, only when asked.</string>
+    <string name="device_permission_contacts">Contacts</string>
+    <string name="device_permission_contacts_subtitle">Look up a number by name, at most 10 people. Read-only: nothing is changed or uploaded.</string>
+    <string name="device_permission_calendar">Calendar</string>
+    <string name="device_permission_calendar_subtitle">Read the next few days of events. New events go through the system calendar, which needs no extra permission.</string>
+    <string name="device_permission_granted">Granted</string>
+    <string name="device_permission_not_granted">Not granted</string>
+    <string name="device_permission_grant">Grant</string>
 </resources>

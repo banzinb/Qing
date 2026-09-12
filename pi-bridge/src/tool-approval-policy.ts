@@ -128,6 +128,9 @@ const HARMLESS_DEVICE_ACTIONS = new Set([
   "clipboard_get",
   "speak",
   "stop_media",
+  "location_get",
+  "contacts_search",
+  "calendar_read",
 ]);
 
 /** Relaxed mode only stops at these: the ones that can reshape the install. */
@@ -205,6 +208,9 @@ function previewFor(subject: ApprovalSubject): string {
     "text",
     "command",
     "package_name",
+    "title",
+    "start",
+    "message",
   ]);
   if (action && target) return `${subject.name} ${action} · ${truncate(target, SCOPED_LIMIT)}`;
   if (action) return `${subject.name} ${action}`;
