@@ -363,6 +363,21 @@ class PiAgentRunner(
                                     detail = eventPayload.optString("error_message"),
                                 )
                             )
+
+                            "agent_loop_warning" -> {
+                                val toolName = eventPayload.optString("tool_name").ifBlank { "unknown" }
+                                val repeatCount = eventPayload.optInt("repeat_count")
+                                val isCritical = eventPayload.optString("level") == "critical"
+                                val loopDetail = eventPayload.optString("loop_detail")
+                                    .ifBlank { "$toolName × $repeatCount" }
+                                onStreamingStatus(
+                                    StreamingStatus(
+                                        text = if (isCritical) "检测到工具死循环，已中止本次任务" else "检测到重复的工具调用",
+                                        detail = loopDetail,
+                                        durable = true,
+                                    )
+                                )
+                            }
                         }
                     }
 

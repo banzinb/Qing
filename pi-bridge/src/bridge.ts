@@ -89,6 +89,7 @@ import {
   loadAetherAppExtensions,
 } from "./aether-extensions.js";
 import { bridgeDebug, bridgeDebugEnabled, elapsedMillis } from "./debug.js";
+import { ToolLoopDetector, type LoopCheckResult } from "./tool-loop-detector.js";
 
 registerBunOAuthFlows();
 
@@ -184,6 +185,7 @@ interface AgentSessionState {
   turnStartedAtMillis?: number;
   firstAssistantEventAtMillis?: number;
   toolArgsById: Map<string, unknown>;
+  loopDetector: ToolLoopDetector;
   lastAccessedAt: number;
 }
 
@@ -1494,6 +1496,7 @@ const AETHER_HOST_TOOL_NAMES = new Set([
   "aether_skill_manage",
   "aether_termux_manage",
   "aether_agent_mode_manage",
+  "aether_device_manage",
   "aether_scheduled_task_manage",
   "aether_extension_manage",
   "aether_developer_manage",
@@ -2101,6 +2104,23 @@ function setActiveSessionTools(state: AgentSessionState): void {
   state.session.setActiveToolsByName([...activeNativeToolNames(state.runtime), ...nonNative]);
 }
 
+function emitAgentLoopWarning(
+  state: AgentSessionState,
+  requestId: string,
+  toolName: string,
+  loop: LoopCheckResult,
+): void {
+  writeEvent(requestId, "agent_loop_warning", {
+    session_id: state.sessionId,
+    level: loop.level,
+    reason: loop.reason,
+    tool_name: toolName,
+    repeat_count: loop.repeatCount,
+    loop_detail: loop.detail,
+    message: loop.message,
+  });
+}
+
 function emitAgentSessionEvent(state: AgentSessionState, event: AgentSessionEvent): void {
   const requestId = state.currentRequestId;
   if (!requestId) {
@@ -2129,23 +2149,37 @@ function emitAgentSessionEvent(state: AgentSessionState, event: AgentSessionEven
         emitStreamEvent(requestId, event.assistantMessageEvent);
       }
       return;
-    case "tool_execution_start":
+    case "tool_execution_start": {
       state.toolArgsById.set(event.toolCallId, event.args);
       writeEvent(requestId, "tool_call_start", toolEventPayload(event.toolCallId, event.toolName, event.args));
+      const loop = state.loopDetector.check(event.toolName, event.args);
+      if (loop.level !== "none") {
+        emitAgentLoopWarning(state, requestId, event.toolName, loop);
+        if (loop.level === "critical") {
+          void state.session.abort().catch(() => undefined);
+        }
+      }
       return;
+    }
     case "tool_execution_update":
       writeEvent(requestId, "tool_call_delta", toolEventPayload(event.toolCallId, event.toolName, event.args, event.partialResult));
       return;
-    case "tool_execution_end":
+    case "tool_execution_end": {
+      const args = state.toolArgsById.get(event.toolCallId) ?? {};
       writeEvent(requestId, "tool_call_end", toolEventPayload(
         event.toolCallId,
         event.toolName,
-        state.toolArgsById.get(event.toolCallId) ?? {},
+        args,
         event.result,
         event.isError,
       ));
       state.toolArgsById.delete(event.toolCallId);
+      const loop = state.loopDetector.record(event.toolName, args, event.result);
+      if (loop.level !== "none") {
+        emitAgentLoopWarning(state, requestId, event.toolName, loop);
+      }
       return;
+    }
     case "auto_retry_start":
       writeEvent(requestId, "assistant_stream_reset", {});
       writeEvent(requestId, "assistant_retry", {
@@ -2294,6 +2328,7 @@ async function createNativeAgentSession(
     pendingRecreate: false,
     currentRequestId: "",
     toolArgsById: new Map<string, unknown>(),
+    loopDetector: new ToolLoopDetector(),
     lastAccessedAt: Date.now(),
   } satisfies AgentSessionState;
   const customTools = [

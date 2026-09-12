@@ -71,6 +71,32 @@ internal fun completePendingReconnectBlocks(
     }
 }
 
+/**
+ * Durable statuses must survive whatever the stream does next. The transient
+ * status slot is single-valued, so a guardrail warning routed through it could
+ * be overwritten by a later status or cleared by the next assistant token,
+ * leaving the user with a task that stopped for no stated reason. Durable
+ * statuses get their own block instead, and a repeat of the same text updates
+ * that block in place rather than piling up cards.
+ */
+internal fun List<AssistantResponseBlock>.upsertDurableStatus(
+    id: String,
+    text: String,
+    detail: String,
+): List<AssistantResponseBlock> {
+    val index = indexOfLast { block ->
+        block is AssistantResponseBlock.Status && block.text == text
+    }
+    if (index < 0) {
+        return this + AssistantResponseBlock.Status(id = id, text = text, detail = detail)
+    }
+    val existing = this[index] as AssistantResponseBlock.Status
+    if (existing.detail == detail) return this
+    return toMutableList().also { blocks ->
+        blocks[index] = existing.copy(detail = detail)
+    }
+}
+
 enum class SessionFollowUpMode {
     Queue,
     Steer,
@@ -737,7 +763,18 @@ class SessionExecutionManager(
                     }
                     updateExecutionState(handle.sessionId) { current ->
                         val text = status?.text.orEmpty()
-                        if (text.startsWith("Reconnecting", ignoreCase = true)) {
+                        val durableStatus = status?.takeIf { it.durable && it.text.isNotBlank() }
+                        if (durableStatus != null) {
+                            current.copy(
+                                pendingResponseBlocks = completePendingReconnectBlocks(
+                                    current.pendingResponseBlocks,
+                                ).upsertDurableStatus(
+                                    id = handle.nextPendingBlockId("pending-status"),
+                                    text = durableStatus.text,
+                                    detail = durableStatus.detail,
+                                ),
+                            )
+                        } else if (text.startsWith("Reconnecting", ignoreCase = true)) {
                             val last = current.pendingResponseBlocks.lastOrNull()
                             val blocks = if (last is AssistantResponseBlock.Status &&
                                 last.text.startsWith("Reconnecting", ignoreCase = true)

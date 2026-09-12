@@ -23,4 +23,11 @@ data class AgentToolEvent(
 data class StreamingStatus(
     val text: String,
     val detail: String = "",
+    /**
+     * Durable statuses mark an event worth keeping (loop guardrail warnings,
+     * aborts). They are stored as their own conversation block instead of the
+     * single transient status slot, which the next status update or the next
+     * assistant token would otherwise overwrite.
+     */
+    val durable: Boolean = false,
 )
