@@ -43,10 +43,11 @@ class QingPetSpriteSheet private constructor(
 
         /**
          * Avoid holding a huge bitmap in memory: downscale the whole atlas so each cell is
-         * about 160px tall before slicing frames at draw time.
+         * about 156px tall before slicing frames at draw time. 156 keeps 1536x2288 -> 1152x1716,
+         * so both cell dimensions divide exactly (144x156) and frames do not drift across columns.
          */
         private fun maybeDownscale(bitmap: Bitmap): Bitmap {
-            val targetCellHeight = 160
+            val targetCellHeight = 156
             if (bitmap.height / CELL_ROWS <= targetCellHeight) return bitmap
             val scale = targetCellHeight.toFloat() / (bitmap.height / CELL_ROWS)
             val newWidth = (bitmap.width * scale).toInt().coerceAtLeast(1)
@@ -80,7 +81,7 @@ fun petMoodSpec(mood: QingPetMood): PetMoodSpec = when (mood) {
     QingPetMood.Waiting -> PetMoodSpec(row = 6, frameCount = 6, frameDurationMillis = 180, loop = true)
     QingPetMood.Running -> PetMoodSpec(row = 7, frameCount = 6, frameDurationMillis = 120, loop = true)
     QingPetMood.RunningLeft -> PetMoodSpec(row = 2, frameCount = 8, frameDurationMillis = 110, loop = true)
-    QingPetMood.RunningRight -> PetMoodSpec(row = 1, frameCount = 8, frameDurationMillis = 110, loop = true)
+    QingPetMood.RunningRight -> PetMoodSpec(row = 1, frameCount = 7, frameDurationMillis = 110, loop = true)
     QingPetMood.Review -> PetMoodSpec(row = 8, frameCount = 6, frameDurationMillis = 160, loop = true)
     QingPetMood.Jumping -> PetMoodSpec(row = 4, frameCount = 5, frameDurationMillis = 140, loop = false)
     QingPetMood.Failed -> PetMoodSpec(row = 5, frameCount = 8, frameDurationMillis = 160, loop = false)
