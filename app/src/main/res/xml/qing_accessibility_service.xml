@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Qing's screen-reading service.
+
+  Kept intentionally narrow: read window content, report view ids, perform gestures. Not requested
+  (unlike the reference implementation this is adapted from): canTakeScreenshot, touch exploration,
+  key event filtering. Gesture support is what makes tapping a node by its bounds possible.
+-->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:accessibilityFlags="flagDefault|flagReportViewIds|flagRetrieveInteractiveWindows"
+    android:canPerformGestures="true"
+    android:canRetrieveWindowContent="true"
+    android:description="@string/qing_accessibility_service_description"
+    android:notificationTimeout="100"
+    android:summary="@string/qing_accessibility_service_summary" />

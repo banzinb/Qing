@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Labels for the accessibility service entry in Settings → Accessibility. -->
+    <string name="qing_accessibility_service_label">Qing screen control</string>
+    <string name="qing_accessibility_service_summary">Lets Qing read the current screen and tap, type or scroll on it</string>
+    <string name="qing_accessibility_service_description">Reads the on-screen controls of the app in the foreground so Qing can find a button by its label, fill in a field, or scroll a list. It only ever works on the screen you are looking at, never in the background.</string>
+</resources>

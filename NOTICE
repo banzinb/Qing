@@ -1,0 +1,46 @@
+Qing (青) — third-party notices
+================================
+
+This project is licensed under the GNU General Public License, version 3.
+See LICENSE for the full text.
+
+
+OpenMinis
+---------
+
+Portions of the screen-reading (accessibility) bridge are adapted from OpenMinis,
+https://github.com/OpenMinis/OpenMinis, which is licensed under the GNU General
+Public License, version 3.
+
+Adapted files and their origin:
+
+  app/src/main/java/com/zhousl/aether/data/accessibility/QingAccessibilityService.kt
+      from src/android/app/src/main/java/com/openminis/app/accessibility/MinisAccessibilityService.kt
+  app/src/main/java/com/zhousl/aether/data/accessibility/NodeRegistry.kt
+      from src/android/app/src/main/java/com/openminis/app/accessibility/NodeRegistry.kt
+  app/src/main/res/xml/qing_accessibility_service.xml
+      from src/android/app/src/main/res/xml/minis_accessibility_service.xml
+
+What Qing changed:
+
+  - NodeRegistry additionally records the package and window a handle came from, and
+    reports a handle as stale when the foreground screen has moved on, instead of only
+    expiring it on a timer.
+  - The service drops the event ring, screenshot capture and pinch gestures, and no
+    longer depends on OpenMinis' recovery manager or logger.
+  - The service configuration requests fewer capabilities: no canTakeScreenshot and no
+    touch-exploration flag.
+
+The command-line offload layer that OpenMinis wraps around its accessibility service is
+NOT ported: it depends on a PRoot-based native offload extension (PRoot is GPLv2-only and
+incompatible with this project's licence). Qing talks to its own tool channel instead, and
+deliberately does not reproduce that layer's habit of reporting a tap as successful without
+checking whether it happened.
+
+
+Other components
+----------------
+
+This project also bundles third-party components (such as Termux terminal emulator and view
+libraries, Lucide icons and an offline ECharts build) that carry their own licences; see the
+respective directories under third_party/ and the dependencies declared in Gradle.
