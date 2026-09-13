@@ -43,4 +43,18 @@ class PiAgentPromptTest {
         assertFalse(disabledInstructions.contains("Chrome Extension tool"))
         assertTrue(enabledInstructions.contains("Chrome Extension tool"))
     }
+
+    @Test
+    fun browserInstructionsTellTheModelHowToTurnItOn() {
+        val disabledInstructions = buildPiAgentInstructions(
+            settings = AppSettings(),
+            workspaceDirectory = "/workspace",
+            runtimeId = LocalRuntimeId.Alpine,
+            agentModeEnabled = false,
+        )
+
+        // Without the tool the model must not pretend it browsed, and must point at the composer entry.
+        assertTrue(disabledInstructions.contains("switched off"))
+        assertTrue(disabledInstructions.contains("default browser app"))
+    }
 }

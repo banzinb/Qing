@@ -50,7 +50,19 @@ internal fun buildPiAgentInstructions(
     }
     if (chromeEnabled) {
         append(
-            "\n\nThe chat has enabled the browser tool (Chrome Extension tool). Prefer selectors and DOM-reading actions, and use coordinates only as a fallback."
+            "\n\nThe chat has enabled the browser tool (Chrome Extension tool). It runs on Qing's own embedded browser, " +
+                "which ships with the app, so it needs no Alpine or Chromium install. Prefer selectors and DOM-reading actions, " +
+                "use coordinates only as a fallback, and prefer wait_for / wait_for_gone over fixed delays. " +
+                "Only browse when the task actually needs a page; do not open pages for facts you can answer directly, " +
+                "and never claim a page was read unless a browser tool result says so."
+        )
+    } else {
+        append(
+            "\n\nThe chat has not enabled Qing's browser tool, so you cannot browse or read web pages yourself. " +
+                "When the user asks you to open, browse, or read a page, tell them Qing's own browser is switched off and " +
+                "that they can turn it on from + then the browser entry, and offer that as the way to give you a real browser. " +
+                "You may still open a URL in the phone's default browser app (aether_device_manage open) or fetch a page from the shell, " +
+                "but say which one you used and never imply you read it in Qing's browser."
         )
     }
     if (memoryContext.isNotBlank()) {

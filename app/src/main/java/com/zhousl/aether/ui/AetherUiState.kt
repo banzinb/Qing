@@ -34,6 +34,15 @@ enum class AppScreen {
     DataOverview,
 }
 
+/**
+ * Whether a freshly created chat starts with the browser tool enabled.
+ *
+ * The browser runs on the embedded WebView backend that ships with the app, so it needs no Alpine
+ * or Chromium install and can be on by default. Flip this to false to make it opt-in again; every
+ * place that resets a draft reads this constant.
+ */
+internal const val DefaultChromeEnabledForNewChat = true
+
 enum class OnboardingStep {
     Landing,
     ProviderSetup,
@@ -269,7 +278,7 @@ data class AetherUiState(
     val draftSelectedSkillIds: List<String> = emptyList(),
     val draftSelectedMcpServerIds: List<String> = emptyList(),
     val draftAgentModeEnabled: Boolean = false,
-    val draftChromeEnabled: Boolean = false,
+    val draftChromeEnabled: Boolean = DefaultChromeEnabledForNewChat,
     val draftWorkspaceId: String? = null,
     val editingSessionId: String? = null,
     val editingMessageId: String? = null,

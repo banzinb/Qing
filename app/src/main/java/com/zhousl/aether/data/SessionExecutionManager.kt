@@ -1776,10 +1776,6 @@ class SessionExecutionManager(
         request.agentModeEnabled && !request.settings.agentModeAuthorizationEnabled ->
                 "Agent Mode is selected, but authorization is disabled. Enable it in Settings > Agent Mode first."
 
-        request.chromeEnabled &&
-            request.settings.alpinePackageProfiles["chrome"]?.installed != true ->
-                "Chrome is selected, but it is not installed. Install it in Settings > Alpine first."
-
         else -> validateSettings(request.settings)
     }
 

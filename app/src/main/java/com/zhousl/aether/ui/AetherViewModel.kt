@@ -709,19 +709,6 @@ class AetherViewModel(
                     settingsRepository.updateSettings(
                         settings.copy(alpinePackageProfiles = verifiedProfiles)
                     )
-                    if (verifiedProfiles["chrome"]?.installed != true) {
-                        _uiState.update { current ->
-                            current.copy(
-                                draftChromeEnabled = false,
-                                sessions = current.sessions.map { it.copy(chromeEnabled = false) },
-                            )
-                        }
-                        chatStateStore.updateAndFlush { persisted ->
-                            persisted.copy(
-                                sessions = persisted.sessions.map { it.copy(chromeEnabled = false) },
-                            )
-                        }
-                    }
                 }
                 if (startPiIfReady) {
                     refreshPiCoreSetup()
@@ -814,13 +801,6 @@ class AetherViewModel(
             _uiState.update { current ->
                 current.copy(
                     alpinePackageInstallProgress = emptyMap(),
-                    draftChromeEnabled = false,
-                    sessions = current.sessions.map { it.copy(chromeEnabled = false) },
-                )
-            }
-            chatStateStore.updateAndFlush { persisted ->
-                persisted.copy(
-                    sessions = persisted.sessions.map { it.copy(chromeEnabled = false) },
                 )
             }
             initializeAlpineRuntimeAfterReset(makeDefault)
@@ -999,13 +979,6 @@ class AetherViewModel(
                 current.copy(
                     alpineSetupState = setupState,
                     alpinePackageInstallProgress = emptyMap(),
-                    draftChromeEnabled = false,
-                    sessions = current.sessions.map { it.copy(chromeEnabled = false) },
-                )
-            }
-            chatStateStore.updateAndFlush { persisted ->
-                persisted.copy(
-                    sessions = persisted.sessions.map { it.copy(chromeEnabled = false) },
                 )
             }
         }
@@ -1629,7 +1602,7 @@ class AetherViewModel(
                     draftSelectedSkillIds = emptyList(),
                     draftSelectedMcpServerIds = emptyList(),
                     draftAgentModeEnabled = false,
-                    draftChromeEnabled = false,
+                    draftChromeEnabled = DefaultChromeEnabledForNewChat,
                     draftWorkspaceId = null,
                     editingSessionId = null,
                     editingMessageId = null,
@@ -1922,7 +1895,7 @@ class AetherViewModel(
                 draftSelectedSkillIds = selectedSkillIds.filter(enabledSkillIds::contains),
                 draftSelectedMcpServerIds = emptyList(),
                 draftAgentModeEnabled = false,
-                draftChromeEnabled = false,
+                draftChromeEnabled = DefaultChromeEnabledForNewChat,
                 draftWorkspaceId = null,
                 editingSessionId = null,
                 editingMessageId = null,
@@ -1992,7 +1965,7 @@ class AetherViewModel(
                 draftSelectedSkillIds = emptyList(),
                 draftSelectedMcpServerIds = emptyList(),
                 draftAgentModeEnabled = false,
-                draftChromeEnabled = false,
+                draftChromeEnabled = DefaultChromeEnabledForNewChat,
                 draftWorkspaceId = null,
                 editingSessionId = null,
                 editingMessageId = null,
@@ -2235,7 +2208,7 @@ class AetherViewModel(
                             draftSelectedSkillIds = emptyList(),
                             draftSelectedMcpServerIds = emptyList(),
                             draftAgentModeEnabled = false,
-                            draftChromeEnabled = false,
+                            draftChromeEnabled = DefaultChromeEnabledForNewChat,
                             draftWorkspaceId = null,
                             editingSessionId = null,
                             editingMessageId = null,
@@ -2300,7 +2273,7 @@ class AetherViewModel(
                 draftSelectedSkillIds = emptyList(),
                 draftSelectedMcpServerIds = emptyList(),
                 draftAgentModeEnabled = false,
-                draftChromeEnabled = false,
+                draftChromeEnabled = DefaultChromeEnabledForNewChat,
                 draftWorkspaceId = null,
                 editingSessionId = null,
                 editingMessageId = null,
@@ -3832,9 +3805,9 @@ class AetherViewModel(
         var didUpdate = false
         var sessionIdForPersistence: String? = null
         _uiState.update { current ->
-            val resolvedSelected = selected &&
-                current.settings.alpinePackageProfiles["chrome"]?.installed == true &&
-                current.alpineSetupState.isReady
+            // The browser tool runs on the embedded WebView backend that ships with the app, so a
+            // session may enable it without Alpine or a Chromium install.
+            val resolvedSelected = selected
             if (current.currentSessionId == DraftSessionId) {
                 if (current.draftChromeEnabled == resolvedSelected) {
                     current
@@ -3861,11 +3834,8 @@ class AetherViewModel(
         }
         sessionIdForPersistence?.takeIf { didUpdate }?.let { sessionId ->
             persistSessionMutation(sessionId) { session ->
-                val resolvedSelected = selected &&
-                    _uiState.value.settings.alpinePackageProfiles["chrome"]?.installed == true &&
-                    _uiState.value.alpineSetupState.isReady
-                if (session.chromeEnabled == resolvedSelected) null
-                else session.copy(chromeEnabled = resolvedSelected)
+                if (session.chromeEnabled == selected) null
+                else session.copy(chromeEnabled = selected)
             }
         }
     }
@@ -4764,7 +4734,7 @@ class AetherViewModel(
                 draftSelectedSkillIds = emptyList(),
                 draftSelectedMcpServerIds = emptyList(),
                 draftAgentModeEnabled = false,
-                draftChromeEnabled = false,
+                draftChromeEnabled = DefaultChromeEnabledForNewChat,
                 draftWorkspaceId = null,
                 editingSessionId = null,
                 editingMessageId = null,
