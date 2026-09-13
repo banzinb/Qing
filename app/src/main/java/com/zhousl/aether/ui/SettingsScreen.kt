@@ -178,6 +178,9 @@ import com.zhousl.aether.data.HealthPermissionLocation
 import com.zhousl.aether.data.HealthRuntimeAlpine
 import com.zhousl.aether.data.HealthRuntimeBoth
 import com.zhousl.aether.data.HealthRuntimeTermux
+import com.zhousl.aether.data.HealthScreenControlNotConnected
+import com.zhousl.aether.data.HealthScreenControlReady
+import com.zhousl.aether.data.accessibility.AccessibilityStatus
 import com.zhousl.aether.data.AppLanguage
 import com.zhousl.aether.data.AppAccent
 import com.zhousl.aether.data.AppThemeMode
@@ -7875,6 +7878,7 @@ private fun healthCheckAction(
     HealthCheckId.Model -> SettingsPage.Providers
     HealthCheckId.Runtime -> SettingsPage.Alpine
     HealthCheckId.AgentMode -> SettingsPage.AgentMode
+    HealthCheckId.ScreenControl -> SettingsPage.DevicePermissions
     HealthCheckId.PhonePermissions -> SettingsPage.DevicePermissions
     else -> null
 }?.let { page ->
@@ -7940,6 +7944,7 @@ private fun healthCheckTitle(id: HealthCheckId): String = stringResource(
         HealthCheckId.Notifications -> R.string.health_check_notifications_title
         HealthCheckId.Battery -> R.string.health_check_battery_title
         HealthCheckId.ExactAlarm -> R.string.health_check_exact_alarm_title
+        HealthCheckId.ScreenControl -> R.string.health_check_screen_control_title
         HealthCheckId.PhonePermissions -> R.string.health_check_phone_permissions_title
         HealthCheckId.ContextWindow -> R.string.health_check_context_window_title
         HealthCheckId.LastCrash -> R.string.health_check_last_crash_title
@@ -7971,6 +7976,13 @@ private fun healthCheckDetail(item: HealthCheckItem): String {
             HealthAgentModeNotAuthorized -> stringResource(R.string.health_check_agent_mode_attention)
             HealthAgentModeDisabled -> stringResource(R.string.health_check_agent_mode_ok_off)
             else -> stringResource(R.string.health_check_agent_mode_ok)
+        }
+
+        HealthCheckId.ScreenControl -> when (item.detail) {
+            HealthScreenControlNotConnected ->
+                stringResource(R.string.health_check_screen_control_attention)
+            HealthScreenControlReady -> stringResource(R.string.health_check_screen_control_ok)
+            else -> stringResource(R.string.health_check_screen_control_ok_off)
         }
 
         HealthCheckId.PhonePermissions -> if (item.detail.isBlank()) {
@@ -8080,8 +8092,25 @@ private fun DevicePermissionsSettingsPage(
         contract = ActivityResultContracts.RequestMultiplePermissions(),
         onResult = { refreshToken += 1 },
     )
+    // Screen control is switched on in the system accessibility settings, so the
+    // state has to be re-read every time the user comes back to this page.
+    var screenControlState by remember { mutableStateOf(AccessibilityStatus.state(context)) }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+        screenControlState = AccessibilityStatus.state(context)
+    }
 
     SubPageScaffold(title = title, onBack = onBack) {
+        SettingsCardGroup {
+            ScreenControlRow(
+                state = screenControlState,
+                onOpenSettings = {
+                    runCatching {
+                        context.startActivity(AccessibilityStatus.accessibilitySettingsIntent())
+                    }
+                },
+            )
+        }
+        Spacer(Modifier.height(16.dp))
         SettingsCardGroup {
             DevicePermission.entries.forEachIndexed { index, spec ->
                 if (index > 0) CardDivider()
@@ -8093,6 +8122,53 @@ private fun DevicePermissionsSettingsPage(
                     },
                     onGrant = { permissionLauncher.launch(arrayOf(spec.permission)) },
                 )
+            }
+        }
+    }
+}
+
+/**
+ * The screen-reading service is not a runtime permission: the user grants it in
+ * Android's accessibility settings, and it can be on without being connected.
+ * The row says which of the three states applies instead of a plain yes/no.
+ */
+@Composable
+private fun ScreenControlRow(
+    state: AccessibilityStatus.State,
+    onOpenSettings: () -> Unit,
+) {
+    val ready = state == AccessibilityStatus.State.Ready
+    Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = stringResource(R.string.device_screen_control_title),
+                style = MaterialTheme.typography.titleSmall,
+                color = AetherOnSurface,
+            )
+            Spacer(Modifier.weight(1f))
+            Text(
+                text = stringResource(
+                    when (state) {
+                        AccessibilityStatus.State.Ready -> R.string.device_screen_control_ready
+                        AccessibilityStatus.State.EnabledButNotConnected ->
+                            R.string.device_screen_control_not_connected
+                        AccessibilityStatus.State.Disabled -> R.string.device_screen_control_disabled
+                    },
+                ),
+                style = MaterialTheme.typography.labelMedium,
+                color = if (ready) AetherOnSurfaceVariant else ToolAuditDeniedColor,
+            )
+        }
+        Spacer(Modifier.height(4.dp))
+        Text(
+            text = stringResource(R.string.device_screen_control_subtitle),
+            style = MaterialTheme.typography.bodySmall,
+            color = AetherOnSurfaceVariant,
+        )
+        if (!ready) {
+            Spacer(Modifier.height(10.dp))
+            Button(onClick = onOpenSettings) {
+                Text(stringResource(R.string.device_screen_control_open))
             }
         }
     }

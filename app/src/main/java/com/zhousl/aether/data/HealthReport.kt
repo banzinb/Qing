@@ -17,6 +17,7 @@ enum class HealthCheckId {
     Model,
     Runtime,
     AgentMode,
+    ScreenControl,
     Notifications,
     Battery,
     ExactAlarm,
@@ -34,6 +35,7 @@ enum class HealthCheckId {
  * - [HealthCheckId.Model]: the default model name, empty when unset
  * - [HealthCheckId.Runtime]: `alpine`, `termux`, `both`, or empty when neither is ready
  * - [HealthCheckId.AgentMode]: `disabled` or `not_authorized`, empty when ready
+ * - [HealthCheckId.ScreenControl]: `disabled`, `not_connected` or `ready`
  * - [HealthCheckId.PhonePermissions]: the missing ones, comma-separated, from
  *   `location`, `contacts`, `calendar`
  * - [HealthCheckId.ContextWindow]: the window the kernel plans against, in
@@ -54,6 +56,7 @@ data class HealthSnapshot(
     val termuxReady: Boolean = false,
     val agentModeEnabled: Boolean = false,
     val agentModeReady: Boolean = false,
+    val screenControlState: String = HealthScreenControlDisabled,
     val notificationsAllowed: Boolean = true,
     val batteryUnrestricted: Boolean = true,
     val exactAlarmAllowed: Boolean = true,
@@ -69,6 +72,9 @@ internal const val HealthRuntimeTermux = "termux"
 internal const val HealthRuntimeBoth = "both"
 internal const val HealthAgentModeDisabled = "disabled"
 internal const val HealthAgentModeNotAuthorized = "not_authorized"
+internal const val HealthScreenControlDisabled = "disabled"
+internal const val HealthScreenControlNotConnected = "not_connected"
+internal const val HealthScreenControlReady = "ready"
 internal const val HealthPermissionLocation = "location"
 internal const val HealthPermissionContacts = "contacts"
 internal const val HealthPermissionCalendar = "calendar"
@@ -115,6 +121,17 @@ fun buildHealthReport(snapshot: HealthSnapshot): List<HealthCheckItem> {
                 HealthStatus.Ok
             },
             detail = agentModeDetail,
+        ),
+        // Optional like Agent Mode: switched off is fine, switched on but not
+        // connected means the user has to toggle it in system settings.
+        HealthCheckItem(
+            id = HealthCheckId.ScreenControl,
+            status = if (snapshot.screenControlState == HealthScreenControlNotConnected) {
+                HealthStatus.Attention
+            } else {
+                HealthStatus.Ok
+            },
+            detail = snapshot.screenControlState,
         ),
         HealthCheckItem(
             id = HealthCheckId.Notifications,

@@ -1274,6 +1274,12 @@
     <string name="device_permission_granted">已授权</string>
     <string name="device_permission_not_granted">未授权</string>
     <string name="device_permission_grant">去授权</string>
+    <string name="device_screen_control_title">屏幕操作</string>
+    <string name="device_screen_control_subtitle">让青读取当前屏幕，按文字点击、输入或滚动，而不是靠猜坐标。在安卓的无障碍设置里开启，只对你眼前这块屏幕生效。</string>
+    <string name="device_screen_control_ready">已开启</string>
+    <string name="device_screen_control_not_connected">开了但没连上</string>
+    <string name="device_screen_control_disabled">未开启</string>
+    <string name="device_screen_control_open">去无障碍设置开启</string>
     <string name="settings_health">自检</string>
     <string name="health_summary_unknown">还没检查</string>
     <string name="health_summary_all_ok">一切正常，可以放心用</string>
@@ -1291,6 +1297,10 @@
     <string name="health_check_agent_mode_ok">已授权，能直接操作屏幕上的 App</string>
     <string name="health_check_agent_mode_ok_off">没开，用不到就不用开</string>
     <string name="health_check_agent_mode_attention">开了但还没授权，操作会被挡住</string>
+    <string name="health_check_screen_control_title">屏幕操作</string>
+    <string name="health_check_screen_control_ok">开着，青能按文字找到控件并点击</string>
+    <string name="health_check_screen_control_ok_off">没开，不需要青操作别的 App 就不用开</string>
+    <string name="health_check_screen_control_attention">开了但没连上，去设置里关掉再开一次</string>
     <string name="health_check_notifications_title">通知</string>
     <string name="health_check_notifications_ok">开着，任务做完会告诉你</string>
     <string name="health_check_notifications_attention">关着，任务做完收不到通知</string>

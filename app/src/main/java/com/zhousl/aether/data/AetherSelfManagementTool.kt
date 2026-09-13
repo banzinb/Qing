@@ -1,5 +1,6 @@
 package com.zhousl.aether.data
 
+import com.zhousl.aether.data.accessibility.QingUiToolHandler
 import com.zhousl.aether.data.pi.PiKernelBridge
 import com.zhousl.aether.termux.TermuxBashTool
 import com.zhousl.aether.termux.TermuxSetupState
@@ -23,6 +24,7 @@ class AetherSelfManagementTool(
     private val sessionId: String,
     private val diagnosticLogger: AetherDiagnosticLogger = AetherDiagnosticLogger.NoOp,
     private val deviceCapabilities: DeviceCapabilityHandler? = null,
+    private val uiAutomation: QingUiToolHandler? = null,
 ) {
     fun toolDefinitions(): List<JSONObject> = listOf(
         buildAetherToolDefinition(
@@ -404,6 +406,159 @@ class AetherSelfManagementTool(
             },
             required = listOf("action"),
         ),
+
+        buildAetherToolDefinition(
+            name = "aether_ui_manage",
+            description = "Read and operate the screen the user is looking at right now, through Qing's " +
+                "screen-reading service. read: list the on-screen controls, each with a short-lived node_id. " +
+                "find: locate controls by text, view id or class name. tap: press a control, by node_id, by its " +
+                "text, or by x and y. set_text: type into a field (Chinese is fine). scroll: move a list. " +
+                "back / home / recents: system navigation. wait_for: wait until something appears (present=true) " +
+                "or disappears (present=false). status: whether the service is switched on. " +
+                "This tool only ever acts on the foreground screen; it never touches Agent Mode's virtual display. " +
+                "A tap that returns ok only means the action was delivered — read the screen again to confirm the " +
+                "result instead of assuming the task is done. If several controls match, you get the candidates and " +
+                "must pick one by node_id. If the service is off the result says so; the user switches it on in " +
+                "Settings, Accessibility (Qing screen control).",
+            properties = JSONObject().apply {
+                put(
+                    "action",
+                    JSONObject().apply {
+                        put("type", "string")
+                        put(
+                            "enum",
+                            JSONArray(
+                                listOf(
+                                    "status",
+                                    "read",
+                                    "find",
+                                    "tap",
+                                    "set_text",
+                                    "scroll",
+                                    "back",
+                                    "home",
+                                    "recents",
+                                    "wait_for",
+                                )
+                            ),
+                        )
+                        put(
+                            "description",
+                            "status: is the service on. read: snapshot of the screen. find: locate controls. " +
+                                "tap: press something. set_text: type into a field. scroll: move a list. " +
+                                "back / home / recents: system navigation. wait_for: wait for something to appear or go away.",
+                        )
+                    },
+                )
+                put(
+                    "node_id",
+                    JSONObject().apply {
+                        put("type", "string")
+                        put("description", "A control's id from an earlier read / find. It expires after a minute and dies when the screen changes.")
+                    },
+                )
+                put(
+                    "text",
+                    JSONObject().apply {
+                        put("type", "string")
+                        put("description", "Text of the control: exact match, or the text to type for action=set_text.")
+                    },
+                )
+                put(
+                    "text_contains",
+                    JSONObject().apply {
+                        put("type", "string")
+                        put("description", "Match any control whose text or description contains this.")
+                    },
+                )
+                put(
+                    "view_id",
+                    JSONObject().apply {
+                        put("type", "string")
+                        put("description", "Android view id, full (com.android.settings:id/search) or short (search).")
+                    },
+                )
+                put(
+                    "class_name",
+                    JSONObject().apply {
+                        put("type", "string")
+                        put("description", "Widget class, full (android.widget.EditText) or short (EditText).")
+                    },
+                )
+                put(
+                    "clickable_only",
+                    JSONObject().apply {
+                        put("type", "boolean")
+                        put("description", "Only list controls that can be pressed. Keeps a long screen short.")
+                    },
+                )
+                put(
+                    "editable_only",
+                    JSONObject().apply {
+                        put("type", "boolean")
+                        put("description", "Only list fields that accept text.")
+                    },
+                )
+                put(
+                    "contains",
+                    JSONObject().apply {
+                        put("type", "boolean")
+                        put("description", "For action=find/tap: match text as a substring instead of exactly.")
+                    },
+                )
+                put(
+                    "limit",
+                    JSONObject().apply {
+                        put("type", "integer")
+                        put("description", "Maximum nodes to list for action=read/find. Defaults to 200.")
+                    },
+                )
+                put(
+                    "x",
+                    JSONObject().apply {
+                        put("type", "integer")
+                        put("description", "For action=tap when pressing a raw screen coordinate instead of a control.")
+                    },
+                )
+                put(
+                    "y",
+                    JSONObject().apply {
+                        put("type", "integer")
+                        put("description", "For action=tap with x: the vertical screen coordinate.")
+                    },
+                )
+                put(
+                    "long_press",
+                    JSONObject().apply {
+                        put("type", "boolean")
+                        put("description", "For action=tap: press and hold instead of tapping.")
+                    },
+                )
+                put(
+                    "direction",
+                    JSONObject().apply {
+                        put("type", "string")
+                        put("enum", JSONArray(listOf("forward", "backward", "left", "right")))
+                        put("description", "For action=scroll. Defaults to forward (down the list).")
+                    },
+                )
+                put(
+                    "present",
+                    JSONObject().apply {
+                        put("type", "boolean")
+                        put("description", "For action=wait_for: true waits for the target to appear, false for it to go away.")
+                    },
+                )
+                put(
+                    "timeout",
+                    JSONObject().apply {
+                        put("type", "integer")
+                        put("description", "For action=wait_for: milliseconds to wait before giving up. Defaults to 10000, maximum 60000.")
+                    },
+                )
+            },
+            required = listOf("action"),
+        ),
     )
 
     suspend fun execute(
@@ -416,6 +571,7 @@ class AetherSelfManagementTool(
         "aether_termux_manage" -> executeTermuxManage(argumentsJson)
         "aether_agent_mode_manage" -> executeAgentModeManage(argumentsJson)
         "aether_device_manage" -> executeDeviceManage(argumentsJson)
+        "aether_ui_manage" -> executeUiManage(argumentsJson)
         "aether_scheduled_task_manage" -> executeScheduledTaskManage(argumentsJson)
         "aether_extension_manage" -> executeExtensionManage(argumentsJson)
         "aether_developer_manage" -> executeDeveloperManage(argumentsJson)
@@ -466,6 +622,13 @@ class AetherSelfManagementTool(
             )
             else -> return failure("Unsupported device action '$action'.")
         }.toString()
+    }
+
+    private suspend fun executeUiManage(argumentsJson: String): String {
+        val arguments = parseArguments(argumentsJson) ?: return invalidJson()
+        val handler = uiAutomation
+            ?: return failure("Screen control is not available on this platform.")
+        return handler.execute(arguments.toString())
     }
 
     private suspend fun executeConfigGet(argumentsJson: String): String {

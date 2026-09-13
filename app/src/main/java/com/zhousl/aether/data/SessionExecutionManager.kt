@@ -5,6 +5,7 @@ import android.os.SystemClock
 import com.zhousl.aether.AetherForegroundService
 import com.zhousl.aether.AetherNotificationController
 import com.zhousl.aether.AppForegroundTracker
+import com.zhousl.aether.data.accessibility.QingUiToolHandler
 import com.zhousl.aether.runtime.RuntimeRouter
 import com.zhousl.aether.runtime.RuntimeShellTool
 import com.zhousl.aether.data.pi.PiAgentRunner
@@ -562,6 +563,7 @@ class SessionExecutionManager(
             sessionId = handle.sessionId,
             diagnosticLogger = diagnosticLogger,
             deviceCapabilities = DeviceCapabilityHandler(application),
+            uiAutomation = QingUiToolHandler(application),
         )
 
         updateExecutionState(handle.sessionId) {

@@ -14,7 +14,7 @@ class HealthReportTest {
 
         assertEquals(HealthStatus.Attention, item(HealthSnapshot(), HealthCheckId.Model).status)
         assertEquals(HealthStatus.Attention, item(HealthSnapshot(), HealthCheckId.Runtime).status)
-        assertEquals(9, report.size)
+        assertEquals(10, report.size)
         assertEquals(HealthCheckId.Model, report.first().id)
     }
 
@@ -68,6 +68,20 @@ class HealthReportTest {
         assertEquals(HealthStatus.Attention, item(broken, HealthCheckId.AgentMode).status)
         assertEquals(HealthAgentModeNotAuthorized, item(broken, HealthCheckId.AgentMode).detail)
         assertEquals(HealthStatus.Ok, item(working, HealthCheckId.AgentMode).status)
+    }
+
+    @Test
+    fun `screen control is only a problem when it is on but not connected`() {
+        val off = HealthSnapshot(screenControlState = HealthScreenControlDisabled)
+        val broken = HealthSnapshot(screenControlState = HealthScreenControlNotConnected)
+        val working = HealthSnapshot(screenControlState = HealthScreenControlReady)
+
+        assertEquals(HealthStatus.Ok, item(off, HealthCheckId.ScreenControl).status)
+        assertEquals(HealthScreenControlDisabled, item(off, HealthCheckId.ScreenControl).detail)
+        assertEquals(HealthStatus.Attention, item(broken, HealthCheckId.ScreenControl).status)
+        assertEquals(HealthScreenControlNotConnected, item(broken, HealthCheckId.ScreenControl).detail)
+        assertEquals(HealthStatus.Ok, item(working, HealthCheckId.ScreenControl).status)
+        assertEquals(HealthScreenControlReady, item(working, HealthCheckId.ScreenControl).detail)
     }
 
     @Test

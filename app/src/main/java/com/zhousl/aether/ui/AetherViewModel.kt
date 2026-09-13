@@ -23,7 +23,11 @@ import com.zhousl.aether.data.AetherAnalytics
 import com.zhousl.aether.data.AetherModOperationDecision
 import com.zhousl.aether.data.AetherModServiceMethod
 import com.zhousl.aether.data.HealthSnapshot
+import com.zhousl.aether.data.HealthScreenControlDisabled
+import com.zhousl.aether.data.HealthScreenControlNotConnected
+import com.zhousl.aether.data.HealthScreenControlReady
 import com.zhousl.aether.data.buildHealthReport
+import com.zhousl.aether.data.accessibility.AccessibilityStatus
 import com.zhousl.aether.data.AppUpdateManager
 import com.zhousl.aether.data.AutomaticModelPurpose
 import com.zhousl.aether.data.AgentModeAuthorizationMethod
@@ -1765,6 +1769,11 @@ class AetherViewModel(
             termuxReady = snapshot.termuxSetupState.isReady,
             agentModeEnabled = snapshot.settings.agentModeAuthorizationEnabled,
             agentModeReady = snapshot.agentModeAuthorizationState.isReady,
+            screenControlState = when (AccessibilityStatus.state(context)) {
+                AccessibilityStatus.State.Disabled -> HealthScreenControlDisabled
+                AccessibilityStatus.State.EnabledButNotConnected -> HealthScreenControlNotConnected
+                AccessibilityStatus.State.Ready -> HealthScreenControlReady
+            },
             notificationsAllowed = areNotificationsAllowed(context),
             batteryUnrestricted = powerManager
                 ?.isIgnoringBatteryOptimizations(context.packageName)

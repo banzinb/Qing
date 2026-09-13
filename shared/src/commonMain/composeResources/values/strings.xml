@@ -1276,6 +1276,12 @@
     <string name="device_permission_granted">Granted</string>
     <string name="device_permission_not_granted">Not granted</string>
     <string name="device_permission_grant">Grant</string>
+    <string name="device_screen_control_title">Screen control</string>
+    <string name="device_screen_control_subtitle">Lets Qing read the current screen and tap, type or scroll on it by name instead of guessing coordinates. It is switched on in Android's accessibility settings, and it only ever works on the screen you are looking at.</string>
+    <string name="device_screen_control_ready">On</string>
+    <string name="device_screen_control_not_connected">On, not connected</string>
+    <string name="device_screen_control_disabled">Off</string>
+    <string name="device_screen_control_open">Open accessibility settings</string>
     <string name="settings_health">Self-check</string>
     <string name="health_summary_unknown">Not checked yet</string>
     <string name="health_summary_all_ok">Everything checks out</string>
@@ -1293,6 +1299,10 @@
     <string name="health_check_agent_mode_ok">Authorized, so Qing can drive apps on screen</string>
     <string name="health_check_agent_mode_ok_off">Off, and that is fine unless you need it</string>
     <string name="health_check_agent_mode_attention">On but not authorized, so actions get blocked</string>
+    <string name="health_check_screen_control_title">Screen control</string>
+    <string name="health_check_screen_control_ok">On, so Qing can find a control by name and tap it</string>
+    <string name="health_check_screen_control_ok_off">Off, and that is fine unless Qing should work other apps</string>
+    <string name="health_check_screen_control_attention">On but not connected, so switch it off and on again in settings</string>
     <string name="health_check_notifications_title">Notifications</string>
     <string name="health_check_notifications_ok">Allowed, so you hear when a task finishes</string>
     <string name="health_check_notifications_attention">Off, so finished tasks stay silent</string>
