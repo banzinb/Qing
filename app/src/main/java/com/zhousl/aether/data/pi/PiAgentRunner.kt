@@ -14,6 +14,7 @@ import com.zhousl.aether.data.LlmTextPart
 import com.zhousl.aether.data.LocalRuntimeId
 import com.zhousl.aether.data.PiExtensionStateRepository
 import com.zhousl.aether.data.StreamingStatus
+import com.zhousl.aether.data.browser.BrowserToolRouter
 import com.zhousl.aether.data.SettingsRepository
 import com.zhousl.aether.data.ToolAuditEntry
 import com.zhousl.aether.data.ToolAuditStore
@@ -46,6 +47,7 @@ class PiAgentRunner(
     private val piExtensionStateRepository: PiExtensionStateRepository? = null,
     private val appExtensionManager: AetherAppExtensionManager? = null,
     private val alpineChromeController: AlpineChromeController? = null,
+    private val browserToolRouter: BrowserToolRouter? = null,
     private val termuxRuntimeOperations: TermuxRuntimeOperations? = null,
     private val diagnosticLogger: AetherDiagnosticLogger = AetherDiagnosticLogger.NoOp,
     private val toolAuditStore: ToolAuditStore? = null,
@@ -660,8 +662,9 @@ class PiAgentRunner(
         val args = payload.optJSONObject("args") ?: JSONObject()
         val arguments = args.optJSONObject("arguments") ?: JSONObject()
         val result = runCatching {
-            alpineChromeController?.execute(arguments.toString())
-                ?: error("Chrome is unavailable on this platform.")
+            browserToolRouter?.execute(arguments.toString())
+                ?: alpineChromeController?.execute(arguments.toString())
+                ?: error("The browser is unavailable on this platform.")
         }
         result.fold(
             onSuccess = { raw ->
@@ -678,7 +681,7 @@ class PiAgentRunner(
                     result = JSONObject()
                         .put("ok", false)
                         .put("code", "setup_required")
-                        .put("errmsg", throwable.message ?: "Chrome is not installed in Alpine."),
+                        .put("errmsg", throwable.message ?: "The browser host is unavailable."),
                 )
             },
         )

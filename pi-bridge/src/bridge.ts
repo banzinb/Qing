@@ -2196,7 +2196,15 @@ const aetherChromeExtensionFactory: ExtensionFactory = (pi) => {
   pi.registerTool({
     name: "browser",
     label: "Browser",
-    description: "Control Aether's Chromium browser. Prefer CSS selectors and DOM-reading actions; use normalized coordinates only as a fallback.",
+    description:
+      "Control Qing's browser. The default backend is the embedded WebView that ships with the app " +
+      "(backend \"auto\" keeps an already-running Alpine/Chromium session, otherwise it uses the embedded one). " +
+      "Prefer CSS selectors and DOM-reading actions; use normalized 0..1000 coordinates only as a fallback. " +
+      "click reports clicked/blocked_reason and never claims success for a blocked element; " +
+      "re-read the page after acting instead of assuming the task finished. " +
+      "wait_for / wait_for_gone wait for a condition instead of sleeping a fixed delay. " +
+      "hover, scroll_and_collect, set_user_agent, set_viewport, new_tab, close_tab and list_tabs are only " +
+      "available on the embedded backend.",
     promptSnippet: "control the optional browser",
     executionMode: "sequential",
     parameters: Type.Object({
@@ -2206,9 +2214,20 @@ const aetherChromeExtensionFactory: ExtensionFactory = (pi) => {
         Type.Literal("execute_js"), Type.Literal("find_elements"), Type.Literal("get_readable"),
         Type.Literal("get_backbone"), Type.Literal("back"), Type.Literal("forward"), Type.Literal("reload"),
         Type.Literal("screenshot"), Type.Literal("wait_for_dom_stable"), Type.Literal("stop"),
+        Type.Literal("hover"), Type.Literal("scroll_and_collect"), Type.Literal("set_user_agent"),
+        Type.Literal("set_viewport"), Type.Literal("new_tab"), Type.Literal("close_tab"),
+        Type.Literal("list_tabs"), Type.Literal("wait_for"), Type.Literal("wait_for_gone"),
       ]),
+      backend: Type.Optional(Type.Union(
+        [Type.Literal("auto"), Type.Literal("webview"), Type.Literal("alpine")],
+        {
+          description:
+            "Which browser backend runs this action. \"auto\" (default) uses the embedded WebView, " +
+            "or Alpine/Chromium when that backend already has the session. The result always reports the backend used.",
+        },
+      )),
       url: Type.Optional(Type.String({ description: "For navigate: the URL to open." })),
-      selector: Type.Optional(Type.String({ description: "CSS selector for click, type, get_text, scroll, or find_elements." })),
+      selector: Type.Optional(Type.String({ description: "CSS selector for click, type, get_text, scroll, find_elements, hover, wait_for or wait_for_gone." })),
       text: Type.Optional(Type.String({ description: "For type: text to enter." })),
       x: Type.Optional(Type.Integer({ description: "For click fallback: normalized X coordinate from 0 to 1000." })),
       y: Type.Optional(Type.Integer({ description: "For click fallback: normalized Y coordinate from 0 to 1000." })),
@@ -2216,7 +2235,15 @@ const aetherChromeExtensionFactory: ExtensionFactory = (pi) => {
       amount: Type.Optional(Type.Integer({ description: "Scroll distance in CSS pixels." })),
       script: Type.Optional(Type.String({ description: "JavaScript source for execute_js." })),
       max_depth: Type.Optional(Type.Integer({ description: "Maximum DOM depth for get_backbone." })),
-      timeout: Type.Optional(Type.Integer({ description: "Maximum wait in milliseconds for wait_for_dom_stable." })),
+      timeout: Type.Optional(Type.Integer({ description: "Maximum wait in milliseconds for wait_for_dom_stable, wait_for or wait_for_gone." })),
+      visible: Type.Optional(Type.Boolean({ description: "For wait_for / wait_for_gone: only count elements that are actually visible. Defaults to true for wait_for and false for wait_for_gone." })),
+      min_count: Type.Optional(Type.Integer({ description: "For wait_for / wait_for_gone: how many matching elements the condition needs. Defaults to 1." })),
+      tab_id: Type.Optional(Type.String({ description: "Browser tab id. Omit to use the active tab." })),
+      new_tab: Type.Optional(Type.Boolean({ description: "For navigate: open the URL in a new embedded tab." })),
+      user_agent: Type.Optional(Type.String({ description: "For set_user_agent: the User-Agent to send on the next navigation." })),
+      width: Type.Optional(Type.Integer({ description: "For set_viewport: viewport width in CSS pixels." })),
+      height: Type.Optional(Type.Integer({ description: "For set_viewport: viewport height in CSS pixels." })),
+      steps: Type.Optional(Type.Integer({ description: "For scroll_and_collect: maximum number of scroll steps." })),
     }),
     execute: async (_toolCallId, params, signal) => {
       if (signal?.aborted) throw new Error("Browser operation was cancelled.");

@@ -9,6 +9,8 @@ import com.posthog.android.PostHogAndroid
 import com.posthog.android.PostHogAndroidConfig
 import com.zhousl.aether.data.AgentExtensionsRepository
 import com.zhousl.aether.data.AlpineChromeController
+import com.zhousl.aether.data.browser.BrowserToolRouter
+import com.zhousl.aether.data.browser.WebViewBrowserController
 import com.zhousl.aether.data.AgentModeController
 import com.zhousl.aether.data.AgentSkillManager
 import com.zhousl.aether.data.AetherAppExtensionManager
@@ -182,6 +184,15 @@ class AetherAppRuntime(
         alpineRuntime = alpineRuntime,
         diagnosticLogger = diagnosticLogger,
     )
+    val webViewBrowserController = WebViewBrowserController(
+        context = application,
+        diagnosticLogger = diagnosticLogger,
+    )
+    val browserToolRouter = BrowserToolRouter(
+        executeWebView = webViewBrowserController::execute,
+        executeAlpine = alpineChromeController::execute,
+        webViewHasTabs = webViewBrowserController::hasOpenTabs,
+    )
     val skillManager = AgentSkillManager(
         context = application,
         extensionsRepository = extensionsRepository,
@@ -209,6 +220,7 @@ class AetherAppRuntime(
         piExtensionStateRepository = piExtensionStateRepository,
         appExtensionManager = aetherAppExtensionManager,
         alpineChromeController = alpineChromeController,
+        browserToolRouter = browserToolRouter,
         termuxRuntimeOperations = TermuxRuntimeOperations(bashTool),
         diagnosticLogger = diagnosticLogger,
         toolAuditStore = ToolAuditStore(application),

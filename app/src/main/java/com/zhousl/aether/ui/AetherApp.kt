@@ -483,8 +483,9 @@ private fun AetherAppContent(
         effectiveTermuxSetupState.isReady &&
         uiState.agentModeAuthorizationState.isReady
     val agentModeSelected = activeSession?.agentModeEnabled ?: uiState.draftAgentModeEnabled
-    val chromeAvailable = uiState.alpineSetupState.isReady &&
-        uiState.settings.alpinePackageProfiles["chrome"]?.installed == true
+    // The embedded WebView backend ships with the app, so the browser entry no longer depends on
+    // installing Chromium into Alpine. Alpine/Chromium stays available as an explicit fallback.
+    val chromeAvailable = true
     val chromeSelected = activeSession?.chromeEnabled ?: uiState.draftChromeEnabled
     val conversationModelOptions = remember(uiState.providerConfigs) {
         uiState.providerConfigs.availableModelOptions()
