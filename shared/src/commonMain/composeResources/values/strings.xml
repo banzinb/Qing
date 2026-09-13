@@ -1273,6 +1273,8 @@
     <string name="device_permission_contacts_subtitle">Look up a number by name, at most 10 people. Read-only: nothing is changed or uploaded.</string>
     <string name="device_permission_calendar">Calendar</string>
     <string name="device_permission_calendar_subtitle">Read the next few days of events. New events go through the system calendar, which needs no extra permission.</string>
+    <string name="device_permission_photos">Photos</string>
+    <string name="device_permission_photos_subtitle">List your photos and pull one into the workspace so Qing can actually look at it. Read-only: nothing is changed or uploaded.</string>
     <string name="device_permission_granted">Granted</string>
     <string name="device_permission_not_granted">Not granted</string>
     <string name="device_permission_grant">Grant</string>

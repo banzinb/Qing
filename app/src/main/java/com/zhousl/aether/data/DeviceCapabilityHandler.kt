@@ -8,6 +8,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
+import android.database.Cursor
 import android.location.Location
 import android.location.LocationListener
 import android.location.LocationManager
@@ -22,6 +23,7 @@ import android.os.SystemClock
 import android.provider.AlarmClock
 import android.provider.CalendarContract
 import android.provider.ContactsContract
+import android.provider.MediaStore
 import androidx.core.content.ContextCompat
 import java.net.URLEncoder
 import java.text.ParsePosition
@@ -309,6 +311,144 @@ class DeviceCapabilityHandler(private val context: Context) {
                     }
                 },
             )
+        }
+    }
+
+    /**
+     * Lists photos from the shared image store, newest first (device batch 2-c).
+     *
+     * Only metadata comes back — Qing cannot show the model a picture by listing
+     * it, so [photoById] plus the workspace copy in the tool layer is what makes
+     * this actually useful. The listing stops at [limit] rows and says whether
+     * more existed, so a big camera roll cannot flood the conversation.
+     *
+     * @param album exact album (bucket) name, e.g. `Camera`
+     * @param contains part of the file name
+     * @param days only photos taken in the last N days (0 or null for all)
+     */
+    suspend fun photosRecent(
+        limit: Int,
+        album: String,
+        contains: String,
+        days: Int?,
+    ): JSONObject = withContext(Dispatchers.IO) {
+        if (!hasPermission(photoPermissionForSdk(Build.VERSION.SDK_INT))) {
+            return@withContext missingPermission("相册", "照片")
+        }
+        val cappedLimit = limit.coerceIn(1, PhotoListMaxLimit)
+        val query = buildPhotoQuery(
+            album = album,
+            nameContains = contains,
+            days = days,
+            nowMillis = System.currentTimeMillis(),
+        )
+        val photos = mutableListOf<JSONObject>()
+        var truncated = false
+        val failureReason = runCatching {
+            context.contentResolver.query(
+                MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                PhotoProjection,
+                query.selection.ifBlank { null },
+                query.arguments.toTypedArray().ifEmpty { null },
+                "${MediaStore.Images.Media.DATE_TAKEN} DESC, ${MediaStore.Images.Media.DATE_ADDED} DESC",
+            )?.use { cursor ->
+                val columns = PhotoColumns(cursor)
+                while (photos.size < cappedLimit && cursor.moveToNext()) {
+                    photos += photoJson(cursor, columns)
+                }
+                // One row past the cap means the roll is longer than the answer.
+                truncated = cursor.moveToNext()
+            }
+        }.exceptionOrNull()
+        if (failureReason != null) {
+            return@withContext failure(
+                "Could not read the photo library: ${failureReason.message ?: failureReason::class.java.simpleName}",
+            )
+        }
+        JSONObject().apply {
+            put("ok", true)
+            put("count", photos.size)
+            put("truncated", truncated)
+            put("photos", JSONArray(photos))
+            if (photos.isEmpty()) {
+                put("note", "No photo matched. Try a wider filter, or ask the user to grant the photos permission.")
+            } else if (truncated) {
+                put(
+                    "note",
+                    "Only the newest $cappedLimit photo(s) are listed; more exist. Narrow it with album, contains or days.",
+                )
+            }
+        }
+    }
+
+    /**
+     * Resolves a photo id from [photosRecent] back to the picture itself, so the
+     * tool layer can copy it into the workspace where the model can open it.
+     * Returns null when the id is unknown or the library is not readable.
+     */
+    suspend fun photoById(id: String): DevicePhoto? = withContext(Dispatchers.IO) {
+        val numericId = id.trim().toLongOrNull() ?: return@withContext null
+        if (!hasPermission(photoPermissionForSdk(Build.VERSION.SDK_INT))) return@withContext null
+        runCatching {
+            context.contentResolver.query(
+                MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                PhotoProjection,
+                "${MediaStore.Images.Media._ID} = ?",
+                arrayOf(numericId.toString()),
+                null,
+            )?.use { cursor ->
+                if (!cursor.moveToFirst()) return@use null
+                val columns = PhotoColumns(cursor)
+                DevicePhoto(
+                    uri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, numericId),
+                    displayName = cursor.getString(columns.name)
+                        .orEmpty()
+                        .ifBlank { "photo-$numericId.jpg" },
+                    takenAtMillis = cursor.getLong(columns.takenAt)
+                        .takeIf { it > 0L }
+                        ?: (cursor.getLong(columns.addedAt) * 1_000L),
+                )
+            }
+        }.getOrNull()
+    }
+
+    /**
+     * Opens the contacts app with a new contact filled in (device batch 2-c).
+     *
+     * This needs no WRITE_CONTACTS permission because the contacts app does the
+     * writing. It also returns before the user taps save, so the result says
+     * "handed over" and never "added".
+     */
+    fun addContact(name: String, phone: String, email: String): JSONObject {
+        val trimmedName = name.trim()
+        val trimmedPhone = phone.trim().replace(ContactNumberSeparator, "")
+        val trimmedEmail = email.trim()
+        if (trimmedName.isEmpty() && trimmedPhone.isEmpty()) {
+            return failure("Provide at least a name or a phone number for the new contact.")
+        }
+        val intent = Intent(Intent.ACTION_INSERT)
+            .setType(ContactsContract.Contacts.CONTENT_TYPE)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        if (trimmedName.isNotEmpty()) {
+            intent.putExtra(ContactsContract.Intents.Insert.NAME, trimmedName)
+        }
+        if (trimmedPhone.isNotEmpty()) {
+            intent.putExtra(ContactsContract.Intents.Insert.PHONE, trimmedPhone)
+        }
+        if (trimmedEmail.isNotEmpty()) {
+            intent.putExtra(ContactsContract.Intents.Insert.EMAIL, trimmedEmail)
+        }
+        return runCatching {
+            context.startActivity(intent)
+            launchResult(
+                app = "contacts",
+                detail = JSONObject()
+                    .put("name", trimmedName)
+                    .put("phone", trimmedPhone)
+                    .put("email", trimmedEmail),
+            )
+        }.getOrElse { error ->
+            failure("No contacts app accepted the new contact: ${error.message ?: error::class.java.simpleName}")
         }
     }
 
@@ -614,6 +754,7 @@ private const val LastKnownFixFreshMillis = 10 * 60_000L
 private const val LocationFixTimeoutMillis = 10_000L
 private const val ContactLimit = 10
 private const val ContactNumbersPerPerson = 3
+private const val PhotoListMaxLimit = 50
 private const val CalendarEventLimit = 20
 private const val CalendarWindowMaxDays = 30
 private const val CalendarDurationMaxMinutes = 24 * 60
@@ -621,6 +762,91 @@ private const val TimerMaxSeconds = 24 * 60 * 60
 private const val DayMillis = 24 * 60 * 60 * 1000L
 
 private val ContactNumberSeparator = Regex("""[\s\-()]""")
+
+/** Column set for every photo read, so the indices are resolved in one place. */
+private val PhotoProjection = arrayOf(
+    MediaStore.Images.Media._ID,
+    MediaStore.Images.Media.DISPLAY_NAME,
+    MediaStore.Images.Media.DATE_TAKEN,
+    MediaStore.Images.Media.DATE_ADDED,
+    MediaStore.Images.Media.WIDTH,
+    MediaStore.Images.Media.HEIGHT,
+    MediaStore.Images.Media.SIZE,
+    MediaStore.Images.Media.BUCKET_DISPLAY_NAME,
+)
+
+private class PhotoColumns(cursor: Cursor) {
+    val id: Int = cursor.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
+    val name: Int = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DISPLAY_NAME)
+    val takenAt: Int = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_TAKEN)
+    val addedAt: Int = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_ADDED)
+    val width: Int = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.WIDTH)
+    val height: Int = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.HEIGHT)
+    val size: Int = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.SIZE)
+    val album: Int = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.BUCKET_DISPLAY_NAME)
+}
+
+private fun photoJson(cursor: Cursor, columns: PhotoColumns): JSONObject = JSONObject()
+    .put("id", cursor.getLong(columns.id).toString())
+    .put("name", cursor.getString(columns.name).orEmpty())
+    .put("album", cursor.getString(columns.album).orEmpty())
+    .put(
+        "taken_at_millis",
+        cursor.getLong(columns.takenAt).takeIf { it > 0L }
+            ?: (cursor.getLong(columns.addedAt) * 1_000L),
+    )
+    .put("width", cursor.getInt(columns.width))
+    .put("height", cursor.getInt(columns.height))
+    .put("size_bytes", cursor.getLong(columns.size))
+
+/** A photo resolved back to a readable uri, so the tool layer can copy it. */
+data class DevicePhoto(
+    val uri: Uri,
+    val displayName: String,
+    val takenAtMillis: Long,
+)
+
+/** What an album read asks the image store for. Pure, so it can be unit tested. */
+internal data class PhotoQuery(
+    val selection: String,
+    val arguments: List<String>,
+)
+
+internal fun buildPhotoQuery(
+    album: String,
+    nameContains: String,
+    days: Int?,
+    nowMillis: Long,
+): PhotoQuery {
+    val clauses = mutableListOf<String>()
+    val arguments = mutableListOf<String>()
+    val trimmedAlbum = album.trim()
+    if (trimmedAlbum.isNotEmpty()) {
+        clauses += "${MediaStore.Images.Media.BUCKET_DISPLAY_NAME} = ?"
+        arguments += trimmedAlbum
+    }
+    val trimmedContains = nameContains.trim()
+    if (trimmedContains.isNotEmpty()) {
+        clauses += "${MediaStore.Images.Media.DISPLAY_NAME} LIKE ? ESCAPE '\\'"
+        arguments += "%${escapeLike(trimmedContains)}%"
+    }
+    if (days != null && days > 0) {
+        // DATE_TAKEN is 0 on some imports, so fall back to DATE_ADDED, which is
+        // stored in seconds rather than milliseconds.
+        clauses += "(CASE WHEN ${MediaStore.Images.Media.DATE_TAKEN} > 0 THEN " +
+            "${MediaStore.Images.Media.DATE_TAKEN} ELSE ${MediaStore.Images.Media.DATE_ADDED} * 1000 END) >= ?"
+        arguments += (nowMillis - days * DayMillis).toString()
+    }
+    return PhotoQuery(selection = clauses.joinToString(" AND "), arguments = arguments)
+}
+
+/** Android 13 split photo access out of storage; older devices keep the legacy one. */
+internal fun photoPermissionForSdk(sdkInt: Int): String =
+    if (sdkInt >= Build.VERSION_CODES.TIRAMISU) {
+        Manifest.permission.READ_MEDIA_IMAGES
+    } else {
+        Manifest.permission.READ_EXTERNAL_STORAGE
+    }
 
 private val LocalDateTimeFormats = listOf(
     "yyyy-MM-dd HH:mm:ss",

@@ -1,9 +1,12 @@
 package com.zhousl.aether.data
 
+import android.Manifest
+import android.provider.MediaStore
 import java.text.SimpleDateFormat
 import java.util.Locale
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class DeviceCapabilityHandlerTest {
@@ -50,5 +53,46 @@ class DeviceCapabilityHandlerTest {
         assertEquals("""a\_b""", escapeLike("a_b"))
         assertEquals("""a\\b""", escapeLike("""a\b"""))
         assertEquals("张伟", escapeLike("张伟"))
+    }
+
+    @Test
+    fun `photo query narrows by album, name and age`() {
+        val now = 1_760_000_000_000L
+        val query = buildPhotoQuery(album = "Camera", nameContains = "IMG", days = 7, nowMillis = now)
+
+        assertEquals(
+            "${MediaStore.Images.Media.BUCKET_DISPLAY_NAME} = ? AND " +
+                "${MediaStore.Images.Media.DISPLAY_NAME} LIKE ? ESCAPE '\\' AND " +
+                "(CASE WHEN ${MediaStore.Images.Media.DATE_TAKEN} > 0 THEN " +
+                "${MediaStore.Images.Media.DATE_TAKEN} ELSE ${MediaStore.Images.Media.DATE_ADDED} * 1000 END) >= ?",
+            query.selection,
+        )
+        assertEquals(
+            listOf("Camera", "%IMG%", (now - 7 * 24 * 60 * 60 * 1000L).toString()),
+            query.arguments,
+        )
+    }
+
+    @Test
+    fun `an unfiltered photo query asks for everything`() {
+        val query = buildPhotoQuery(album = "  ", nameContains = "", days = 0, nowMillis = 0L)
+
+        assertEquals("", query.selection)
+        assertTrue(query.arguments.isEmpty())
+    }
+
+    @Test
+    fun `a file name with wildcards cannot widen the photo query`() {
+        val query = buildPhotoQuery(album = "", nameContains = "100%", days = null, nowMillis = 0L)
+
+        assertEquals("""%100\%%""", query.arguments.single())
+    }
+
+    @Test
+    fun `the photo permission follows the android version`() {
+        assertEquals(Manifest.permission.READ_MEDIA_IMAGES, photoPermissionForSdk(33))
+        assertEquals(Manifest.permission.READ_MEDIA_IMAGES, photoPermissionForSdk(36))
+        assertEquals(Manifest.permission.READ_EXTERNAL_STORAGE, photoPermissionForSdk(32))
+        assertEquals(Manifest.permission.READ_EXTERNAL_STORAGE, photoPermissionForSdk(26))
     }
 }

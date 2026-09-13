@@ -175,6 +175,7 @@ import com.zhousl.aether.data.HealthAgentModeNotAuthorized
 import com.zhousl.aether.data.HealthPermissionCalendar
 import com.zhousl.aether.data.HealthPermissionContacts
 import com.zhousl.aether.data.HealthPermissionLocation
+import com.zhousl.aether.data.photoPermissionForSdk
 import com.zhousl.aether.data.HealthRuntimeAlpine
 import com.zhousl.aether.data.HealthRuntimeBoth
 import com.zhousl.aether.data.HealthRuntimeTermux
@@ -8055,9 +8056,10 @@ private fun healthPermissionLabel(permission: String): String = stringResource(
 )
 
 /**
- * The three runtime permissions Qing's device tools need. Calendar events and
+ * The runtime permissions Qing's device tools need. Calendar events and
  * alarms stay out of this list: those are handed to the system app, which needs
- * no permission from us.
+ * no permission from us, and so is a new contact — it opens the contacts app,
+ * which does the writing.
  */
 private enum class DevicePermission(
     val permission: String,
@@ -8078,6 +8080,13 @@ private enum class DevicePermission(
         permission = Manifest.permission.READ_CALENDAR,
         titleRes = R.string.device_permission_calendar,
         subtitleRes = R.string.device_permission_calendar_subtitle,
+    ),
+    // Android 13 split photo access out of storage, so the row asks for a
+    // different permission depending on the phone.
+    Photos(
+        permission = photoPermissionForSdk(Build.VERSION.SDK_INT),
+        titleRes = R.string.device_permission_photos,
+        subtitleRes = R.string.device_permission_photos_subtitle,
     ),
 }
 

@@ -11,6 +11,7 @@ import org.json.JSONObject
 
 private const val DefaultDeveloperLogTailChars = 20_000
 private const val MaxDeveloperLogTailChars = 80_000
+private const val DefaultPhotoListLimit = 12
 
 class AetherSelfManagementTool(
     private val settingsRepository: SettingsRepository,
@@ -25,6 +26,7 @@ class AetherSelfManagementTool(
     private val diagnosticLogger: AetherDiagnosticLogger = AetherDiagnosticLogger.NoOp,
     private val deviceCapabilities: DeviceCapabilityHandler? = null,
     private val uiAutomation: QingUiToolHandler? = null,
+    private val runtimeWorkspaceFileBridge: RuntimeWorkspaceFileBridge? = null,
 ) {
     fun toolDefinitions(): List<JSONObject> = listOf(
         buildAetherToolDefinition(
@@ -252,7 +254,7 @@ class AetherSelfManagementTool(
 
         buildAetherToolDefinition(
             name = "aether_device_manage",
-            description = "Use the phone itself: read device, battery, storage and screen info; open a URL or an installed app; read or write the clipboard; read text out loud; play or stop audio; look up the weather; ask where the phone is; search contacts; read the calendar; hand a new event to the calendar; set an alarm or a timer. Required fields: open needs value (a URL, or a package name when target=app), clipboard_set needs text, speak needs text, player_play needs url, weather needs either city or both latitude and longitude, contacts_search needs query, calendar_add needs title and start, alarm_set needs hour and minute, timer_set needs seconds. location_get, contacts_search and calendar_read need the matching phone permission; if Qing lacks it, the result says so and the user can grant it in settings, Agent mode, phone permissions.",
+            description = "Use the phone itself: read device, battery, storage and screen info; open a URL or an installed app; read or write the clipboard; read text out loud; play or stop audio; look up the weather; ask where the phone is; search contacts; read the calendar; hand a new event to the calendar; set an alarm or a timer; list the user's photos and pull one into the workspace so you can look at it; hand a new contact to the contacts app. Required fields: open needs value (a URL, or a package name when target=app), clipboard_set needs text, speak needs text, player_play needs url, weather needs either city or both latitude and longitude, contacts_search needs query, contacts_add needs name or phone, calendar_add needs title and start, alarm_set needs hour and minute, timer_set needs seconds, photo_export needs photo_id. location_get, contacts_search, calendar_read and photos_recent need the matching phone permission; if Qing lacks it, the result says so and the user can grant it in settings, Agent mode, phone permissions. contacts_add only opens the contacts app with the values filled in — never say the contact was saved. photo_export copies the picture into the workspace; read that path to actually see it.",
             properties = JSONObject().apply {
                 put(
                     "action",
@@ -272,16 +274,19 @@ class AetherSelfManagementTool(
                                     "weather",
                                     "location_get",
                                     "contacts_search",
+                                    "contacts_add",
                                     "calendar_read",
                                     "calendar_add",
                                     "alarm_set",
                                     "timer_set",
+                                    "photos_recent",
+                                    "photo_export",
                                 )
                             ),
                         )
                         put(
                             "description",
-                            "device_info: read device state. open: launch a URL or app. clipboard_get / clipboard_set: read or replace the clipboard. speak: read text aloud. player_play: stream audio from a URL. stop_media: stop speech or audio. weather: current conditions and a 3-day outlook. location_get: where the phone is. contacts_search: find a person's number by name. calendar_read: what is coming up. calendar_add: open the calendar with a new event filled in. alarm_set / timer_set: open the clock with an alarm or timer filled in.",
+                            "device_info: read device state. open: launch a URL or app. clipboard_get / clipboard_set: read or replace the clipboard. speak: read text aloud. player_play: stream audio from a URL. stop_media: stop speech or audio. weather: current conditions and a 3-day outlook. location_get: where the phone is. contacts_search: find a person's number by name. contacts_add: open the contacts app with a new contact filled in. calendar_read: what is coming up. calendar_add: open the calendar with a new event filled in. alarm_set / timer_set: open the clock with an alarm or timer filled in. photos_recent: list photos, newest first. photo_export: copy one photo into the workspace so it can be read.",
                         )
                     },
                 )
@@ -331,10 +336,56 @@ class AetherSelfManagementTool(
                     },
                 )
                 put(
+                    "photo_id",
+                    JSONObject().apply {
+                        put("type", "string")
+                        put("description", "For action=photo_export: the id of a photo from photos_recent.")
+                    },
+                )
+                put(
+                    "album",
+                    JSONObject().apply {
+                        put("type", "string")
+                        put("description", "For action=photos_recent: only photos in this album (bucket), for example Camera. Omit to list everything.")
+                    },
+                )
+                put(
+                    "contains",
+                    JSONObject().apply {
+                        put("type", "string")
+                        put("description", "For action=photos_recent: only photos whose file name contains this.")
+                    },
+                )
+                put(
+                    "name",
+                    JSONObject().apply {
+                        put("type", "string")
+                        put("description", "For action=contacts_add: the contact's name.")
+                    },
+                )
+                put(
+                    "phone",
+                    JSONObject().apply {
+                        put("type", "string")
+                        put("description", "For action=contacts_add: the phone number to fill in.")
+                    },
+                )
+                put(
+                    "email",
+                    JSONObject().apply {
+                        put("type", "string")
+                        put("description", "For action=contacts_add: the email address to fill in.")
+                    },
+                )
+                put(
                     "days",
                     JSONObject().apply {
                         put("type", "integer")
-                        put("description", "For action=calendar_read: how many days ahead to read. Defaults to 1.")
+                        put(
+                            "description",
+                            "For action=calendar_read: how many days ahead to read, defaults to 1. " +
+                                "For action=photos_recent: only photos from the last N days.",
+                        )
                     },
                 )
                 put(
@@ -601,6 +652,18 @@ class AetherSelfManagementTool(
             )
             "location_get" -> capabilities.location()
             "contacts_search" -> capabilities.searchContacts(arguments.optString("query"))
+            "contacts_add" -> capabilities.addContact(
+                name = arguments.optString("name"),
+                phone = arguments.optString("phone"),
+                email = arguments.optString("email"),
+            )
+            "photos_recent" -> capabilities.photosRecent(
+                limit = arguments.optionalInt("limit") ?: DefaultPhotoListLimit,
+                album = arguments.optString("album"),
+                contains = arguments.optString("contains"),
+                days = arguments.optionalInt("days"),
+            )
+            "photo_export" -> return exportPhoto(arguments.optString("photo_id"))
             "calendar_read" -> capabilities.readCalendar(
                 days = arguments.optionalInt("days") ?: 1,
             )
@@ -621,6 +684,54 @@ class AetherSelfManagementTool(
                 message = arguments.optString("message"),
             )
             else -> return failure("Unsupported device action '$action'.")
+        }.toString()
+    }
+
+    /**
+     * Copies a photo from the user's album into the workspace.
+     *
+     * Listing photos is only half a feature: the model cannot tell a sunset from
+     * a receipt by file name, so the picture has to land somewhere `read` can
+     * open. That copy runs inside the local runtime, so a runtime that is not set
+     * up is reported as such instead of pretending the photo arrived.
+     */
+    private suspend fun exportPhoto(photoId: String): String {
+        val capabilities = deviceCapabilities
+            ?: return failure("Device capabilities are not available on this platform.")
+        val bridge = runtimeWorkspaceFileBridge
+            ?: return failure("Copying files into the workspace is not available on this platform.")
+        val id = photoId.trim()
+        if (id.isEmpty()) {
+            return failure("'photo_id' is required for action=photo_export; run photos_recent first.")
+        }
+        val photo = capabilities.photoById(id)
+            ?: return failure(
+                "No photo with id '$id' is readable. Run action=photos_recent again and use an id from that answer.",
+            )
+        val settings = settingsRepository.settings.first()
+        val imported = bridge.importAttachmentToWorkspace(
+            settings = settings,
+            sourceUri = photo.uri,
+            sessionId = sessionId,
+            attachmentId = "photo-$id-${System.currentTimeMillis()}",
+            displayName = photo.displayName,
+            mode = settings.agentWorkspaceMode,
+        ).getOrElse { error ->
+            return failure(
+                "Could not copy the photo into the workspace: ${error.message ?: error::class.java.simpleName}. " +
+                    "The local runtime may not be ready; the user can finish that in settings, runtime.",
+            )
+        }
+        return JSONObject().apply {
+            put("ok", true)
+            put("name", photo.displayName)
+            put("path", imported.absolutePath)
+            put("bytes", imported.bytesCopied)
+            put(
+                "note",
+                "The photo is in the workspace at ${imported.absolutePath}. Read that path to actually look at it, " +
+                    "and never describe the picture from its file name alone.",
+            )
         }.toString()
     }
 

@@ -1271,6 +1271,8 @@
     <string name="device_permission_contacts_subtitle">按名字查号码，最多返回 10 个人。只读，不修改、不上传。</string>
     <string name="device_permission_calendar">日历</string>
     <string name="device_permission_calendar_subtitle">读未来几天的日程。新建行程走系统日历，不需要额外授权。</string>
+    <string name="device_permission_photos">照片</string>
+    <string name="device_permission_photos_subtitle">列出相册里的照片，并挑一张取进工作区，青才能真正看到它。只读，不修改、不上传。</string>
     <string name="device_permission_granted">已授权</string>
     <string name="device_permission_not_granted">未授权</string>
     <string name="device_permission_grant">去授权</string>

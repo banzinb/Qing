@@ -195,6 +195,7 @@ class SessionExecutionManager(
     private val bashTool: TermuxBashTool,
     private val runtimeRouter: RuntimeRouter,
     private val workspaceFileBridge: WorkspaceFileBridge,
+    private val runtimeWorkspaceFileBridge: RuntimeWorkspaceFileBridge,
     private val rootSetupController: RootSetupController,
     private val agentModeController: AgentModeController,
     private val skillManager: AgentSkillManager,
@@ -564,6 +565,7 @@ class SessionExecutionManager(
             diagnosticLogger = diagnosticLogger,
             deviceCapabilities = DeviceCapabilityHandler(application),
             uiAutomation = QingUiToolHandler(application),
+            runtimeWorkspaceFileBridge = runtimeWorkspaceFileBridge,
         )
 
         updateExecutionState(handle.sessionId) {
