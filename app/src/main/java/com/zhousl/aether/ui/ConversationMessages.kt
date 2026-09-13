@@ -4288,6 +4288,9 @@ private fun formatAetherToolTitle(
             "calendar_add" -> formatArgumentDrivenTitle(isRunning, context.getString(R.string.tool_title_opening_calendar_event), context.getString(R.string.tool_title_opened_calendar_event), arguments?.optString("title").orEmpty(), context.getString(R.string.tool_title_device_fallback))
             "alarm_set" -> context.getString(if (isRunning) R.string.tool_title_setting_alarm else R.string.tool_title_set_alarm)
             "timer_set" -> context.getString(if (isRunning) R.string.tool_title_setting_timer else R.string.tool_title_set_timer)
+            "photos_recent" -> context.getString(if (isRunning) R.string.tool_title_reading_photos else R.string.tool_title_read_photos)
+            "photo_export" -> formatArgumentDrivenTitle(isRunning, context.getString(R.string.tool_title_opening_photo), context.getString(R.string.tool_title_opened_photo), arguments?.optString("photo_id").orEmpty(), context.getString(R.string.tool_title_device_fallback))
+            "contacts_add" -> formatArgumentDrivenTitle(isRunning, context.getString(R.string.tool_title_opening_new_contact), context.getString(R.string.tool_title_opened_new_contact), arguments?.optString("name").orEmpty(), context.getString(R.string.tool_title_device_fallback))
             else -> context.getString(if (isRunning) R.string.tool_title_reading_device_info else R.string.tool_title_read_device_info)
         }
         else -> context.getString(if (isRunning) R.string.tool_title_managing_aether else R.string.tool_title_managed_aether)

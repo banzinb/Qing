@@ -3744,6 +3744,9 @@ private fun formatAetherToolTitle(
             "calendar_add" -> formatArgumentDrivenToolTitle(isRunning, R.string.tool_title_opening_calendar_event, R.string.tool_title_opened_calendar_event, arguments?.optString("title").orEmpty(), R.string.tool_title_device_fallback)
             "alarm_set" -> toolStatusLabel(isRunning, R.string.tool_title_setting_alarm, R.string.tool_title_set_alarm)
             "timer_set" -> toolStatusLabel(isRunning, R.string.tool_title_setting_timer, R.string.tool_title_set_timer)
+            "photos_recent" -> toolStatusLabel(isRunning, R.string.tool_title_reading_photos, R.string.tool_title_read_photos)
+            "photo_export" -> formatArgumentDrivenToolTitle(isRunning, R.string.tool_title_opening_photo, R.string.tool_title_opened_photo, arguments?.optString("photo_id").orEmpty(), R.string.tool_title_device_fallback)
+            "contacts_add" -> formatArgumentDrivenToolTitle(isRunning, R.string.tool_title_opening_new_contact, R.string.tool_title_opened_new_contact, arguments?.optString("name").orEmpty(), R.string.tool_title_device_fallback)
             else -> toolStatusLabel(isRunning, R.string.tool_title_reading_device_info, R.string.tool_title_read_device_info)
         }
         else -> toolStatusLabel(isRunning, R.string.tool_title_managing_aether, R.string.tool_title_managed_aether)

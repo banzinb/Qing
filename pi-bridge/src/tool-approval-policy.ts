@@ -131,6 +131,7 @@ const HARMLESS_DEVICE_ACTIONS = new Set([
   "location_get",
   "contacts_search",
   "calendar_read",
+  "photos_recent",
 ]);
 
 /** Relaxed mode only stops at these: the ones that can reshape the install. */

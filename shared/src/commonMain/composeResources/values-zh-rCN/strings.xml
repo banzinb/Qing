@@ -876,6 +876,12 @@
     <string name="tool_title_set_alarm">已打开闹钟</string>
     <string name="tool_title_setting_timer">正在打开计时器</string>
     <string name="tool_title_set_timer">已打开计时器</string>
+    <string name="tool_title_reading_photos">正在翻看照片</string>
+    <string name="tool_title_read_photos">已翻看照片</string>
+    <string name="tool_title_opening_photo">正在取出照片</string>
+    <string name="tool_title_opened_photo">已取出照片</string>
+    <string name="tool_title_opening_new_contact">正在打开联系人新建</string>
+    <string name="tool_title_opened_new_contact">已打开联系人新建</string>
     <string name="tool_title_reading_agent_skills">正在读取 Agent Skills</string>
     <string name="tool_title_read_agent_skills">已读取 Agent Skills</string>
     <string name="tool_title_reading_mcp_servers">正在读取 MCP 服务器</string>

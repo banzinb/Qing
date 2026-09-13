@@ -49,7 +49,7 @@ test("balanced gates device actions that change something", () => {
     ).required,
     true,
   );
-  for (const action of ["calendar_add", "alarm_set", "timer_set"]) {
+  for (const action of ["calendar_add", "alarm_set", "timer_set", "photo_export", "contacts_add"]) {
     assert.equal(
       approvalRequirement(hostTool("aether_device_manage", { action }), "balanced").required,
       true,
@@ -68,6 +68,7 @@ test("balanced lets the harmless device actions through", () => {
     "location_get",
     "contacts_search",
     "calendar_read",
+    "photos_recent",
   ]) {
     assert.equal(
       approvalRequirement(hostTool("aether_device_manage", { action }), "balanced").required,

@@ -878,6 +878,12 @@
     <string name="tool_title_set_alarm">Opened the alarm</string>
     <string name="tool_title_setting_timer">Opening the timer</string>
     <string name="tool_title_set_timer">Opened the timer</string>
+    <string name="tool_title_reading_photos">Looking through photos</string>
+    <string name="tool_title_read_photos">Looked through photos</string>
+    <string name="tool_title_opening_photo">Opening a photo</string>
+    <string name="tool_title_opened_photo">Opened a photo</string>
+    <string name="tool_title_opening_new_contact">Opening a new contact</string>
+    <string name="tool_title_opened_new_contact">Opened a new contact</string>
     <string name="tool_title_reading_agent_skills">Reading Agent Skills</string>
     <string name="tool_title_read_agent_skills">Read Agent Skills</string>
     <string name="tool_title_reading_mcp_servers">Reading MCP servers</string>
