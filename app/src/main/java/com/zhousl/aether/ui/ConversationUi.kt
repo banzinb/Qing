@@ -80,6 +80,7 @@ import androidx.compose.material.icons.rounded.Compress
 import androidx.compose.material.icons.rounded.Extension
 import androidx.compose.material.icons.rounded.Image
 import androidx.compose.material.icons.rounded.Menu
+import androidx.compose.material.icons.rounded.OpenInNew
 import androidx.compose.material.icons.rounded.RadioButtonUnchecked
 import androidx.compose.material.icons.rounded.Public
 import androidx.compose.material.icons.rounded.Terminal
@@ -357,6 +358,7 @@ fun ConversationScreen(
     onSetMcpServerSelected: (String, Boolean) -> Unit,
     onSetAgentModeSelected: (Boolean) -> Unit,
     onSetChromeSelected: (Boolean) -> Unit,
+    onOpenBrowserViewer: () -> Unit,
     onCancelEdit: () -> Unit,
     onSend: () -> Unit,
     onQueueFollowUp: () -> Unit,
@@ -856,6 +858,7 @@ fun ConversationScreen(
                 onSetMcpServerSelected = onSetMcpServerSelected,
                 onSetAgentModeSelected = onSetAgentModeSelected,
                 onSetChromeSelected = onSetChromeSelected,
+                onOpenBrowserViewer = onOpenBrowserViewer,
                 onCancelEdit = onCancelEdit,
                 onPickImages = onPickImages,
                 onPickFiles = onPickFiles,
@@ -2308,6 +2311,7 @@ private fun ConversationComposerOverlay(
     onSetMcpServerSelected: (String, Boolean) -> Unit,
     onSetAgentModeSelected: (Boolean) -> Unit,
     onSetChromeSelected: (Boolean) -> Unit,
+    onOpenBrowserViewer: () -> Unit,
     onCancelEdit: () -> Unit,
     onPickImages: () -> Unit,
     onPickFiles: () -> Unit,
@@ -2374,6 +2378,7 @@ private fun ConversationComposerOverlay(
                     onSetMcpServerSelected = onSetMcpServerSelected,
                     onSetAgentModeSelected = onSetAgentModeSelected,
                     onSetChromeSelected = onSetChromeSelected,
+                    onOpenBrowserViewer = onOpenBrowserViewer,
                     onCancelEdit = onCancelEdit,
                     onPickImages = onPickImages,
                     onPickFiles = onPickFiles,
@@ -2411,6 +2416,7 @@ private fun ConversationComposerBar(
     agentModeSelected: Boolean,
     chromeAvailable: Boolean,
     chromeSelected: Boolean,
+    onOpenBrowserViewer: () -> Unit,
     isEditing: Boolean,
     termuxSetupState: TermuxSetupState,
     isSending: Boolean,
@@ -2981,6 +2987,15 @@ private fun ConversationComposerBar(
                                                 runAfterAttachmentMenuDismiss {
                                                     onSetChromeSelected(!chromeSelected)
                                                 }
+                                            },
+                                        )
+                                        ComposerPlusMenuRow(
+                                            title = stringResource(R.string.browser_viewer_open),
+                                            icon = Icons.Rounded.OpenInNew,
+                                            iconTint = Color(0xFF2F6DA3),
+                                            iconContainerColor = AetherSurfaceHigh,
+                                            onClick = {
+                                                runAfterAttachmentMenuDismiss(onOpenBrowserViewer)
                                             },
                                         )
                                     }

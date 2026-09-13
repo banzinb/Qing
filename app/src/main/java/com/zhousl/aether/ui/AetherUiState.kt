@@ -266,6 +266,8 @@ data class AppUpdateUiState(
 data class AetherUiState(
     val currentScreen: AppScreen = AppScreen.Chat,
     val isStartupRouteResolved: Boolean = false,
+    /** Whether the visible embedded-browser window is on screen. Never opened automatically. */
+    val browserViewerOpen: Boolean = false,
     val isOnboardingReplay: Boolean = false,
     val onboardingStep: OnboardingStep = OnboardingStep.Landing,
     val onboardingReturnScreen: AppScreen = AppScreen.Chat,

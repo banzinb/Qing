@@ -11,6 +11,7 @@ import android.util.Base64
 import android.view.View
 import android.view.ViewGroup
 import android.webkit.CookieManager
+import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
@@ -35,6 +36,9 @@ import kotlin.coroutines.resume
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -56,6 +60,24 @@ private const val DefaultViewportWidthPx = 1080
 private const val DefaultViewportHeightPx = 1920
 private const val MaxCollectedTextChars = 50_000
 private const val ScreenshotQuality = 82
+
+/**
+ * One tab as the browser viewer shows it. [url] and [title] are already resolved (title falls back
+ * to the URL), so the UI never has to touch the WebView itself.
+ */
+data class BrowserViewerTab(
+    val id: Int,
+    val url: String,
+    val title: String,
+)
+
+/** Snapshot of the pooled tabs, published to the browser viewer. */
+data class BrowserViewerState(
+    val tabs: List<BrowserViewerTab> = emptyList(),
+    val activeTabId: Int? = null,
+) {
+    val isEmpty: Boolean get() = tabs.isEmpty()
+}
 
 private val ScrollPositionProbeScript = """
     (() => {
@@ -99,11 +121,19 @@ class WebViewBrowserController(
     private var hostContainer: ViewGroup? = null
 
     @Volatile
+    private var displayContainer: ViewGroup? = null
+
+    @Volatile
     private var liveTabCount: Int = 0
+
+    private val _viewerState = MutableStateFlow(BrowserViewerState())
+    val viewerState: StateFlow<BrowserViewerState> = _viewerState.asStateFlow()
 
     val hasOpenTabs: Boolean get() = liveTabCount > 0
 
     val isHosted: Boolean get() = hostContainer != null
+
+    val isDisplayed: Boolean get() = displayContainer != null
 
     // ---------------------------------------------------------------------------------------
     // Host attachment. The app keeps a hidden container behind its Compose surface so the pool
@@ -120,6 +150,8 @@ class WebViewBrowserController(
                     container.addView(tab.webView, matchParentParams())
                 }
             }
+            reparentTabsOnMain()
+            publishViewerState()
         }
     }
 
@@ -134,27 +166,107 @@ class WebViewBrowserController(
         }
     }
 
+    // ---------------------------------------------------------------------------------------
+    // Display surface. The viewer hands us its own container while it is on screen, and the
+    // active tab is moved into it (same WebView instance, so page state survives). When the
+    // viewer closes the tab goes back behind the Compose surface.
+    // ---------------------------------------------------------------------------------------
+
+    fun attachDisplayHost(container: ViewGroup) {
+        displayContainer = container
+        runOnMainThread {
+            reparentTabsOnMain()
+            publishViewerState()
+        }
+    }
+
+    fun detachDisplayHost(container: ViewGroup) {
+        if (displayContainer === container) displayContainer = null
+        runOnMainThread {
+            // Pull anything still parented to the viewer out, even if it is no longer tracked.
+            snapshotTabs().forEach { tab ->
+                if (tab.webView.parent === container) {
+                    container.removeView(tab.webView)
+                    hostContainer?.addView(tab.webView, matchParentParams())
+                }
+            }
+            reparentTabsOnMain()
+            publishViewerState()
+        }
+    }
+
+    /**
+     * Puts the active tab in the viewer (when one is attached) and every other tab back in the
+     * hidden host. Tabs are only ever moved, never recreated, so nothing re-renders from scratch.
+     */
+    private fun reparentTabsOnMain() {
+        val display = displayContainer
+        val hidden = hostContainer
+        val activeId = activeTab()?.id
+        snapshotTabs().forEach { tab ->
+            val target = if (display != null && tab.id == activeId) display else hidden
+            if (target == null || tab.webView.parent === target) return@forEach
+            (tab.webView.parent as? ViewGroup)?.removeView(tab.webView)
+            target.addView(tab.webView, matchParentParams())
+        }
+    }
+
+    private fun publishViewerState() {
+        val snapshot = runCatching {
+            synchronized(poolLock) {
+                tabs.values.map { tab ->
+                    val url = tab.webView.url.orEmpty().ifBlank { tab.lastUrl }
+                    BrowserViewerTab(
+                        id = tab.id,
+                        url = url,
+                        title = tab.webView.title.orEmpty().ifBlank { url },
+                    )
+                }
+            }
+        }.getOrDefault(emptyList())
+        _viewerState.value = BrowserViewerState(
+            tabs = snapshot,
+            activeTabId = synchronized(poolLock) { activeTabId },
+        )
+    }
+
+    /** Moves tabs to their correct host and refreshes the viewer snapshot. */
+    private fun syncPoolUi() {
+        runOnMainThread {
+            reparentTabsOnMain()
+            publishViewerState()
+        }
+    }
+
     /** Destroys every pooled WebView. Call from the main thread (activity teardown). */
     fun destroyAllTabs() {
         val existing = snapshotTabs()
-        existing.forEach { tab -> destroyTabOnMain(tab) }
         synchronized(poolLock) {
             tabs.clear()
             activeTabId = null
             liveTabCount = 0
         }
+        existing.forEach { tab -> destroyTabOnMain(tab) }
+        _viewerState.value = BrowserViewerState()
     }
 
     // ---------------------------------------------------------------------------------------
     // Action execution
     // ---------------------------------------------------------------------------------------
 
-    suspend fun execute(argumentsJson: String): String = operationMutex.withLock {
+    suspend fun execute(argumentsJson: String): String =
+        operationMutex.withLock { executeLocked(argumentsJson) }
+
+    /**
+     * Runs one action. Callers must already hold [operationMutex]; that is how the browser viewer
+     * shares the queue with the agent instead of racing it.
+     */
+    private suspend fun executeLocked(argumentsJson: String): String {
         val arguments = runCatching { JSONObject(argumentsJson) }.getOrNull()
-            ?: return@withLock errorResult("Arguments were not valid JSON.").toString()
+            ?: return errorResult("Arguments were not valid JSON.").toString()
         val action = arguments.optString("action").trim().lowercase()
         if (!BrowserActionCatalog.isSupported(action)) {
-            return@withLock errorResult("Unsupported browser action '$action'.").toString()
+            return errorResult("Unsupported browser action '$action'.").toString()
         }
         val payload = runCatching { dispatch(action, arguments) }.getOrElse { throwable ->
             diagnosticLogger.exception(
@@ -163,11 +275,62 @@ class WebViewBrowserController(
                 throwable = throwable,
                 details = mapOf("action" to action),
             )
-            return@withLock errorResult(throwable.message ?: "Browser action failed.").toString()
+            return errorResult(throwable.message ?: "Browser action failed.").toString()
         }
         payload.put("backend", BrowserBackendKind.WebView.wireName)
         if (!payload.has("ok")) payload.put("ok", true)
-        payload.toString()
+        syncPoolUi()
+        return payload.toString()
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // Browser viewer actions. These reuse [executeLocked] so they queue behind (and ahead of)
+    // agent actions instead of fighting over the same page.
+    // ---------------------------------------------------------------------------------------
+
+    suspend fun viewerNavigate(url: String): String =
+        executeViewer("navigate", JSONObject().put("url", url))
+
+    suspend fun viewerGoBack(): String = executeViewer("back")
+
+    suspend fun viewerGoForward(): String = executeViewer("forward")
+
+    suspend fun viewerReload(): String = executeViewer("reload")
+
+    suspend fun viewerNewTab(): String = executeViewer("new_tab")
+
+    suspend fun viewerCloseTab(tabId: Int): String =
+        executeViewer("close_tab", JSONObject().put("tab_id", tabId.toString()))
+
+    /** Makes [tabId] the tab the agent and the viewer both operate on. */
+    suspend fun selectTab(tabId: Int): Unit = operationMutex.withLock {
+        val tab = tabById(tabId) ?: return@withLock
+        tab.lastUsedAt = System.currentTimeMillis()
+        synchronized(poolLock) { activeTabId = tabId }
+        syncPoolUi()
+    }
+
+    /**
+     * Stops the current page load on purpose *without* taking [operationMutex]: waiting for the
+     * lock would mean waiting for the very navigation the user is trying to abort. The agent's
+     * in-flight navigation then reports a failure or timeout, which is the honest outcome.
+     */
+    fun viewerStopLoading() {
+        runOnMainThread {
+            val tab = activeTab() ?: return@runOnMainThread
+            runCatching {
+                tab.pendingNavigation?.cancel()
+                tab.pendingNavigation = null
+                tab.webView.stopLoading()
+            }
+            publishViewerState()
+        }
+    }
+
+    private suspend fun executeViewer(action: String, extra: JSONObject = JSONObject()): String {
+        val arguments = JSONObject().put("action", action)
+        extra.keys().forEach { key -> arguments.put(key, extra.get(key)) }
+        return operationMutex.withLock { executeLocked(arguments.toString()) }
     }
 
     private suspend fun dispatch(action: String, arguments: JSONObject): JSONObject = when (action) {
@@ -757,6 +920,7 @@ class WebViewBrowserController(
                 activeTabId = id
                 liveTabCount = tabs.size
             }
+            syncPoolUi()
             created
         }
         return tab
@@ -796,6 +960,7 @@ class WebViewBrowserController(
             cacheMode = WebSettings.LOAD_DEFAULT
         }
         webView.webViewClient = BrowserWebViewClient()
+        webView.webChromeClient = BrowserWebChromeClient()
         runCatching {
             CookieManager.getInstance().setAcceptCookie(true)
             CookieManager.getInstance().setAcceptThirdPartyCookies(webView, true)
@@ -826,6 +991,7 @@ class WebViewBrowserController(
         runCatching { (tab.webView.parent as? ViewGroup)?.removeView(tab.webView) }
         runCatching { tab.webView.stopLoading() }
         runCatching { tab.webView.destroy() }
+        syncPoolUi()
     }
 
     private fun matchParentParams() = FrameLayout.LayoutParams(
@@ -846,6 +1012,7 @@ class WebViewBrowserController(
             val tab = tabFor(view) ?: return
             if (!url.isNullOrBlank()) tab.lastUrl = url
             tab.lastNavigationError = null
+            publishViewerState()
         }
 
         override fun onPageFinished(view: WebView, url: String?) {
@@ -855,6 +1022,7 @@ class WebViewBrowserController(
             val pending = tab.pendingNavigation
             tab.pendingNavigation = null
             pending?.complete(NavigationOutcome(url = url.orEmpty(), error = tab.lastNavigationError))
+            syncPoolUi()
         }
 
         override fun onReceivedError(
@@ -872,6 +1040,14 @@ class WebViewBrowserController(
 
         @Suppress("OVERRIDE_DEPRECATION")
         override fun shouldOverrideUrlLoading(view: WebView, url: String?): Boolean = false
+    }
+
+    /** Titles arrive through the chrome client, usually before the page finishes loading. */
+    private inner class BrowserWebChromeClient : WebChromeClient() {
+        override fun onReceivedTitle(view: WebView, title: String?) {
+            if (title.isNullOrBlank() || tabFor(view) == null) return
+            publishViewerState()
+        }
     }
 
     private fun tabFor(view: WebView): BrowserTab? =

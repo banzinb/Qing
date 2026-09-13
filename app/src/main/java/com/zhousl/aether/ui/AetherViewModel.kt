@@ -3844,6 +3844,22 @@ class AetherViewModel(
         submitCurrentMessage(SessionFollowUpMode.Queue)
     }
 
+    /**
+     * Shows the visible embedded-browser window. It is only ever opened by an explicit user
+     * action; the browser keeps running headless otherwise.
+     */
+    fun openBrowserViewer() {
+        _uiState.update { current ->
+            if (current.browserViewerOpen) current else current.copy(browserViewerOpen = true)
+        }
+    }
+
+    fun closeBrowserViewer() {
+        _uiState.update { current ->
+            if (current.browserViewerOpen) current.copy(browserViewerOpen = false) else current
+        }
+    }
+
     fun setDeveloperTermuxReadyOverride(isReady: Boolean) {
         _uiState.update { current ->
             current.copy(developerTermuxReadyOverride = isReady)

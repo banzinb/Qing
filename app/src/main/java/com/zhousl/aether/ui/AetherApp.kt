@@ -451,6 +451,9 @@ private fun AetherAppContent(
         (context.applicationContext as AetherApplication).runtime
     }
     val workspaceFileBridge = appRuntime.workspaceFileBridge
+    val browserViewerState = appRuntime.webViewBrowserController.viewerState
+        .collectAsStateWithLifecycle()
+        .value
     val alpineFileManagerRuntime = remember(appRuntime.alpineRuntime) {
         AndroidAlpineFileManagerRuntime(appRuntime.alpineRuntime)
     }
@@ -1009,6 +1012,9 @@ private fun AetherAppContent(
                     onSetMcpServerSelected = viewModel::setComposerMcpServerSelected,
                     onSetAgentModeSelected = viewModel::setComposerAgentModeSelected,
                     onSetChromeSelected = viewModel::setComposerChromeSelected,
+                    onOpenBrowserViewer = {
+                        viewModel.openBrowserViewer()
+                    },
                     onCancelEdit = viewModel::cancelMessageEdit,
                     onSend = viewModel::sendCurrentMessage,
                     onQueueFollowUp = viewModel::queueCurrentMessage,
@@ -1281,6 +1287,14 @@ private fun AetherAppContent(
                     )
         }
             }
+        }
+
+        if (uiState.browserViewerOpen) {
+            BrowserViewerOverlay(
+                controller = appRuntime.webViewBrowserController,
+                state = browserViewerState,
+                onClose = viewModel::closeBrowserViewer,
+            )
         }
 
         uiState.toolApprovalRequest?.let { request ->
