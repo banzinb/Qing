@@ -51,6 +51,20 @@ const nodeBundleSourcePatches = {
   },
 };
 
+// Bundled CommonJS dependencies still read `__dirname` for files they ship
+// next to themselves (photon-node loads photon_rs_bg.wasm that way). ESM has
+// no such binding, and a throwing `__dirname` also defeats the readFileSync
+// fallback in pi-coding-agent's photon wrapper, so declare both against the
+// bundle location.
+const esmPathShim = [
+  "import { createRequire as __aetherCreateRequire } from 'node:module';",
+  "import { fileURLToPath as __aetherFileURLToPath } from 'node:url';",
+  "import { dirname as __aetherDirname } from 'node:path';",
+  "const require = __aetherCreateRequire(import.meta.url);",
+  "const __filename = __aetherFileURLToPath(import.meta.url);",
+  "const __dirname = __aetherDirname(__filename);",
+].join("");
+
 const commonOptions = {
   bundle: true,
   platform: "node",
@@ -59,7 +73,7 @@ const commonOptions = {
   minify: true,
   legalComments: "none",
   banner: {
-    js: "import { createRequire as __aetherCreateRequire } from 'node:module';const require = __aetherCreateRequire(import.meta.url);",
+    js: esmPathShim,
   },
 };
 

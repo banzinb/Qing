@@ -30,6 +30,8 @@ import java.util.concurrent.atomic.AtomicLong
 
 private const val PiBridgeAssetPath = "pi-bridge/bridge.mjs"
 private const val PiBridgeGuestPath = "/root/.aether/pi-bridge/bridge.mjs"
+private const val PiPhotonWasmAssetPath = "pi-bridge/photon_rs_bg.wasm"
+private const val PiPhotonWasmGuestPath = "/root/.aether/pi-bridge/photon_rs_bg.wasm"
 private const val PiBridgeWorkingDirectory = "/root/.aether/pi-bridge"
 private const val PiBridgeNodeMinVersion = "22.19.0"
 private const val PiBridgeVersion = "2.0.0-alpha.0"
@@ -755,6 +757,13 @@ class PiKernelBridge(
             alpineRuntime.installAsset(
                 assetPath = PiBridgeAssetPath,
                 guestPath = PiBridgeGuestPath,
+                executable = false,
+            )
+            // Inline image reads decode with photon's WASM module, which the
+            // bridge looks up in its own directory.
+            alpineRuntime.installAsset(
+                assetPath = PiPhotonWasmAssetPath,
+                guestPath = PiPhotonWasmGuestPath,
                 executable = false,
             )
             alpineRuntime.installPreinstalledExtensions()

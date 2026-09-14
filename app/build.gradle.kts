@@ -117,7 +117,7 @@ android {
         // Alpine/Termux-style local runtimes install executable ELF files into app-private
         // storage. Android blocks execve() from that location for targetSdk >= 29.
         targetSdk = 28
-    versionCode = 26
+    versionCode = 27
         versionName = appVersionName
 
         ndk {
@@ -359,9 +359,21 @@ val copyPiProviderIcons = tasks.register<SyncGeneratedSourceDirectory>("copyPiPr
 val copyPiBridgeAsset = tasks.register<SyncGeneratedSourceDirectory>("copyPiBridgeAsset") {
     dependsOn(buildPiBridge)
     outputDirectory.set(piBridgeGeneratedAssetsDir)
-    from(piBridgeProjectDir.file("dist/bridge.mjs"))
-    eachFile {
-        path = "pi-bridge/$path"
+    from(piBridgeProjectDir.file("dist/bridge.mjs")) {
+        eachFile {
+            path = "pi-bridge/$path"
+        }
+    }
+    // The inline image pipeline decodes and resizes with photon, which locates
+    // its WASM module next to the script that requires it.
+    from(piBridgeProjectDir.dir("node_modules")) {
+        include("@silvia-odwyer/photon-node/photon_rs_bg.wasm")
+        include(
+            "@earendil-works/pi-coding-agent/node_modules/@silvia-odwyer/photon-node/photon_rs_bg.wasm",
+        )
+        eachFile {
+            path = "pi-bridge/photon_rs_bg.wasm"
+        }
     }
     includeEmptyDirs = false
 }
