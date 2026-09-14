@@ -605,6 +605,8 @@
     <string name="provider_form_user_agent">User-Agent</string>
     <string name="provider_form_model_picker_api_key_hint">Enabled models appear in the chat model picker. Configure API key authentication before refreshing the catalog.</string>
     <string name="provider_form_model_picker_refresh_hint">Enabled models appear in the chat model picker. Refresh loads models from the provider API.</string>
+    <string name="provider_form_supports_image_input">This model can read images</string>
+    <string name="provider_form_supports_image_input_description">Send screenshots, photos and album images to this model as pictures. Leave it off for text only models: they receive a written note instead.</string>
     <string name="provider_form_choose_provider">Choose provider</string>
     <string name="provider_form_model_list">Model list</string>
     <string name="provider_form_no_models_loaded">No models loaded yet.</string>

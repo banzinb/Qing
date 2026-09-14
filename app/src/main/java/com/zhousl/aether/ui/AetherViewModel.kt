@@ -2694,6 +2694,7 @@ class AetherViewModel(
                     modelId = selectedModelSettings.modelId,
                     userAgent = selectedModelSettings.userAgent,
                     customHeaders = selectedModelSettings.customHeaders,
+                    supportsImageInput = selectedModelSettings.supportsImageInput,
                     systemPrompt = systemPrompt,
                     tavilyApiKey = tavilyApiKey.trim(),
                     tavilyBaseUrl = normalizeTavilyBaseUrl(tavilyBaseUrl),

@@ -3,6 +3,7 @@ package com.zhousl.aether.data
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -93,6 +94,58 @@ class ProviderConfigSerializationTest {
         assertEquals("anthropic", json.getString("piProviderId"))
         assertTrue(!json.has("providerType"))
         assertTrue(!json.has("basicFunctionCallingCompatibilityMode"))
+    }
+
+    @Test
+    fun imageInputFlagSurvivesAProviderRoundTrip() {
+        val config = LlmProviderConfig(
+            id = "custom-provider",
+            providerId = "custom",
+            name = "Custom",
+            piProviderId = "openai-compatible",
+            apiKey = "key",
+            baseUrl = "https://example.test/v1",
+            modelId = "vision-model",
+            supportsImageInput = true,
+        )
+
+        val serialized = JSONArray(serializeProviderConfigs(listOf(config))).getJSONObject(0)
+
+        assertTrue(serialized.getBoolean("supportsImageInput"))
+        assertTrue(parseProviderConfigs(serializeProviderConfigs(listOf(config))).single().supportsImageInput)
+    }
+
+    @Test
+    fun configsSavedBeforeTheFlagKeepTheirOldImageBehaviour() {
+        val customConfig = LlmProviderConfig(
+            id = "custom-provider",
+            providerId = "custom",
+            name = "Custom",
+            piProviderId = "openai-compatible",
+            apiKey = "key",
+            baseUrl = "https://example.test/v1",
+            modelId = "model",
+        )
+        val builtInConfig = customConfig.copy(
+            id = "deepseek-provider",
+            providerId = "deepseek",
+            name = "DeepSeek",
+            piProviderId = "deepseek",
+            baseUrl = "https://api.deepseek.com/v1",
+            modelId = "deepseek-v4-flash",
+        )
+        val legacyJson = JSONArray(
+            serializeProviderConfigs(listOf(customConfig, builtInConfig)),
+        ).apply {
+            (0 until length()).forEach { index -> getJSONObject(index).remove("supportsImageInput") }
+        }
+
+        val parsed = parseProviderConfigs(legacyJson.toString())
+
+        // Custom endpoints were always declared image capable by the bridge, and
+        // built-in providers keep following the Pi catalog.
+        assertTrue(parsed.first { it.id == "custom-provider" }.supportsImageInput)
+        assertFalse(parsed.first { it.id == "deepseek-provider" }.supportsImageInput)
     }
 
     @Test

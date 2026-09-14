@@ -253,4 +253,24 @@ class PiProviderMapperTest {
         assertTrue(config.reasoning)
         assertTrue(config.thinkingLevelMap.isEmpty())
     }
+
+    @Test
+    fun imageInputFlagReachesTheKernelAndDefaultsToOff() {
+        val disabled = AppSettings(
+            piProviderId = "deepseek",
+            modelId = "deepseek-v4-flash",
+        ).toPiModelConfig()
+
+        assertFalse(disabled.supportsImageInput)
+        assertFalse(disabled.toJson().getBoolean("supports_image_input"))
+
+        val enabled = AppSettings(
+            piProviderId = "deepseek",
+            modelId = "deepseek-v4-flash",
+            supportsImageInput = true,
+        ).toPiModelConfig()
+
+        assertTrue(enabled.supportsImageInput)
+        assertTrue(enabled.toJson().getBoolean("supports_image_input"))
+    }
 }

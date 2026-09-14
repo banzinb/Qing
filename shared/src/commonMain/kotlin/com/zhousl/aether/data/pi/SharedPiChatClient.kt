@@ -457,6 +457,7 @@ fun LlmProviderConfig.toSharedPiModelConfig(
             put("User-Agent", normalizeLlmUserAgent(userAgent))
         })
         put("reasoning", reasoningEnabled)
+        put("supports_image_input", supportsImageInput)
         if (thinkingLevelMap.isNotEmpty()) {
             put("thinking_level_map", buildJsonObject {
                 thinkingLevelMap.forEach { (k, v) -> put(k, v) }

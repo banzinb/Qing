@@ -603,6 +603,8 @@
     <string name="provider_form_user_agent">User-Agent</string>
     <string name="provider_form_model_picker_api_key_hint">已启用的模型会显示在聊天模型选择器中。刷新模型目录前，请先配置 API Key 认证。</string>
     <string name="provider_form_model_picker_refresh_hint">已启用的模型会显示在聊天模型选择器中。刷新会从提供方 API 加载模型。</string>
+    <string name="provider_form_supports_image_input">这个模型能看图</string>
+    <string name="provider_form_supports_image_input_description">把截图、照片、相册里的图当图片发给这个模型。只能读文字的模型请关闭：它们会收到一句文字说明。</string>
     <string name="provider_form_choose_provider">选择提供方</string>
     <string name="provider_form_model_list">模型列表</string>
     <string name="provider_form_no_models_loaded">尚未加载模型。</string>

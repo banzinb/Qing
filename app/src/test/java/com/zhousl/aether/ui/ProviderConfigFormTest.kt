@@ -86,6 +86,47 @@ class ProviderConfigFormTest {
     }
 
     @Test
+    fun imageInputToggleStartsFromTheProviderKind() {
+        val customState = ProviderFormState.fromConfig(null)
+        customState.applyProviderDefaults(PiProviderCatalog.resolve("openai-compatible"))
+        assertTrue(customState.buildConfig().supportsImageInput)
+
+        val builtInState = ProviderFormState.fromConfig(null)
+        builtInState.applyProviderDefaults(PiProviderCatalog.resolve("deepseek"))
+        assertFalse(builtInState.buildConfig().supportsImageInput)
+    }
+
+    @Test
+    fun imageInputToggleOverridesTheDefaultForCustomEndpoints() {
+        val state = ProviderFormState.fromConfig(null)
+        state.applyProviderDefaults(PiProviderCatalog.resolve("openai-compatible"))
+
+        state.supportsImageInput = false
+
+        assertFalse(state.supportsImageInput)
+        assertFalse(state.buildConfig().supportsImageInput)
+    }
+
+    @Test
+    fun savedImageInputToggleSurvivesLoadingTheProviderAgain() {
+        val saved = LlmProviderConfig(
+            id = "custom-provider",
+            providerId = "custom",
+            name = "Custom",
+            piProviderId = "openai-compatible",
+            apiKey = "key",
+            baseUrl = "https://example.test/v1",
+            modelId = "model",
+            supportsImageInput = false,
+        )
+
+        val state = ProviderFormState.fromConfig(saved)
+
+        assertFalse(state.supportsImageInput)
+        assertFalse(state.buildConfig().supportsImageInput)
+    }
+
+    @Test
     fun parseManualModelIdsAcceptsMultipleSeparators() {
         assertEquals(
             listOf("manual-a", "manual-b", "manual-c", "manual-d"),

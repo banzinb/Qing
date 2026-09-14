@@ -26,6 +26,13 @@ data class PiModelConfig(
     val reasoning: Boolean = true,
     val thinkingLevelMap: Map<String, String> = emptyMap(),
     /**
+     * True only when the user told Qing this model can read images. The kernel
+     * strips every image part of a request unless the model declares image
+     * input, so without this flag a screenshot or a photo arrives as a written
+     * note instead of a picture.
+     */
+    val supportsImageInput: Boolean = false,
+    /**
      * Null means "not specified": the kernel then reads the real window from
      * the Pi model catalog (DeepSeek V4 is 1M, Claude 200K) and only falls back
      * to a default when the model is a custom endpoint it does not know.
@@ -52,6 +59,7 @@ data class PiModelConfig(
             customHeaders.forEach { (name, value) -> put(name, value) }
         })
         put("reasoning", reasoning)
+        put("supports_image_input", supportsImageInput)
         if (thinkingLevelMap.isNotEmpty()) {
             put("thinking_level_map", JSONObject().apply {
                 thinkingLevelMap.forEach { (name, value) -> put(name, value) }
@@ -134,6 +142,7 @@ fun AppSettings.toPiModelConfig(
             ("User-Agent" to normalizeLlmUserAgent(userAgent)),
         reasoning = reasoningEnabled,
         thinkingLevelMap = thinkingLevelMap,
+        supportsImageInput = supportsImageInput,
         timeoutMillis = llmInactivityReconnectTimeoutSeconds
             .coerceIn(30, 3_600) * 1_000,
         authMethod = effectiveAuthMethod,

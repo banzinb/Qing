@@ -228,6 +228,11 @@ class SettingsRepository(
                     enabledModelIds = listOf(
                         legacyModelId.ifBlank { definition.defaultModelId },
                     ).filter(String::isNotBlank),
+                    // Same answer the parser gives a config that never stored the
+                    // flag: built-in providers follow the Pi catalog, and the
+                    // custom endpoint the legacy settings described keeps the
+                    // image capability it always had.
+                    supportsImageInput = !definition.isBuiltIn,
                 )
                 parsedConfigs += matchingConfig
             }

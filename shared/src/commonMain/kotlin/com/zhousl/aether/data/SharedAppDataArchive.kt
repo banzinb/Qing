@@ -321,6 +321,7 @@ private fun AppSettings.toAndroidAppSettingsJson(): JsonObject = buildJsonObject
             add(buildJsonObject { put("name", header.name); put("value", header.value) })
         }
     })
+    put("supportsImageInput", supportsImageInput)
     put("reasoningEffort", normalizeReasoningEffort(reasoningEffort))
     put("systemPrompt", systemPrompt)
     put("llmInactivityReconnectTimeoutSeconds", llmInactivityReconnectTimeoutSeconds)
@@ -394,6 +395,10 @@ private fun parseAndroidAppSettings(value: JsonObject): AppSettings {
         modelId = value.stringValueOrDefault("modelId", defaults.modelId),
         userAgent = normalizeLlmUserAgent(value.stringValueOrDefault("userAgent", defaults.userAgent)),
         customHeaders = parseCustomHeaders(value["customHeaders"] as? JsonArray),
+        supportsImageInput = value.booleanValueOrDefault(
+            "supportsImageInput",
+            defaults.supportsImageInput,
+        ),
         reasoningEffort = normalizeReasoningEffort(
             value.stringValueOrDefault("reasoningEffort", defaults.reasoningEffort),
         ),

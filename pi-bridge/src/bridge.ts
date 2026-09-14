@@ -91,6 +91,7 @@ import {
 import { bridgeDebug, bridgeDebugEnabled, elapsedMillis } from "./debug.js";
 import { ToolLoopDetector, type LoopCheckResult } from "./tool-loop-detector.js";
 import { resolveContextWindow } from "./context-window.js";
+import { resolveBuiltInModelInput, resolveCustomModelInput } from "./model-input.js";
 import {
   approvalRequirement,
   isApprovalGranted,
@@ -130,6 +131,12 @@ interface ModelConfig {
   api_key?: string;
   custom_headers?: Record<string, string>;
   reasoning?: boolean;
+  /**
+   * Set by the app when the user says this model can read images. The kernel
+   * only forwards image content to an API whose model declares image input, so
+   * this flag is what turns a screenshot or a photo into a real attachment.
+   */
+  supports_image_input?: boolean;
   thinking_level_map?: Record<string, string | null>;
   context_window?: number;
   max_tokens?: number;
@@ -763,6 +770,8 @@ function normalizeModelConfig(rawValue: unknown): ModelConfig {
     max_retries: Math.max(0, asNumber(raw.max_retries, DEFAULT_AGENT_RETRY_MAX_RETRIES)),
     max_retry_delay_ms: asNumber(raw.max_retry_delay_ms, 60000),
     reasoning: asBoolean(raw.reasoning, false),
+    supports_image_input:
+      typeof raw.supports_image_input === "boolean" ? raw.supports_image_input : undefined,
   });
   return {
     provider_type: providerType,
@@ -774,6 +783,10 @@ function normalizeModelConfig(rawValue: unknown): ModelConfig {
     api_key: asString(raw.api_key),
     custom_headers: normalizeHeaders(raw.custom_headers),
     reasoning: asBoolean(raw.reasoning, false),
+    // Only an explicit answer is forwarded. Silence keeps the old behaviour:
+    // a custom endpoint stays image capable, a built-in one follows the catalog.
+    supports_image_input:
+      typeof raw.supports_image_input === "boolean" ? raw.supports_image_input : undefined,
     thinking_level_map: normalizeThinkingLevelMap(raw.thinking_level_map),
     // Zero means "the caller did not say"; modelFromConfig resolves the real
     // window from the Pi catalog before it reaches the kernel.
@@ -864,7 +877,7 @@ function createAetherModel(config: ModelConfig): Model<string> {
     baseUrl: config.base_url,
     reasoning: config.reasoning ?? false,
     thinkingLevelMap: config.thinking_level_map,
-    input: ["text", "image"],
+    input: resolveCustomModelInput(config.supports_image_input),
     cost: {
       input: 0,
       output: 0,
@@ -963,6 +976,7 @@ function buildModels(config: ModelConfig): {
     models.setProvider(provider);
     const model = {
       ...modelTemplate,
+      input: resolveBuiltInModelInput(config.supports_image_input, modelTemplate.input),
       ...(builtinModel
         ? {}
         : {

@@ -205,6 +205,7 @@ data class AppSettings(
     val modelId: String = DefaultCustomModelId,
     val userAgent: String = AetherLlmUserAgent,
     val customHeaders: List<LlmCustomHeader> = emptyList(),
+    val supportsImageInput: Boolean = false,
     val reasoningEffort: String = DefaultReasoningEffort,
     val systemPrompt: String = platformDefaultSystemPrompt(),
     @Transient val tavilyApiKey: String = "",
@@ -424,6 +425,14 @@ data class LlmProviderConfig(
     val cachedModels: List<String> = emptyList(),
     val enabledModelIds: List<String> = cachedModels + manualModelIds,
     val isEnabled: Boolean = true,
+    /**
+     * Whether this provider's models can read images. Off by default so a text
+     * only endpoint keeps getting a written note instead of an image it cannot
+     * decode. The Pi kernel drops every image part of a request unless the
+     * model declares image input, so this flag is the only switch that lets a
+     * screenshot or a photo reach the model.
+     */
+    val supportsImageInput: Boolean = false,
     val createdAtMillis: Long = platformCurrentTimeMillis(),
     val updatedAtMillis: Long = createdAtMillis,
 )
@@ -454,6 +463,7 @@ fun LlmProviderConfig.toJsonObject(): JsonObject = JsonObject(
         "cachedModels" to cachedModels.toStringJsonArray(),
         "enabledModelIds" to enabledModelIds.toStringJsonArray(),
         "isEnabled" to JsonPrimitive(isEnabled),
+        "supportsImageInput" to JsonPrimitive(supportsImageInput),
         "createdAtMillis" to JsonPrimitive(createdAtMillis),
         "updatedAtMillis" to JsonPrimitive(updatedAtMillis),
     )
@@ -540,6 +550,15 @@ fun parseProviderConfigs(rawValue: String): List<LlmProviderConfig> {
                             json.boolean("isEnabled", true)
                         } else {
                             true
+                        },
+                        // Configs saved before this flag existed keep behaving the
+                        // way the bridge already treated them: custom endpoints were
+                        // always declared as image capable, built-in ones followed
+                        // the Pi catalog.
+                        supportsImageInput = if ("supportsImageInput" in json) {
+                            json.boolean("supportsImageInput", false)
+                        } else {
+                            !providerDefinition.isBuiltIn
                         },
                         createdAtMillis = json.long("createdAtMillis", platformCurrentTimeMillis()),
                         updatedAtMillis = json.long("updatedAtMillis", platformCurrentTimeMillis()),
@@ -672,6 +691,7 @@ data class ProviderModelOption(
     val modelId: String,
     val userAgent: String,
     val customHeaders: List<LlmCustomHeader>,
+    val supportsImageInput: Boolean = false,
     val fullLabel: String,
     val chatLabel: String,
 )
@@ -723,6 +743,7 @@ fun List<LlmProviderConfig>.availableModelOptions(
                 modelId = normalizedModelId,
                 userAgent = normalizeLlmUserAgent(config.userAgent),
                 customHeaders = config.customHeaders,
+                supportsImageInput = config.supportsImageInput,
                 fullLabel = fullLabel,
                 chatLabel = if ((modelCounts[normalizedModelId] ?: 0) > 1) fullLabel else normalizedModelId,
             )
@@ -746,6 +767,7 @@ fun AppSettings.withModelOption(option: ProviderModelOption): AppSettings = copy
     modelId = option.modelId.trim(),
     userAgent = normalizeLlmUserAgent(option.userAgent),
     customHeaders = option.customHeaders,
+    supportsImageInput = option.supportsImageInput,
 )
 
 fun List<ProviderModelOption>.findModelOption(key: String?): ProviderModelOption? =

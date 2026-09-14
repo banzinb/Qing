@@ -2381,3 +2381,26 @@ test("rejects non-OpenAI custom Pi APIs", async () => {
     );
   }
 });
+
+test("forwards the image input answer from the app to the kernel model config", async () => {
+  const client = new BridgeClient({ AETHER_PI_BRIDGE_DEBUG: "1" });
+  try {
+    await client.request("image-input-config", "set_model_config", {
+      model_config: {
+        provider_type: "builtin",
+        provider_config_id: "deepseek-config",
+        pi_provider_id: "deepseek",
+        pi_api: "builtin",
+        model_id: "deepseek-v4-flash",
+        base_url: "https://api.deepseek.com/v1",
+        supports_image_input: true,
+      },
+    });
+
+    // Normalizing the model config must not drop the flag: without it the
+    // kernel falls back to the catalog answer and quietly strips every image.
+    assert.match(client.stderr, /"supports_image_input":true/);
+  } finally {
+    await client.close();
+  }
+});
