@@ -571,6 +571,7 @@ fun SettingsScreen(
     llmInactivityReconnectTimeoutSeconds: Int,
     keepTasksRunningInBackground: Boolean,
     notifyOnTaskCompletion: Boolean,
+    returnToAppOnCompletion: Boolean,
     agentWorkspaceMode: AgentWorkspaceMode,
     autoCleanOldCommandHistory: Boolean,
     oldCommandHistoryRetentionHours: Int,
@@ -627,6 +628,7 @@ fun SettingsScreen(
         String,
         String,
         Int,
+        Boolean,
         Boolean,
         Boolean,
         AgentWorkspaceMode,
@@ -757,6 +759,9 @@ fun SettingsScreen(
     var notifyOnTaskCompletionValue by rememberSaveable {
         mutableStateOf(notifyOnTaskCompletion)
     }
+    var returnToAppOnCompletionValue by rememberSaveable {
+        mutableStateOf(returnToAppOnCompletion)
+    }
     var agentWorkspaceModeValue by rememberSaveable {
         mutableStateOf(agentWorkspaceMode)
     }
@@ -856,6 +861,7 @@ fun SettingsScreen(
             ),
             keepTasksRunningInBackgroundValue,
             notifyOnTaskCompletionValue,
+            returnToAppOnCompletionValue,
             agentWorkspaceModeValue,
             autoCleanOldCommandHistoryValue,
             normalizeOldCommandHistoryRetentionHours(
@@ -1258,6 +1264,8 @@ fun SettingsScreen(
                 onKeepTasksRunningInBackgroundChanged = { keepTasksRunningInBackgroundValue = it },
                 notifyOnTaskCompletion = notifyOnTaskCompletionValue,
                 onNotifyOnTaskCompletionChanged = { notifyOnTaskCompletionValue = it },
+                returnToAppOnCompletion = returnToAppOnCompletionValue,
+                onReturnToAppOnCompletionChanged = { returnToAppOnCompletionValue = it },
                 onOpenNotificationSettings = { openQingNotificationSettings(context) },
                 onIgnoreBatteryOptimizations = { openQingIgnoreBatteryOptimizations(context) },
                 onOpenAutoStartSettings = { openQingAppDetails(context) },
@@ -3673,6 +3681,8 @@ private fun ReliabilityPage(
     onKeepTasksRunningInBackgroundChanged: (Boolean) -> Unit,
     notifyOnTaskCompletion: Boolean,
     onNotifyOnTaskCompletionChanged: (Boolean) -> Unit,
+    returnToAppOnCompletion: Boolean,
+    onReturnToAppOnCompletionChanged: (Boolean) -> Unit,
     onOpenNotificationSettings: () -> Unit,
     onIgnoreBatteryOptimizations: () -> Unit,
     onOpenAutoStartSettings: () -> Unit,
@@ -3710,6 +3720,15 @@ private fun ReliabilityPage(
                     subtitle = stringResource(R.string.settings_notify_background_tasks_finish_subtitle),
                     checked = notifyOnTaskCompletion,
                     onCheckedChange = onNotifyOnTaskCompletionChanged,
+                )
+                Spacer(Modifier.height(4.dp))
+                SettingsToggleRow(
+                    title = stringResource(R.string.settings_return_to_app_when_task_finishes),
+                    subtitle = stringResource(
+                        R.string.settings_return_to_app_when_task_finishes_subtitle,
+                    ),
+                    checked = returnToAppOnCompletion,
+                    onCheckedChange = onReturnToAppOnCompletionChanged,
                 )
             }
         }

@@ -481,6 +481,8 @@
     <string name="settings_keep_tasks_running_background_subtitle">使用 Android 前台服务，让活跃聊天在离开 青 后继续工作。</string>
     <string name="settings_notify_background_tasks_finish">后台任务结束时通知</string>
     <string name="settings_notify_background_tasks_finish_subtitle">当运行在 青 不在屏幕上时结束，会显示完成提醒。</string>
+    <string name="settings_return_to_app_when_task_finishes">干完活自动回到 青</string>
+    <string name="settings_return_to_app_when_task_finishes_subtitle">后台任务结束后，把 青 拉到前台并打开这次会话。默认关闭——它会打断你手上正在做的事。</string>
     <string name="settings_keep_alive_section">后台保活引导</string>
     <string name="settings_notification_access">通知权限</string>
     <string name="settings_notification_access_subtitle">允许 青 发送任务完成和主动推送提醒。</string>
@@ -560,6 +562,10 @@
     <string name="presence_notification_open">打开</string>
     <string name="presence_notification_ignore">忽略</string>
     <string name="presence_notification_disable">关闭主动推送</string>
+    <string name="notification_channel_task_done">任务完成</string>
+    <string name="notification_channel_task_done_description">青 在后台干完活时弹出横幅并响一声。</string>
+    <string name="notification_task_finished_title">青 干完活了</string>
+    <string name="notification_task_finished_issue_title">青 干完活了，但遇到点问题</string>
 
     <!-- Provider configuration -->
     <string name="provider_form_provider_name">提供方名称</string>
@@ -983,6 +989,10 @@
     <string name="browser_viewer_close_tab">关闭标签</string>
     <string name="browser_viewer_show_toolbar">展开浏览器工具栏</string>
     <string name="browser_viewer_hide_toolbar">收起浏览器工具栏</string>
+    <string name="chat_browser_activity_browsing">青 正在浏览 %1$s</string>
+    <string name="chat_browser_activity_opening">青 正在打开浏览器</string>
+    <string name="chat_browser_activity_idle">浏览器会话已结束</string>
+    <string name="chat_browser_activity_open">打开</string>
     <string name="chat_ask_chrome">使用浏览器询问</string>
     <string name="chat_chrome_preview_pending">浏览器启动后会显示预览。</string>
     <string name="chat_browser_preview_ready">浏览器已就绪</string>

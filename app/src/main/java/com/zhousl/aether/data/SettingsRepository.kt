@@ -89,6 +89,7 @@ class SettingsRepository(
             ),
             keepTasksRunningInBackground = preferences[KEEP_TASKS_RUNNING_IN_BACKGROUND] ?: true,
             notifyOnTaskCompletion = preferences[NOTIFY_ON_TASK_COMPLETION] ?: true,
+            returnToAppOnCompletion = preferences[RETURN_TO_APP_ON_COMPLETION] ?: false,
             agentWorkspaceMode = if (preferences[WORKSPACE_MODE_INITIALIZED] == true) {
                 storedWorkspaceMode
             } else {
@@ -389,6 +390,7 @@ class SettingsRepository(
                 )
             it[KEEP_TASKS_RUNNING_IN_BACKGROUND] = settings.keepTasksRunningInBackground
             it[NOTIFY_ON_TASK_COMPLETION] = settings.notifyOnTaskCompletion
+            it[RETURN_TO_APP_ON_COMPLETION] = settings.returnToAppOnCompletion
             it[AGENT_WORKSPACE_MODE] = settings.agentWorkspaceMode.storageValue
             it[WORKSPACE_MODE_INITIALIZED] = true
             it[AUTO_CLEAN_OLD_COMMAND_HISTORY] = settings.autoCleanOldCommandHistory
@@ -489,6 +491,7 @@ class SettingsRepository(
                 )
             it[KEEP_TASKS_RUNNING_IN_BACKGROUND] = settings.keepTasksRunningInBackground
             it[NOTIFY_ON_TASK_COMPLETION] = settings.notifyOnTaskCompletion
+            it[RETURN_TO_APP_ON_COMPLETION] = settings.returnToAppOnCompletion
             it[AGENT_WORKSPACE_MODE] = settings.agentWorkspaceMode.storageValue
             it[WORKSPACE_MODE_INITIALIZED] = true
             it[AUTO_CLEAN_OLD_COMMAND_HISTORY] = settings.autoCleanOldCommandHistory
@@ -585,6 +588,8 @@ class SettingsRepository(
             booleanPreferencesKey("keep_tasks_running_in_background")
         val NOTIFY_ON_TASK_COMPLETION =
             booleanPreferencesKey("notify_on_task_completion")
+        val RETURN_TO_APP_ON_COMPLETION =
+            booleanPreferencesKey("return_to_app_on_completion")
         val AGENT_WORKSPACE_MODE = stringPreferencesKey("agent_workspace_mode")
         val WORKSPACE_MODE_INITIALIZED =
             booleanPreferencesKey("workspace_mode_initialized")

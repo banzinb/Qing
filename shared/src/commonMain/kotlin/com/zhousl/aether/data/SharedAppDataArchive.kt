@@ -327,6 +327,7 @@ private fun AppSettings.toAndroidAppSettingsJson(): JsonObject = buildJsonObject
     put("llmInactivityReconnectTimeoutSeconds", llmInactivityReconnectTimeoutSeconds)
     put("keepTasksRunningInBackground", keepTasksRunningInBackground)
     put("notifyOnTaskCompletion", notifyOnTaskCompletion)
+    put("returnToAppOnCompletion", returnToAppOnCompletion)
     put("agentWorkspaceMode", agentWorkspaceMode.storageValue)
     put("termuxSetupCompleted", termuxSetupCompleted)
     put("termuxSetupNoticeDismissed", termuxSetupNoticeDismissed)
@@ -416,6 +417,10 @@ private fun parseAndroidAppSettings(value: JsonObject): AppSettings {
         notifyOnTaskCompletion = value.booleanValueOrDefault(
             "notifyOnTaskCompletion",
             defaults.notifyOnTaskCompletion,
+        ),
+        returnToAppOnCompletion = value.booleanValueOrDefault(
+            "returnToAppOnCompletion",
+            defaults.returnToAppOnCompletion,
         ),
         agentWorkspaceMode = AgentWorkspaceMode.fromStorage(
             value.stringValueOrDefault("agentWorkspaceMode", defaults.agentWorkspaceMode.storageValue),

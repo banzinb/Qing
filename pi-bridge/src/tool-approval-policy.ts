@@ -18,6 +18,18 @@ const APPROVAL_MODES: readonly ApprovalMode[] = ["off", "relaxed", "balanced", "
 
 export type ToolApprovalDecision = "approved" | "approved_for_session" | "denied" | "timed_out";
 
+/**
+ * The phone tool is called `qing_device_manage` since the de-branding pass, but
+ * sessions stored before the rename still hold tool calls (and approval scope
+ * keys) under the old name, so both stay recognized.
+ */
+const DEVICE_TOOL_NAME = "qing_device_manage";
+const LEGACY_DEVICE_TOOL_NAME = "aether_device_manage";
+
+function isDeviceToolName(name: string): boolean {
+  return name === DEVICE_TOOL_NAME || name === LEGACY_DEVICE_TOOL_NAME;
+}
+
 const TOOL_APPROVAL_DECISIONS: readonly ToolApprovalDecision[] = [
   "approved",
   "approved_for_session",
@@ -93,6 +105,7 @@ const SENSITIVE_HOST_TOOLS = new Set([
   "aether_config_set",
   "aether_developer_manage",
   "aether_device_manage",
+  "qing_device_manage",
   "aether_extension_manage",
   "aether_runtime_manage",
   "aether_scheduled_task_manage",
@@ -166,7 +179,7 @@ export function approvalRequirement(
 function isHarmless(subject: ApprovalSubject): boolean {
   if (subject.kind === "runtime") return false;
   if (HARMLESS_HOST_TOOLS.has(subject.name)) return true;
-  if (subject.name !== "aether_device_manage") return false;
+  if (!isDeviceToolName(subject.name)) return false;
   const action = deviceActionOf(subject.argumentsJson);
   return action !== "" && HARMLESS_DEVICE_ACTIONS.has(action);
 }
@@ -190,7 +203,7 @@ function balancedRequires(subject: ApprovalSubject): boolean {
 
 function scopeKeyFor(subject: ApprovalSubject): string {
   if (subject.kind === "runtime") return `runtime:${subject.name}`;
-  if (subject.name === "aether_device_manage") {
+  if (isDeviceToolName(subject.name)) {
     const action = deviceActionOf(subject.argumentsJson);
     if (action !== "") return `host_tool:${subject.name}:${action}`;
   }

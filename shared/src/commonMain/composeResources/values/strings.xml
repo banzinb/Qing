@@ -483,6 +483,8 @@
     <string name="settings_keep_tasks_running_background_subtitle">Uses an Android foreground service so active chats can keep working after you leave Qing.</string>
     <string name="settings_notify_background_tasks_finish">Notify when background tasks finish</string>
     <string name="settings_notify_background_tasks_finish_subtitle">Shows a completion alert when a run ends while Qing is not on screen.</string>
+    <string name="settings_return_to_app_when_task_finishes">Return to Qing when a task finishes</string>
+    <string name="settings_return_to_app_when_task_finishes_subtitle">Brings Qing back to the front and opens this chat when a background task ends. Off by default, because it interrupts whatever you are doing.</string>
     <string name="settings_keep_alive_section">Background keep-alive guide</string>
     <string name="settings_notification_access">Notification access</string>
     <string name="settings_notification_access_subtitle">Allows Qing to send task completion and active push alerts.</string>
@@ -562,6 +564,10 @@
     <string name="presence_notification_open">Open</string>
     <string name="presence_notification_ignore">Ignore</string>
     <string name="presence_notification_disable">Turn off pushes</string>
+    <string name="notification_channel_task_done">Task completion</string>
+    <string name="notification_channel_task_done_description">Shows a banner and plays a sound when Qing finishes a background task.</string>
+    <string name="notification_task_finished_title">Qing finished the task</string>
+    <string name="notification_task_finished_issue_title">Qing finished the task with an issue</string>
 
     <!-- Provider configuration -->
     <string name="provider_form_provider_name">Provider name</string>
@@ -985,6 +991,10 @@
     <string name="browser_viewer_close_tab">Close tab</string>
     <string name="browser_viewer_show_toolbar">Show the browser toolbar</string>
     <string name="browser_viewer_hide_toolbar">Hide the browser toolbar</string>
+    <string name="chat_browser_activity_browsing">Qing is browsing %1$s</string>
+    <string name="chat_browser_activity_opening">Qing is opening the browser</string>
+    <string name="chat_browser_activity_idle">Browser session finished</string>
+    <string name="chat_browser_activity_open">Open</string>
     <string name="chat_ask_chrome">Ask with browser</string>
     <string name="chat_chrome_preview_pending">The preview will appear after the browser starts.</string>
     <string name="chat_browser_preview_ready">Browser is ready</string>

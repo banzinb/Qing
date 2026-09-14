@@ -16,6 +16,8 @@ class AetherSelfManagementToolRoutingTest {
 
     @Test
     fun deviceCapabilityToolIsRoutedByPiHostExecutor() {
+        assertTrue(AetherToolExecutor.supports("qing_device_manage"))
+        // Sessions stored before the rename still call the old name.
         assertTrue(AetherToolExecutor.supports("aether_device_manage"))
     }
 }

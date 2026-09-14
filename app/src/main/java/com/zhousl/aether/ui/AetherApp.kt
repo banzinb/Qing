@@ -993,6 +993,7 @@ private fun AetherAppContent(
                     chromeAvailable = chromeAvailable,
                     chromeSelected = chromeSelected,
                     chromeDisplayState = uiState.chromeDisplayState,
+                    browserViewerState = browserViewerState,
                     allowRootImageRead = uiState.rootSetupState.isReady ||
                         (
                             uiState.settings.agentModeAuthorizationEnabled &&
@@ -1101,6 +1102,7 @@ private fun AetherAppContent(
                     llmInactivityReconnectTimeoutSeconds = uiState.settings.llmInactivityReconnectTimeoutSeconds,
                     keepTasksRunningInBackground = uiState.settings.keepTasksRunningInBackground,
                     notifyOnTaskCompletion = uiState.settings.notifyOnTaskCompletion,
+                    returnToAppOnCompletion = uiState.settings.returnToAppOnCompletion,
                     agentWorkspaceMode = uiState.settings.agentWorkspaceMode,
                     autoCleanOldCommandHistory =
                         uiState.settings.autoCleanOldCommandHistory,
@@ -1506,7 +1508,9 @@ private fun toolApprovalToolLabel(request: ToolApprovalRequest): String = when {
         stringResource(R.string.tool_approval_tool_file_write)
 
     request.subjectKind == "runtime" -> stringResource(R.string.tool_approval_tool_runtime)
-    request.toolName == "aether_device_manage" -> stringResource(R.string.tool_approval_tool_device)
+    request.toolName == "qing_device_manage" ||
+        request.toolName == "aether_device_manage" ->
+        stringResource(R.string.tool_approval_tool_device)
     request.toolName == "browser" -> stringResource(R.string.tool_approval_tool_browser)
     request.toolName.isNotBlank() -> request.toolName
     else -> stringResource(R.string.tool_approval_tool_unknown)

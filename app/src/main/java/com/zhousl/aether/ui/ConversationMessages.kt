@@ -30,6 +30,7 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.keyframes
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
@@ -82,6 +83,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -129,6 +131,7 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
 import com.zhousl.aether.R
+import com.zhousl.aether.data.browser.BrowserViewerState
 import com.zhousl.aether.ui.resultcard.QingCardParser
 import com.zhousl.aether.ui.resultcard.QingResultCard
 import com.zhousl.aether.ui.resultcard.QingCard
@@ -203,6 +206,8 @@ fun ConversationMessageBubble(
     onRetry: () -> Unit,
     onSwitchBranch: (Int) -> Unit,
     sessionTotalTokens: Long? = null,
+    browserViewerState: BrowserViewerState = BrowserViewerState(),
+    onOpenBrowserViewer: () -> Unit = {},
 ) {
     if (message.author == MessageAuthor.User) {
         UserMessageBlock(
@@ -214,19 +219,36 @@ fun ConversationMessageBubble(
             onSwitchBranch = onSwitchBranch,
         )
     } else {
-        AssistantMessageBlock(
-            message = message,
-            actionsEnabled = actionsEnabled,
-            showActions = !message.assistantActionsHidden,
-            workspaceDirectory = workspaceDirectory,
-            allowRootImageRead = allowRootImageRead,
-            onOpenAttachment = onOpenAttachment,
-            onOpenLink = onOpenLink,
-            onCopy = onCopy,
-            onRedo = onRedo,
-            onDelete = onDelete,
-            sessionTotalTokens = sessionTotalTokens,
-        )
+        val browserActivityRunning = message.toolInvocations
+            .any { invocation -> isBrowserActivityToolName(invocation.toolName) && invocation.isRunning }
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            AssistantMessageBlock(
+                message = message,
+                actionsEnabled = actionsEnabled,
+                showActions = !message.assistantActionsHidden,
+                workspaceDirectory = workspaceDirectory,
+                allowRootImageRead = allowRootImageRead,
+                onOpenAttachment = onOpenAttachment,
+                onOpenLink = onOpenLink,
+                onCopy = onCopy,
+                onRedo = onRedo,
+                onDelete = onDelete,
+                sessionTotalTokens = sessionTotalTokens,
+            )
+            if (
+                message.toolInvocations.any { invocation -> isBrowserActivityToolName(invocation.toolName) } &&
+                (!browserViewerState.isEmpty || browserActivityRunning)
+            ) {
+                BrowserActivityCard(
+                    state = browserViewerState,
+                    running = browserActivityRunning,
+                    onOpen = onOpenBrowserViewer,
+                )
+            }
+        }
     }
 }
 
@@ -1005,9 +1027,17 @@ fun ConversationAssistantGroupBubble(
     onRedo: () -> Unit,
     onDelete: () -> Unit,
     sessionTotalTokens: Long? = null,
+    browserViewerState: BrowserViewerState = BrowserViewerState(),
+    onOpenBrowserViewer: () -> Unit = {},
 ) {
     if (messages.isEmpty()) return
     val groupUsageStatistics = messages.lastOrNull { it.usageStatistics != null }?.usageStatistics
+    val browserInvocations = messages
+        .flatMap { message -> message.toolInvocations }
+        .filter { invocation -> isBrowserActivityToolName(invocation.toolName) }
+    val browserActivityRunning = browserInvocations.any { invocation -> invocation.isRunning }
+    val showBrowserActivity = browserInvocations.isNotEmpty() &&
+        (!browserViewerState.isEmpty || browserActivityRunning)
     val thoughtDurationMillis = messages.lastOrNull()?.thoughtDurationMillis
     val hasReasoningTrace = messages.any { it.reasoningTrace != null }
     val showActions = messages.none { it.assistantActionsHidden }
@@ -1056,6 +1086,13 @@ fun ConversationAssistantGroupBubble(
                         onLinkClick = onOpenLink,
                     )
                 }
+            if (showBrowserActivity) {
+                BrowserActivityCard(
+                    state = browserViewerState,
+                    running = browserActivityRunning,
+                    onOpen = onOpenBrowserViewer,
+                )
+            }
             if (showActions) {
                 AssistantMessageActions(
                     usageStatistics = groupUsageStatistics,
@@ -1169,6 +1206,13 @@ fun ConversationAssistantGroupBubble(
                 fallbackCard = fallbackCard,
             )
         }
+        if (showBrowserActivity) {
+            BrowserActivityCard(
+                state = browserViewerState,
+                running = browserActivityRunning,
+                onOpen = onOpenBrowserViewer,
+            )
+        }
         if (showActions) {
             AssistantMessageActions(
                 usageStatistics = groupUsageStatistics,
@@ -1177,6 +1221,78 @@ fun ConversationAssistantGroupBubble(
                 onCopy = onCopy,
                 onRedo = onRedo,
                 onDelete = onDelete,
+            )
+        }
+    }
+}
+
+/** True for the tool names whose work the visible browser window can show. */
+internal fun isBrowserActivityToolName(toolName: String): Boolean =
+    toolName.equals("chrome", ignoreCase = true) || toolName.equals("browser", ignoreCase = true)
+
+/**
+ * The in-conversation door into Qing's visible browser window.
+ *
+ * It reports what the pooled WebView is sitting on and opens the window on tap. It never pops up
+ * on its own, so watching the agent work stays a deliberate choice; when every tab has been
+ * recycled it says so instead of pretending a page is still open.
+ */
+@Composable
+internal fun BrowserActivityCard(
+    state: BrowserViewerState,
+    running: Boolean,
+    onOpen: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val activeTab = state.tabs.firstOrNull { it.id == state.activeTabId } ?: state.tabs.firstOrNull()
+    val title = when {
+        activeTab != null -> stringResource(R.string.chat_browser_activity_browsing, activeTab.title)
+        running -> stringResource(R.string.chat_browser_activity_opening)
+        else -> stringResource(R.string.chat_browser_activity_idle)
+    }
+    val subtitle = activeTab?.url.orEmpty()
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        color = AetherSurfaceHigh,
+        shape = RoundedCornerShape(14.dp),
+        border = BorderStroke(1.dp, AetherOutlineSoft),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .noRippleClickable(onClick = onOpen)
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.Language,
+                contentDescription = null,
+                tint = AetherPrimary,
+                modifier = Modifier.size(18.dp),
+            )
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = AetherOnSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                if (subtitle.isNotBlank() && subtitle != activeTab?.title) {
+                    Text(
+                        text = subtitle,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = AetherOnSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+            Text(
+                text = stringResource(R.string.chat_browser_activity_open),
+                style = MaterialTheme.typography.labelLarge,
+                color = AetherPrimary,
             )
         }
     }
@@ -4274,7 +4390,7 @@ private fun formatAetherToolTitle(
             else -> context.getString(if (isRunning) R.string.tool_title_checking_agent_mode_authorization else R.string.tool_title_checked_agent_mode_authorization)
         }
         "aether_developer_manage" -> context.getString(if (isRunning) R.string.tool_title_reading_aether_diagnostics else R.string.tool_title_read_aether_diagnostics)
-        "aether_device_manage" -> when (action.lowercase()) {
+        "aether_device_manage", "qing_device_manage" -> when (action.lowercase()) {
             "open" -> formatArgumentDrivenTitle(isRunning, context.getString(R.string.tool_title_launching), context.getString(R.string.tool_title_launched), arguments?.optString("value").orEmpty(), context.getString(R.string.tool_title_device_fallback))
             "clipboard_get" -> context.getString(if (isRunning) R.string.tool_title_reading_clipboard else R.string.tool_title_read_clipboard)
             "clipboard_set" -> context.getString(if (isRunning) R.string.tool_title_writing_clipboard else R.string.tool_title_written_clipboard)
@@ -4334,8 +4450,8 @@ private fun summarizeAetherToolCommand(
             appendAetherKeyValue(arguments, "include")
             appendAetherKeyValue(arguments, "max_chars", "maxChars")
         }.trim()
-        "aether_device_manage" -> buildString {
-            append("aether_device_manage action=")
+        "aether_device_manage", "qing_device_manage" -> buildString {
+            append("action=")
             append(action.ifBlank { "device_info" })
             appendAetherKeyValue(arguments, "target")
             appendAetherKeyValue(arguments, "value")
@@ -4346,9 +4462,22 @@ private fun summarizeAetherToolCommand(
             appendAetherKeyValue(arguments, "start")
             appendAetherKeyValue(arguments, "message")
         }.trim()
-        else -> toolName
+        else -> humanizeToolName(toolName)
     }
 }
+
+/**
+ * The transcript used to print raw host tool names under every card, which put
+ * internal `aether_` identifiers in front of the user. Show the name without
+ * the internal prefix instead.
+ */
+internal fun humanizeToolName(toolName: String): String =
+    toolName
+        .removePrefix("aether_")
+        .removePrefix("qing_")
+        .replace('_', ' ')
+        .trim()
+        .ifBlank { toolName }
 
 private fun summarizeAetherCategories(arguments: JSONObject?): String {
     val categories = arguments?.optJSONArray("categories") ?: return ""

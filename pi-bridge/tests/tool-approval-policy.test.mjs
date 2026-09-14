@@ -12,6 +12,12 @@ const {
 
 const bash = (command) => ({ kind: "runtime", name: "bash", detail: command });
 const runtime = (name, detail = "") => ({ kind: "runtime", name, detail });
+
+// The phone tool was renamed during the de-branding pass; sessions stored
+// before that still call it by its old name, so both have to answer the same.
+const DEVICE_TOOL = "qing_device_manage";
+const LEGACY_DEVICE_TOOL = "aether_device_manage";
+
 const hostTool = (name, args = {}) => ({
   kind: "host_tool",
   name,
@@ -38,20 +44,20 @@ test("balanced stays quiet for reads and directory setup", () => {
 
 test("balanced gates device actions that change something", () => {
   assert.equal(
-    approvalRequirement(hostTool("aether_device_manage", { action: "open", target: "weixin" }), "balanced")
+    approvalRequirement(hostTool(DEVICE_TOOL, { action: "open", target: "weixin" }), "balanced")
       .required,
     true,
   );
   assert.equal(
     approvalRequirement(
-      hostTool("aether_device_manage", { action: "clipboard_set", text: "hi" }),
+      hostTool(DEVICE_TOOL, { action: "clipboard_set", text: "hi" }),
       "balanced",
     ).required,
     true,
   );
   for (const action of ["calendar_add", "alarm_set", "timer_set", "photo_export", "contacts_add"]) {
     assert.equal(
-      approvalRequirement(hostTool("aether_device_manage", { action }), "balanced").required,
+      approvalRequirement(hostTool(DEVICE_TOOL, { action }), "balanced").required,
       true,
       action,
     );
@@ -71,7 +77,7 @@ test("balanced lets the harmless device actions through", () => {
     "photos_recent",
   ]) {
     assert.equal(
-      approvalRequirement(hostTool("aether_device_manage", { action }), "balanced").required,
+      approvalRequirement(hostTool(DEVICE_TOOL, { action }), "balanced").required,
       false,
       action,
     );
@@ -100,7 +106,7 @@ test("relaxed only stops at shell and system-level tools", () => {
   assert.equal(approvalRequirement(hostTool("aether_extension_manage"), "relaxed").required, true);
   assert.equal(approvalRequirement(hostTool("agent_display"), "relaxed").required, false);
   assert.equal(
-    approvalRequirement(hostTool("aether_device_manage", { action: "open" }), "relaxed").required,
+    approvalRequirement(hostTool(DEVICE_TOOL, { action: "open" }), "relaxed").required,
     false,
   );
 });
@@ -115,13 +121,13 @@ test("strict asks for reads too but never for a lookup", () => {
 test("scope keys separate what the user agrees to", () => {
   assert.equal(approvalRequirement(bash("ls"), "balanced").scopeKey, "runtime:bash");
   assert.equal(
-    approvalRequirement(hostTool("aether_device_manage", { action: "open" }), "balanced").scopeKey,
-    "host_tool:aether_device_manage:open",
+    approvalRequirement(hostTool(DEVICE_TOOL, { action: "open" }), "balanced").scopeKey,
+    "host_tool:qing_device_manage:open",
   );
   assert.equal(
-    approvalRequirement(hostTool("aether_device_manage", { action: "clipboard_set" }), "balanced")
+    approvalRequirement(hostTool(DEVICE_TOOL, { action: "clipboard_set" }), "balanced")
       .scopeKey,
-    "host_tool:aether_device_manage:clipboard_set",
+    "host_tool:qing_device_manage:clipboard_set",
   );
   assert.equal(
     approvalRequirement(hostTool("browser"), "balanced").scopeKey,
@@ -132,9 +138,9 @@ test("scope keys separate what the user agrees to", () => {
 test("the preview shows what is about to happen", () => {
   assert.equal(approvalRequirement(bash("rm -rf /tmp/x"), "balanced").preview, "rm -rf /tmp/x");
   assert.equal(
-    approvalRequirement(hostTool("aether_device_manage", { action: "open", target: "weixin" }), "balanced")
+    approvalRequirement(hostTool(DEVICE_TOOL, { action: "open", target: "weixin" }), "balanced")
       .preview,
-    "aether_device_manage open · weixin",
+    "qing_device_manage open · weixin",
   );
 });
 
@@ -146,10 +152,34 @@ test("a very long command is clipped instead of flooding the prompt", () => {
 
 test("host tool arguments are forwarded so the prompt can show details", () => {
   const requirement = approvalRequirement(
-    hostTool("aether_device_manage", { action: "open", target: "weixin" }),
+    hostTool(DEVICE_TOOL, { action: "open", target: "weixin" }),
     "balanced",
   );
   assert.equal(JSON.parse(requirement.argumentsJson).target, "weixin");
+});
+
+test("the pre-rename device tool name still gets the same answers", () => {
+  const open = { action: "open", target: "weixin" };
+  assert.equal(
+    approvalRequirement(hostTool(LEGACY_DEVICE_TOOL, open), "balanced").required,
+    approvalRequirement(hostTool(DEVICE_TOOL, open), "balanced").required,
+  );
+  assert.equal(
+    approvalRequirement(hostTool(LEGACY_DEVICE_TOOL, open), "balanced").scopeKey,
+    "host_tool:aether_device_manage:open",
+  );
+  for (const action of ["device_info", "weather", "clipboard_get", "photos_recent"]) {
+    assert.equal(
+      approvalRequirement(hostTool(LEGACY_DEVICE_TOOL, { action }), "balanced").required,
+      false,
+      action,
+    );
+  }
+  assert.equal(
+    approvalRequirement(hostTool(LEGACY_DEVICE_TOOL, { action: "clipboard_set" }), "balanced")
+      .required,
+    true,
+  );
 });
 
 test("approval mode parsing falls back to balanced", () => {

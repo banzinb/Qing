@@ -168,6 +168,7 @@ import com.zhousl.aether.data.estimateTokens
 import com.zhousl.aether.data.AppLanguage
 import com.zhousl.aether.data.AgentModeDisplayState
 import com.zhousl.aether.data.AlpineChromeViewerUrl
+import com.zhousl.aether.data.browser.BrowserViewerState
 import com.zhousl.aether.data.McpServerConfig
 import com.zhousl.aether.data.McpTransportConfig
 import com.zhousl.aether.data.ModelCatalogInfo
@@ -344,6 +345,7 @@ fun ConversationScreen(
     chromeAvailable: Boolean,
     chromeSelected: Boolean,
     chromeDisplayState: AgentModeDisplayState,
+    browserViewerState: BrowserViewerState = BrowserViewerState(),
     allowRootImageRead: Boolean = false,
     isEditing: Boolean,
     termuxSetupState: TermuxSetupState,
@@ -697,6 +699,8 @@ fun ConversationScreen(
                                     onRetry = { onRetryUserMessage(message.id) },
                                     onSwitchBranch = { delta -> onSwitchUserMessageBranch(message.id, delta) },
                                     sessionTotalTokens = sessionTotalTokens,
+                                    browserViewerState = browserViewerState,
+                                    onOpenBrowserViewer = onOpenBrowserViewer,
                                 )
                             }
 
@@ -720,6 +724,8 @@ fun ConversationScreen(
                                     onRedo = { onRedoAgentMessage(lastMessage.id) },
                                     onDelete = { onDeleteMessage(lastMessage.id) },
                                     sessionTotalTokens = sessionTotalTokens,
+                                    browserViewerState = browserViewerState,
+                                    onOpenBrowserViewer = onOpenBrowserViewer,
                                 )
                             }
 
@@ -3651,14 +3657,15 @@ private fun formatPendingToolTitle(
     "aether_termux_manage",
     "aether_agent_mode_manage",
     "aether_device_manage",
+    "qing_device_manage",
     "aether_scheduled_task_manage",
     "aether_developer_manage" -> formatAetherToolTitle(toolName, isRunning, arguments)
     "agent_display" -> formatAgentDisplayToolTitle(isRunning, arguments)
     "chrome", "browser" -> formatChromeToolTitle(isRunning, arguments)
     else -> if (isRunning) {
-        stringResource(R.string.tool_title_using_tool, toolName)
+        stringResource(R.string.tool_title_using_tool, humanizeToolName(toolName))
     } else {
-        stringResource(R.string.tool_title_used_tool, toolName)
+        stringResource(R.string.tool_title_used_tool, humanizeToolName(toolName))
     }
     }
 }
@@ -3730,7 +3737,7 @@ private fun formatAetherToolTitle(
             else -> toolStatusLabel(isRunning, R.string.tool_title_reading_scheduled_tasks, R.string.tool_title_read_scheduled_tasks)
         }
         "aether_developer_manage" -> toolStatusLabel(isRunning, R.string.tool_title_reading_aether_diagnostics, R.string.tool_title_read_aether_diagnostics)
-        "aether_device_manage" -> when (action.lowercase()) {
+        "aether_device_manage", "qing_device_manage" -> when (action.lowercase()) {
             "open" -> formatArgumentDrivenToolTitle(isRunning, R.string.tool_title_launching, R.string.tool_title_launched, arguments?.optString("value").orEmpty(), R.string.tool_title_device_fallback)
             "clipboard_get" -> toolStatusLabel(isRunning, R.string.tool_title_reading_clipboard, R.string.tool_title_read_clipboard)
             "clipboard_set" -> toolStatusLabel(isRunning, R.string.tool_title_writing_clipboard, R.string.tool_title_written_clipboard)

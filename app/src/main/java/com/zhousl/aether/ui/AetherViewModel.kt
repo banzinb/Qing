@@ -2653,6 +2653,7 @@ class AetherViewModel(
         llmInactivityReconnectTimeoutSeconds: Int,
         keepTasksRunningInBackground: Boolean,
         notifyOnTaskCompletion: Boolean,
+        returnToAppOnCompletion: Boolean,
         agentWorkspaceMode: AgentWorkspaceMode,
         autoCleanOldCommandHistory: Boolean,
         oldCommandHistoryRetentionHours: Int,
@@ -2707,6 +2708,7 @@ class AetherViewModel(
                     ),
                     keepTasksRunningInBackground = keepTasksRunningInBackground,
                     notifyOnTaskCompletion = notifyOnTaskCompletion,
+                    returnToAppOnCompletion = returnToAppOnCompletion,
                     agentWorkspaceMode = agentWorkspaceMode,
                     autoCleanOldCommandHistory = autoCleanOldCommandHistory,
                     oldCommandHistoryRetentionHours = normalizeOldCommandHistoryRetentionHours(
@@ -4278,6 +4280,11 @@ class AetherViewModel(
             if (args.has("notify_on_task_completion")) {
                 updated = updated.copy(
                     notifyOnTaskCompletion = args.optBoolean("notify_on_task_completion")
+                )
+            }
+            if (args.has("return_to_app_on_completion")) {
+                updated = updated.copy(
+                    returnToAppOnCompletion = args.optBoolean("return_to_app_on_completion")
                 )
             }
             if (args.has("theme")) {
@@ -6334,6 +6341,7 @@ class AetherViewModel(
             put("llmInactivityReconnectTimeoutSeconds", snapshot.settings.llmInactivityReconnectTimeoutSeconds)
             put("keepTasksRunningInBackground", snapshot.settings.keepTasksRunningInBackground)
             put("notifyOnTaskCompletion", snapshot.settings.notifyOnTaskCompletion)
+            put("returnToAppOnCompletion", snapshot.settings.returnToAppOnCompletion)
             put("termuxSetupCompleted", snapshot.settings.termuxSetupCompleted)
             put("termuxSetupNoticeDismissed", snapshot.settings.termuxSetupNoticeDismissed)
             put("privacyPolicyAccepted", snapshot.settings.privacyPolicyAccepted)
@@ -6635,6 +6643,7 @@ class AetherViewModel(
         put("llmInactivityReconnectTimeoutSeconds", llmInactivityReconnectTimeoutSeconds)
         put("keepTasksRunningInBackground", keepTasksRunningInBackground)
         put("notifyOnTaskCompletion", notifyOnTaskCompletion)
+        put("returnToAppOnCompletion", returnToAppOnCompletion)
         put("agentWorkspaceMode", agentWorkspaceMode.storageValue)
         put("termuxSetupCompleted", termuxSetupCompleted)
         put("termuxSetupNoticeDismissed", termuxSetupNoticeDismissed)
@@ -6740,6 +6749,10 @@ class AetherViewModel(
             notifyOnTaskCompletion = json.optBoolean(
                 "notifyOnTaskCompletion",
                 defaults.notifyOnTaskCompletion,
+            ),
+            returnToAppOnCompletion = json.optBoolean(
+                "returnToAppOnCompletion",
+                defaults.returnToAppOnCompletion,
             ),
             agentWorkspaceMode = AgentWorkspaceMode.fromStorage(
                 json.optString("agentWorkspaceMode", defaults.agentWorkspaceMode.storageValue),

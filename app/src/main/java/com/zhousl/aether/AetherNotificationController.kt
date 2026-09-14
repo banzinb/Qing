@@ -17,6 +17,11 @@ import com.zhousl.aether.ui.ChatSession
 
 private const val ForegroundChannelId = "aether_background_runs"
 private const val CompletionChannelId = "aether_completed_runs"
+// Android refuses to raise an existing channel's importance, and MIUI drops
+// IMPORTANCE_DEFAULT channels as "not priority", so a finished task gets a
+// channel of its own that is allowed to show a heads-up banner. The old
+// channel stays in place for installs that already created it.
+private const val TaskDoneChannelId = "aether_task_done"
 private const val PresenceChannelId = "aether_presence"
 const val ForegroundNotificationId = 1001
 const val PresenceNotificationId = 2002
@@ -53,9 +58,19 @@ class AetherNotificationController(
             description = "Shows proactive memory summaries from Qing."
             setShowBadge(true)
         }
+        val taskDoneChannel = NotificationChannel(
+            TaskDoneChannelId,
+            context.getString(R.string.notification_channel_task_done),
+            NotificationManager.IMPORTANCE_HIGH,
+        ).apply {
+            description = context.getString(R.string.notification_channel_task_done_description)
+            setShowBadge(true)
+            enableVibration(true)
+        }
         manager.createNotificationChannel(foregroundChannel)
         manager.createNotificationChannel(completionChannel)
         manager.createNotificationChannel(presenceChannel)
+        manager.createNotificationChannel(taskDoneChannel)
     }
 
     fun buildForegroundNotification(
@@ -119,12 +134,12 @@ class AetherNotificationController(
         )
 
         val title = if (failed) {
-            "Qing task finished with an issue"
+            context.getString(R.string.notification_task_finished_issue_title)
         } else {
-            "Qing task finished"
+            context.getString(R.string.notification_task_finished_title)
         }
 
-        val notification = NotificationCompat.Builder(context, CompletionChannelId)
+        val notification = NotificationCompat.Builder(context, TaskDoneChannelId)
             .setSmallIcon(R.drawable.ic_notification_small)
             .setContentTitle(title)
             .setContentText(sessionTitle.ifBlank { "Untitled chat" })
@@ -141,13 +156,43 @@ class AetherNotificationController(
             )
             .setAutoCancel(true)
             .setContentIntent(contentIntent)
-            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setCategory(NotificationCompat.CATEGORY_STATUS)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setWhen(System.currentTimeMillis())
+            .setShowWhen(true)
+            .addAction(
+                R.drawable.ic_notification_small,
+                context.getString(R.string.presence_notification_open),
+                contentIntent,
+            )
             .build()
 
         try {
             notificationManager.notify(sessionId.hashCode(), notification)
         } catch (_: SecurityException) {
             // Notification permission can be revoked after the preflight check.
+        }
+    }
+
+    /**
+     * Brings the app back to the foreground after a background run ends.
+     *
+     * Qing targets API 28, so Android 10's background activity start
+     * restriction does not apply to it.
+     */
+    fun returnToApp() {
+        try {
+            context.startActivity(
+                Intent(context, MainActivity::class.java).apply {
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or
+                        Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                        Intent.FLAG_ACTIVITY_CLEAR_TOP
+                },
+            )
+        } catch (_: Exception) {
+            // Some ROMs refuse background activity starts; the completion
+            // notification is still there as a fallback.
         }
     }
 

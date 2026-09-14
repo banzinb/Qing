@@ -1535,6 +1535,7 @@ const AETHER_HOST_TOOL_NAMES = new Set([
   "aether_termux_manage",
   "aether_agent_mode_manage",
   "aether_device_manage",
+  "qing_device_manage",
   "aether_ui_manage",
   "aether_scheduled_task_manage",
   "aether_extension_manage",

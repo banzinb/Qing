@@ -509,15 +509,19 @@ class SessionExecutionManager(
             if (
                 !handle.pauseRequested &&
                 lastCompletion != null &&
-                currentSettings.value.notifyOnTaskCompletion &&
                 !appForegroundTracker.isForeground.value
             ) {
-                notificationController.notifyCompletion(
-                    sessionId = handle.sessionId,
-                    sessionTitle = lastCompletion.sessionTitle,
-                    summary = lastCompletion.summary,
-                    failed = lastCompletion.outcome == SessionTurnOutcome.Failure,
-                )
+                if (currentSettings.value.notifyOnTaskCompletion) {
+                    notificationController.notifyCompletion(
+                        sessionId = handle.sessionId,
+                        sessionTitle = lastCompletion.sessionTitle,
+                        summary = lastCompletion.summary,
+                        failed = lastCompletion.outcome == SessionTurnOutcome.Failure,
+                    )
+                }
+                if (currentSettings.value.returnToAppOnCompletion) {
+                    notificationController.returnToApp()
+                }
             }
         }
     }

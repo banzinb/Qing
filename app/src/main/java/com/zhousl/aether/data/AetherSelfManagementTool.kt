@@ -256,7 +256,7 @@ class AetherSelfManagementTool(
         ),
 
         buildAetherToolDefinition(
-            name = "aether_device_manage",
+            name = "qing_device_manage",
             description = "Use the phone itself: read device, battery, storage and screen info; open a URL or an installed app; read or write the clipboard; read text out loud; play or stop audio; look up the weather; ask where the phone is; search contacts; read the calendar; hand a new event to the calendar; set an alarm or a timer; list the user's photos and pull one into the workspace so you can look at it; hand a new contact to the contacts app. Required fields: open needs value (a URL, or a package name when target=app), clipboard_set needs text, speak needs text, player_play needs url, weather needs either city or both latitude and longitude, contacts_search needs query, contacts_add needs name or phone, calendar_add needs title and start, alarm_set needs hour and minute, timer_set needs seconds, photo_export needs photo_id. location_get, contacts_search, calendar_read and photos_recent need the matching phone permission; if Qing lacks it, the result says so and the user can grant it in settings, Agent mode, phone permissions. contacts_add only opens the contacts app with the values filled in — never say the contact was saved. photo_export copies the picture into the workspace; read that path to actually see it.",
             properties = JSONObject().apply {
                 put(
@@ -624,7 +624,9 @@ class AetherSelfManagementTool(
         "aether_skill_manage" -> executeSkillManage(argumentsJson)
         "aether_termux_manage" -> executeTermuxManage(argumentsJson)
         "aether_agent_mode_manage" -> executeAgentModeManage(argumentsJson)
+        // Sessions stored before the rename still hold the old tool name.
         "aether_device_manage" -> executeDeviceManage(argumentsJson)
+        "qing_device_manage" -> executeDeviceManage(argumentsJson)
         "aether_ui_manage" -> executeUiManage(argumentsJson)
         "aether_scheduled_task_manage" -> executeScheduledTaskManage(argumentsJson)
         "aether_extension_manage" -> executeExtensionManage(argumentsJson)
@@ -831,6 +833,17 @@ class AetherSelfManagementTool(
                     )
                 } else {
                     current.notifyOnTaskCompletion
+                },
+                returnToAppOnCompletion = if (
+                    patch.hasAny("return_to_app_on_completion", "returnToAppOnCompletion")
+                ) {
+                    patch.optBooleanAny(
+                        "return_to_app_on_completion",
+                        "returnToAppOnCompletion",
+                        current.returnToAppOnCompletion,
+                    )
+                } else {
+                    current.returnToAppOnCompletion
                 },
             )
 
@@ -1201,6 +1214,7 @@ class AetherSelfManagementTool(
             .put("llm_inactivity_reconnect_timeout_seconds", settings.llmInactivityReconnectTimeoutSeconds)
             .put("keep_tasks_running_in_background", settings.keepTasksRunningInBackground)
             .put("notify_on_task_completion", settings.notifyOnTaskCompletion)
+            .put("return_to_app_on_completion", settings.returnToAppOnCompletion)
 
     private fun agentModeSettingsJson(settings: AppSettings): JSONObject =
         JSONObject()

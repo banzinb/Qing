@@ -229,6 +229,7 @@ data class AppSettings(
     val llmInactivityReconnectTimeoutSeconds: Int = DefaultLlmInactivityReconnectTimeoutSeconds,
     val keepTasksRunningInBackground: Boolean = true,
     val notifyOnTaskCompletion: Boolean = true,
+    val returnToAppOnCompletion: Boolean = false,
     val agentWorkspaceMode: AgentWorkspaceMode = AgentWorkspaceMode.Shared,
     val autoCleanOldCommandHistory: Boolean = true,
     val oldCommandHistoryRetentionHours: Int = DefaultOldCommandHistoryRetentionHours,
