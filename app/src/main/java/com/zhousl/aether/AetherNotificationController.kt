@@ -26,6 +26,9 @@ private const val PresenceChannelId = "aether_presence"
 const val ForegroundNotificationId = 1001
 const val PresenceNotificationId = 2002
 
+/** Intent extra that carries the chat a completion alert (or a jump home) belongs to. */
+const val SessionIdExtra = "com.zhousl.aether.extra.SESSION_ID"
+
 class AetherNotificationController(
     private val context: Context,
 ) {
@@ -129,6 +132,7 @@ class AetherNotificationController(
             sessionId.hashCode(),
             Intent(context, MainActivity::class.java).apply {
                 flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                putExtra(SessionIdExtra, sessionId)
             },
             PendingIntent.FLAG_UPDATE_CURRENT or pendingIntentMutabilityFlags(),
         )
@@ -179,15 +183,21 @@ class AetherNotificationController(
      * Brings the app back to the foreground after a background run ends.
      *
      * Qing targets API 28, so Android 10's background activity start
-     * restriction does not apply to it.
+     * restriction does not apply to it — but a ROM can still gate the start on
+     * its own "background popup" switch (MIUI/HyperOS does), in which case this
+     * silently does nothing and the completion notification is the fallback.
+     *
+     * [sessionId] rides along so the window opens on the chat that just
+     * finished instead of whatever was on screen when the user left.
      */
-    fun returnToApp() {
+    fun returnToApp(sessionId: String? = null) {
         try {
             context.startActivity(
                 Intent(context, MainActivity::class.java).apply {
                     flags = Intent.FLAG_ACTIVITY_NEW_TASK or
                         Intent.FLAG_ACTIVITY_SINGLE_TOP or
                         Intent.FLAG_ACTIVITY_CLEAR_TOP
+                    if (!sessionId.isNullOrBlank()) putExtra(SessionIdExtra, sessionId)
                 },
             )
         } catch (_: Exception) {

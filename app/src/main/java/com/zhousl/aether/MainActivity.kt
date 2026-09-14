@@ -1,6 +1,7 @@
 package com.zhousl.aether
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
@@ -11,6 +12,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.enableEdgeToEdge
 import androidx.appcompat.app.AppCompatActivity
+import androidx.compose.runtime.mutableStateOf
 import androidx.core.content.ContextCompat
 import com.zhousl.aether.ui.AetherApp
 
@@ -21,14 +23,35 @@ class MainActivity : AppCompatActivity() {
 
     private var browserHost: FrameLayout? = null
 
+    /**
+     * Chat id handed over by a completion notification or by the "return to Qing when a task
+     * finishes" jump. It is composition state so an intent arriving while the activity is already
+     * running (onNewIntent) moves the UI too.
+     */
+    private val pendingSessionId = mutableStateOf<String?>(null)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        pendingSessionId.value = sessionIdFromIntent(intent)
         setContent {
-            AetherApp(onNotificationPermissionRequested = ::maybeRequestNotificationPermission)
+            AetherApp(
+                onNotificationPermissionRequested = ::maybeRequestNotificationPermission,
+                pendingSessionId = pendingSessionId.value,
+                onPendingSessionIdHandled = { pendingSessionId.value = null },
+            )
         }
         attachBrowserHost()
     }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        sessionIdFromIntent(intent)?.let { pendingSessionId.value = it }
+    }
+
+    private fun sessionIdFromIntent(intent: Intent?): String? =
+        intent?.getStringExtra(SessionIdExtra)?.takeIf { it.isNotBlank() }
 
     override fun onDestroy() {
         val controller = (application as AetherApplication).runtime.webViewBrowserController

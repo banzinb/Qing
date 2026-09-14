@@ -483,6 +483,8 @@
     <string name="settings_notify_background_tasks_finish_subtitle">当运行在 青 不在屏幕上时结束，会显示完成提醒。</string>
     <string name="settings_return_to_app_when_task_finishes">干完活自动回到 青</string>
     <string name="settings_return_to_app_when_task_finishes_subtitle">后台任务结束后，把 青 拉到前台并打开这次会话。默认关闭——它会打断你手上正在做的事。</string>
+    <string name="settings_return_to_app_background_popup_hint">小米/红米等系统还需要给它「后台弹出界面」权限，否则干完活只会弹通知，不会自己跳回来。</string>
+    <string name="settings_return_to_app_background_popup_open">去开启后台弹出界面</string>
     <string name="settings_keep_alive_section">后台保活引导</string>
     <string name="settings_notification_access">通知权限</string>
     <string name="settings_notification_access_subtitle">允许 青 发送任务完成和主动推送提醒。</string>

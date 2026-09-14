@@ -235,8 +235,19 @@ private tailrec fun Context.findActivity(): Activity? = when (this) {
 fun AetherApp(
     viewModel: AetherViewModel = viewModel(),
     onNotificationPermissionRequested: () -> Unit = {},
+    pendingSessionId: String? = null,
+    onPendingSessionIdHandled: () -> Unit = {},
 ) {
     val uiState = viewModel.uiState.collectAsStateWithLifecycle().value
+    // A completion notification (or the "return to Qing when a task finishes" jump) can hand over
+    // the chat it belongs to. Wait for the session list so a cold start lands in the right place.
+    LaunchedEffect(pendingSessionId, uiState.sessions) {
+        val target = pendingSessionId?.takeIf { it.isNotBlank() } ?: return@LaunchedEffect
+        if (uiState.sessions.any { session -> session.id == target }) {
+            viewModel.selectSession(target)
+            onPendingSessionIdHandled()
+        }
+    }
     val context = LocalContext.current
     val applicationLanguage = AetherLocaleManager.currentApplicationLanguage()
     val effectiveLanguage = applicationLanguage ?: uiState.settings.language

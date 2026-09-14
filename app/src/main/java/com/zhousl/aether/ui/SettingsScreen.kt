@@ -37,6 +37,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
@@ -99,6 +100,7 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -419,6 +421,31 @@ private fun openQingAppDetails(context: Context) {
         addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
     }
     launchQingSettingsIntentSafely(context, intent) {}
+}
+
+/**
+ * Opens the ROM's "background popup" switch for Qing.
+ *
+ * MIUI/HyperOS gates background activity starts behind its own permission, and the switch only
+ * exists inside MIUI's permission editor. Try that first and fall back to the app details page,
+ * where the user can reach the same page through the permission list.
+ */
+private fun openQingBackgroundPopupSettings(context: Context) {
+    val miuiIntent = Intent("miui.intent.action.APP_PERM_EDITOR").apply {
+        putExtra("extra_pkgname", context.packageName)
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
+    val opened = try {
+        if (miuiIntent.resolveActivity(context.packageManager) != null) {
+            context.startActivity(miuiIntent)
+            true
+        } else {
+            false
+        }
+    } catch (_: Throwable) {
+        false
+    }
+    if (!opened) openQingAppDetails(context)
 }
 
 private fun launchQingSettingsIntentSafely(
@@ -3730,6 +3757,20 @@ private fun ReliabilityPage(
                     checked = returnToAppOnCompletion,
                     onCheckedChange = onReturnToAppOnCompletionChanged,
                 )
+                if (returnToAppOnCompletion) {
+                    val backgroundPopupContext = LocalContext.current
+                    Text(
+                        text = stringResource(R.string.settings_return_to_app_background_popup_hint),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = AetherOnSurfaceVariant,
+                    )
+                    TextButton(
+                        onClick = { openQingBackgroundPopupSettings(backgroundPopupContext) },
+                        contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp),
+                    ) {
+                        Text(stringResource(R.string.settings_return_to_app_background_popup_open))
+                    }
+                }
             }
         }
 

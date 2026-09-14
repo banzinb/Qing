@@ -485,6 +485,8 @@
     <string name="settings_notify_background_tasks_finish_subtitle">Shows a completion alert when a run ends while Qing is not on screen.</string>
     <string name="settings_return_to_app_when_task_finishes">Return to Qing when a task finishes</string>
     <string name="settings_return_to_app_when_task_finishes_subtitle">Brings Qing back to the front and opens this chat when a background task ends. Off by default, because it interrupts whatever you are doing.</string>
+    <string name="settings_return_to_app_background_popup_hint">Xiaomi, Redmi and some other ROMs also require the "background popup" permission for this. Without it Qing only posts the notification and never comes back on its own.</string>
+    <string name="settings_return_to_app_background_popup_open">Open background popup settings</string>
     <string name="settings_keep_alive_section">Background keep-alive guide</string>
     <string name="settings_notification_access">Notification access</string>
     <string name="settings_notification_access_subtitle">Allows Qing to send task completion and active push alerts.</string>

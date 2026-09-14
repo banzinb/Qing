@@ -487,6 +487,27 @@ class SessionExecutionManager(
                 )
             }
         } finally {
+            // The completion alert and the optional jump home run before the execution state is
+            // cleared: clearing it tears the foreground service down, and some ROMs (MIUI/HyperOS)
+            // refuse a background activity start once the app is a plain background process.
+            if (
+                !handle.pauseRequested &&
+                lastCompletion != null &&
+                !appForegroundTracker.isForeground.value
+            ) {
+                if (currentSettings.value.notifyOnTaskCompletion) {
+                    notificationController.notifyCompletion(
+                        sessionId = handle.sessionId,
+                        sessionTitle = lastCompletion.sessionTitle,
+                        summary = lastCompletion.summary,
+                        failed = lastCompletion.outcome == SessionTurnOutcome.Failure,
+                    )
+                }
+                if (currentSettings.value.returnToAppOnCompletion) {
+                    notificationController.returnToApp(handle.sessionId)
+                }
+            }
+
             deactivateAssistantCheckpoint(handle, handle.activeResponseIdentity)
             clearPendingInputs(handle)
             if (executionHandles.remove(handle.sessionId, handle)) {
@@ -506,23 +527,6 @@ class SessionExecutionManager(
                 }
             }
 
-            if (
-                !handle.pauseRequested &&
-                lastCompletion != null &&
-                !appForegroundTracker.isForeground.value
-            ) {
-                if (currentSettings.value.notifyOnTaskCompletion) {
-                    notificationController.notifyCompletion(
-                        sessionId = handle.sessionId,
-                        sessionTitle = lastCompletion.sessionTitle,
-                        summary = lastCompletion.summary,
-                        failed = lastCompletion.outcome == SessionTurnOutcome.Failure,
-                    )
-                }
-                if (currentSettings.value.returnToAppOnCompletion) {
-                    notificationController.returnToApp()
-                }
-            }
         }
     }
 
