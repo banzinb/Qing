@@ -175,7 +175,7 @@ import com.zhousl.aether.data.HealthAgentModeNotAuthorized
 import com.zhousl.aether.data.HealthPermissionCalendar
 import com.zhousl.aether.data.HealthPermissionContacts
 import com.zhousl.aether.data.HealthPermissionLocation
-import com.zhousl.aether.data.photoPermissionForSdk
+import com.zhousl.aether.data.photoPermissionsForSdk
 import com.zhousl.aether.data.HealthRuntimeAlpine
 import com.zhousl.aether.data.HealthRuntimeBoth
 import com.zhousl.aether.data.HealthRuntimeTermux
@@ -8062,29 +8062,30 @@ private fun healthPermissionLabel(permission: String): String = stringResource(
  * which does the writing.
  */
 private enum class DevicePermission(
-    val permission: String,
+    val permissions: List<String>,
     val titleRes: Int,
     val subtitleRes: Int,
 ) {
     Location(
-        permission = Manifest.permission.ACCESS_FINE_LOCATION,
+        permissions = listOf(Manifest.permission.ACCESS_FINE_LOCATION),
         titleRes = R.string.device_permission_location,
         subtitleRes = R.string.device_permission_location_subtitle,
     ),
     Contacts(
-        permission = Manifest.permission.READ_CONTACTS,
+        permissions = listOf(Manifest.permission.READ_CONTACTS),
         titleRes = R.string.device_permission_contacts,
         subtitleRes = R.string.device_permission_contacts_subtitle,
     ),
     Calendar(
-        permission = Manifest.permission.READ_CALENDAR,
+        permissions = listOf(Manifest.permission.READ_CALENDAR),
         titleRes = R.string.device_permission_calendar,
         subtitleRes = R.string.device_permission_calendar_subtitle,
     ),
-    // Android 13 split photo access out of storage, so the row asks for a
-    // different permission depending on the phone.
+    // Android 13 split photo access out of storage, but Qing targets API 28, so
+    // the phone still enforces the legacy permission. The row asks for every
+    // permission that can grant the read and accepts whichever one lands.
     Photos(
-        permission = photoPermissionForSdk(Build.VERSION.SDK_INT),
+        permissions = photoPermissionsForSdk(Build.VERSION.SDK_INT),
         titleRes = R.string.device_permission_photos,
         subtitleRes = R.string.device_permission_photos_subtitle,
     ),
@@ -8126,10 +8127,12 @@ private fun DevicePermissionsSettingsPage(
                 DevicePermissionRow(
                     spec = spec,
                     granted = remember(context, spec, refreshToken) {
-                        ContextCompat.checkSelfPermission(context, spec.permission) ==
-                            PackageManager.PERMISSION_GRANTED
+                        spec.permissions.any { permission ->
+                            ContextCompat.checkSelfPermission(context, permission) ==
+                                PackageManager.PERMISSION_GRANTED
+                        }
                     },
-                    onGrant = { permissionLauncher.launch(arrayOf(spec.permission)) },
+                    onGrant = { permissionLauncher.launch(spec.permissions.toTypedArray()) },
                 )
             }
         }

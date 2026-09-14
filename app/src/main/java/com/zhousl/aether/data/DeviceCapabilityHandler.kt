@@ -332,7 +332,7 @@ class DeviceCapabilityHandler(private val context: Context) {
         contains: String,
         days: Int?,
     ): JSONObject = withContext(Dispatchers.IO) {
-        if (!hasPermission(photoPermissionForSdk(Build.VERSION.SDK_INT))) {
+        if (!hasPhotoAccess()) {
             return@withContext missingPermission("相册", "照片")
         }
         val cappedLimit = limit.coerceIn(1, PhotoListMaxLimit)
@@ -371,7 +371,11 @@ class DeviceCapabilityHandler(private val context: Context) {
             put("truncated", truncated)
             put("photos", JSONArray(photos))
             if (photos.isEmpty()) {
-                put("note", "No photo matched. Try a wider filter, or ask the user to grant the photos permission.")
+                put("note", emptyPhotoNote(album = album, contains = contains, days = days))
+                // A denied media query answers with zero rows rather than an
+                // error, so the answer has to carry the proof of what the phone
+                // would actually let Qing see.
+                put("access", photoAccessJson())
             } else if (truncated) {
                 put(
                     "note",
@@ -388,7 +392,7 @@ class DeviceCapabilityHandler(private val context: Context) {
      */
     suspend fun photoById(id: String): DevicePhoto? = withContext(Dispatchers.IO) {
         val numericId = id.trim().toLongOrNull() ?: return@withContext null
-        if (!hasPermission(photoPermissionForSdk(Build.VERSION.SDK_INT))) return@withContext null
+        if (!hasPhotoAccess()) return@withContext null
         runCatching {
             context.contentResolver.query(
                 MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
@@ -621,6 +625,89 @@ class DeviceCapabilityHandler(private val context: Context) {
     private fun hasPermission(permission: String): Boolean =
         ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
 
+    /**
+     * Whether Qing can actually read the photo library.
+     *
+     * Either channel counts, but one of them has to be there: a legacy caller
+     * that holds only the modern permission is denied, and the phone answers
+     * with zero rows instead of an error.
+     */
+    private fun hasPhotoAccess(): Boolean =
+        photoPermissionsForSdk(Build.VERSION.SDK_INT).any(::hasPermission)
+
+    /**
+     * Explains an album answer that came back empty.
+     *
+     * The media provider does not raise when it refuses a read: it simply
+     * returns no rows, which is indistinguishable from a real empty album. The
+     * note therefore carries what the phone actually lets Qing see, so a
+     * permission problem is never mistaken for "you have no photos".
+     */
+    private fun emptyPhotoNote(album: String, contains: String, days: Int?): String {
+        val visibleRows = countVisiblePhotos()
+        val filtered = album.isNotBlank() || contains.isNotBlank() || (days ?: 0) > 0
+        val head = when {
+            visibleRows == null -> "Qing could not reach the photo library at all."
+            visibleRows == 0 ->
+                "The phone is not letting Qing read any photos, so this is a photo access problem rather than a filter " +
+                    "one. Ask the user to open Qing's entry in the phone's own app settings (app permissions) and allow " +
+                    "photos, then try again."
+            filtered -> "The phone has $visibleRows readable photos, but none matched this filter."
+            else -> "The phone reports $visibleRows readable photos but returned none, which should not happen."
+        }
+        val albums = if (visibleRows != null && visibleRows > 0) visiblePhotoAlbums() else emptyList()
+        val albumText = if (albums.isEmpty()) "" else " Albums Qing can read: ${albums.joinToString(", ")}."
+        return head + albumText
+    }
+
+    /** How many images the phone is willing to show Qing, or null when the query itself fails. */
+    private fun countVisiblePhotos(): Int? = runCatching {
+        context.contentResolver.query(
+            MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+            arrayOf(MediaStore.Images.Media._ID),
+            null,
+            null,
+            null,
+        )?.use { cursor -> cursor.count }
+    }.getOrNull()
+
+    /** Album names Qing can read, so a filter that is too narrow can be corrected. */
+    private fun visiblePhotoAlbums(): List<String> {
+        val albums = LinkedHashSet<String>()
+        var scanned = 0
+        runCatching {
+            context.contentResolver.query(
+                MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                arrayOf(MediaStore.Images.Media.BUCKET_DISPLAY_NAME),
+                null,
+                null,
+                "${MediaStore.Images.Media.DATE_TAKEN} DESC",
+            )?.use { cursor ->
+                val column = cursor.getColumnIndex(MediaStore.Images.Media.BUCKET_DISPLAY_NAME)
+                if (column < 0) return@use
+                while (scanned < PhotoAlbumScanLimit && cursor.moveToNext()) {
+                    scanned += 1
+                    val name = cursor.getString(column).orEmpty().trim()
+                    if (name.isNotEmpty()) albums += name
+                }
+            }
+        }
+        return albums.take(PhotoAlbumListLimit)
+    }
+
+    /** What the phone actually granted, attached to an empty album answer. */
+    private fun photoAccessJson(): JSONObject = JSONObject().apply {
+        put("target_sdk", context.applicationInfo.targetSdkVersion)
+        put(
+            "granted_permissions",
+            JSONArray(photoPermissionsForSdk(Build.VERSION.SDK_INT).filter(::hasPermission)),
+        )
+        countVisiblePhotos()?.let { put("visible_image_rows", it) }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            put("volumes", JSONArray(MediaStore.getExternalVolumeNames(context).toList()))
+        }
+    }
+
     private fun missingPermission(capability: String, label: String): JSONObject = failure(
         "Qing does not have the $capability permission yet, so it cannot read this. " +
             "The user can grant it in Qing: settings, Agent mode, phone permissions ($label).",
@@ -755,6 +842,8 @@ private const val LocationFixTimeoutMillis = 10_000L
 private const val ContactLimit = 10
 private const val ContactNumbersPerPerson = 3
 private const val PhotoListMaxLimit = 50
+private const val PhotoAlbumScanLimit = 400
+private const val PhotoAlbumListLimit = 12
 private const val CalendarEventLimit = 20
 private const val CalendarWindowMaxDays = 30
 private const val CalendarDurationMaxMinutes = 24 * 60
@@ -840,12 +929,22 @@ internal fun buildPhotoQuery(
     return PhotoQuery(selection = clauses.joinToString(" AND "), arguments = arguments)
 }
 
-/** Android 13 split photo access out of storage; older devices keep the legacy one. */
-internal fun photoPermissionForSdk(sdkInt: Int): String =
+/**
+ * Permissions that can grant read access to the photo library on [sdkInt].
+ *
+ * Android 13 split photo access out of storage, but the platform decides which
+ * permission to enforce from the app's **targetSdk**, not from the phone's
+ * version, and Qing targets API 28. Android therefore keeps checking the legacy
+ * READ_EXTERNAL_STORAGE and maps a legacy request onto the system photo dialog,
+ * while READ_MEDIA_IMAGES is what a modern caller would hold. Declaring and
+ * asking for both, and accepting either, is what keeps every combination
+ * working; holding only one of them is how the album silently reads as empty.
+ */
+internal fun photoPermissionsForSdk(sdkInt: Int): List<String> =
     if (sdkInt >= Build.VERSION_CODES.TIRAMISU) {
-        Manifest.permission.READ_MEDIA_IMAGES
+        listOf(Manifest.permission.READ_MEDIA_IMAGES, Manifest.permission.READ_EXTERNAL_STORAGE)
     } else {
-        Manifest.permission.READ_EXTERNAL_STORAGE
+        listOf(Manifest.permission.READ_EXTERNAL_STORAGE)
     }
 
 private val LocalDateTimeFormats = listOf(

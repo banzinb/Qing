@@ -89,10 +89,30 @@ class DeviceCapabilityHandlerTest {
     }
 
     @Test
-    fun `the photo permission follows the android version`() {
-        assertEquals(Manifest.permission.READ_MEDIA_IMAGES, photoPermissionForSdk(33))
-        assertEquals(Manifest.permission.READ_MEDIA_IMAGES, photoPermissionForSdk(36))
-        assertEquals(Manifest.permission.READ_EXTERNAL_STORAGE, photoPermissionForSdk(32))
-        assertEquals(Manifest.permission.READ_EXTERNAL_STORAGE, photoPermissionForSdk(26))
+    fun `the photo permissions follow the android version`() {
+        // Android 13+ keeps the legacy permission in the list: Qing targets API
+        // 28, so that is the one the platform actually enforces.
+        assertEquals(
+            listOf(
+                Manifest.permission.READ_MEDIA_IMAGES,
+                Manifest.permission.READ_EXTERNAL_STORAGE,
+            ),
+            photoPermissionsForSdk(33),
+        )
+        assertEquals(
+            listOf(
+                Manifest.permission.READ_MEDIA_IMAGES,
+                Manifest.permission.READ_EXTERNAL_STORAGE,
+            ),
+            photoPermissionsForSdk(36),
+        )
+        assertEquals(
+            listOf(Manifest.permission.READ_EXTERNAL_STORAGE),
+            photoPermissionsForSdk(32),
+        )
+        assertEquals(
+            listOf(Manifest.permission.READ_EXTERNAL_STORAGE),
+            photoPermissionsForSdk(26),
+        )
     }
 }

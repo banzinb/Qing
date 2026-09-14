@@ -16,9 +16,15 @@
     <uses-permission android:name="android.permission.READ_CONTACTS" />
     <uses-permission android:name="android.permission.READ_CALENDAR" />
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
-    <uses-permission
-        android:name="android.permission.READ_EXTERNAL_STORAGE"
-        android:maxSdkVersion="32" />
+    <!--
+      Qing targets API 28, so Android keeps treating it as a legacy storage
+      caller: photo reads are gated on READ_EXTERNAL_STORAGE even on Android 13+,
+      where the platform maps a legacy request onto the system photo dialog.
+      Capping this at maxSdkVersion 32 left the app holding only
+      READ_MEDIA_IMAGES, which the legacy path does not accept, so the media
+      provider answered every query with zero rows instead of an error.
+    -->
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
 
     <queries>
         <package android:name="com.termux" />
