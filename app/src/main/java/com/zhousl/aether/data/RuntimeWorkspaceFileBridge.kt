@@ -3,6 +3,7 @@ package com.zhousl.aether.data
 import android.content.Context
 import android.net.Uri
 import com.zhousl.aether.runtime.AlpineRuntime
+import com.zhousl.aether.runtime.EmbeddedTermuxWorkspaceRootGuestPath
 import com.zhousl.aether.runtime.RuntimeRouter
 import com.zhousl.aether.runtime.TermuxEmbeddedRuntime
 import com.zhousl.aether.termux.TermuxContract
@@ -30,12 +31,24 @@ class RuntimeWorkspaceFileBridge(
         attachmentId: String,
         displayName: String,
         mode: AgentWorkspaceMode = AgentWorkspaceMode.Shared,
+        preferredRuntimeId: LocalRuntimeId? = null,
         onProgress: (WorkspaceImportProgress) -> Unit = {},
     ): Result<ImportedWorkspaceFile> {
-        val preferredRuntimeId = runtimeRouter.runtimeFor(settings, null)?.id
-            ?: settings.defaultRuntimeId
-            ?: LocalRuntimeId.Alpine
-        val runtimeOrder = listOf(preferredRuntimeId, preferredRuntimeId.alternate()).distinct()
+        val preferredKernelRuntimeId = (
+            preferredRuntimeId
+                ?: runtimeRouter.runtimeFor(settings, null)?.id
+                ?: settings.defaultRuntimeId
+                ?: LocalRuntimeId.Alpine
+            ).kernelRuntimeId
+        // Only Alpine and an external Termux are reachable from the kernel, so a
+        // fallback must never park the file inside the embedded Termux
+        // workspace: the model would be told the copy succeeded and then fail
+        // to read it.
+        val runtimeOrder = listOf(
+            preferredKernelRuntimeId,
+            LocalRuntimeId.Alpine,
+            LocalRuntimeId.Termux,
+        ).distinct()
         val failures = mutableListOf<String>()
 
         runtimeOrder.forEach { runtimeId ->
@@ -88,7 +101,9 @@ class RuntimeWorkspaceFileBridge(
         val runtimeId = resolveWorkspaceRuntimeId(
             path = normalizedPath,
             workingDirectory = workingDirectory,
-            defaultRuntimeId = runtimeRouter.runtimeFor(settings, null)?.id ?: LocalRuntimeId.Termux,
+            defaultRuntimeId = (
+                runtimeRouter.runtimeFor(settings, null)?.id ?: LocalRuntimeId.Alpine
+                ).kernelRuntimeId,
         )
         val resolvedWorkingDirectory = workingDirectory.ifBlank {
             when (runtimeId) {
@@ -170,7 +185,9 @@ class RuntimeWorkspaceFileBridge(
         val runtimeId = resolveWorkspaceRuntimeId(
             path = normalizedPath,
             workingDirectory = workspaceDirectory,
-            defaultRuntimeId = runtimeRouter.runtimeFor(settings, null)?.id ?: LocalRuntimeId.Termux,
+            defaultRuntimeId = (
+                runtimeRouter.runtimeFor(settings, null)?.id ?: LocalRuntimeId.Alpine
+                ).kernelRuntimeId,
         )
         return when (runtimeId) {
             LocalRuntimeId.Alpine -> writeAlpineWorkspaceBytes(
@@ -204,7 +221,9 @@ class RuntimeWorkspaceFileBridge(
         val runtimeId = resolveWorkspaceRuntimeId(
             path = normalizedPath,
             workingDirectory = workspaceDirectory,
-            defaultRuntimeId = runtimeRouter.runtimeFor(settings, null)?.id ?: LocalRuntimeId.Termux,
+            defaultRuntimeId = (
+                runtimeRouter.runtimeFor(settings, null)?.id ?: LocalRuntimeId.Alpine
+                ).kernelRuntimeId,
         )
         return when (runtimeId) {
             LocalRuntimeId.Alpine -> saveAlpineWorkspaceFileToDocument(
@@ -509,12 +528,6 @@ class RuntimeWorkspaceFileBridge(
     }
 }
 
-private fun LocalRuntimeId.alternate(): LocalRuntimeId = when (this) {
-    LocalRuntimeId.Alpine -> LocalRuntimeId.Termux
-    LocalRuntimeId.Termux -> LocalRuntimeId.EmbeddedTermux
-    LocalRuntimeId.EmbeddedTermux -> LocalRuntimeId.Alpine
-}
-
 private fun buildRuntimeWorkspaceFileName(
     attachmentId: String,
     displayName: String,
@@ -553,16 +566,16 @@ internal fun resolveWorkspaceRuntimeId(
 ): LocalRuntimeId {
     val normalizedPath = normalizeRuntimeWorkspacePath(path)
     val normalizedWorkingDirectory = normalizeRuntimeWorkspacePath(workingDirectory)
-    val termuxStylePath = isTermuxWorkspacePath(normalizedPath)
-    val termuxStyleWorkingDirectory = isTermuxWorkspacePath(normalizedWorkingDirectory)
-    val prefersEmbedded = defaultRuntimeId == LocalRuntimeId.EmbeddedTermux
+    // The path is checked before the working directory: an absolute path that
+    // names a workspace belongs to that runtime no matter where the shell
+    // happens to stand.
     return when {
         isAlpineWorkspacePath(normalizedPath) -> LocalRuntimeId.Alpine
-        termuxStylePath && prefersEmbedded -> LocalRuntimeId.EmbeddedTermux
+        isEmbeddedTermuxWorkspacePath(normalizedPath) -> LocalRuntimeId.EmbeddedTermux
+        isTermuxWorkspacePath(normalizedPath) -> LocalRuntimeId.Termux
         isAlpineWorkspacePath(normalizedWorkingDirectory) -> LocalRuntimeId.Alpine
-        termuxStyleWorkingDirectory && prefersEmbedded -> LocalRuntimeId.EmbeddedTermux
-        termuxStylePath -> LocalRuntimeId.Termux
-        termuxStyleWorkingDirectory -> LocalRuntimeId.Termux
+        isEmbeddedTermuxWorkspacePath(normalizedWorkingDirectory) -> LocalRuntimeId.EmbeddedTermux
+        isTermuxWorkspacePath(normalizedWorkingDirectory) -> LocalRuntimeId.Termux
         else -> defaultRuntimeId
     }
 }
@@ -581,6 +594,10 @@ private fun normalizeRuntimeWorkspacePath(path: String): String {
 
 private fun isAlpineWorkspacePath(path: String): Boolean =
     path == "/workspace" || path.startsWith("/workspace/")
+
+private fun isEmbeddedTermuxWorkspacePath(path: String): Boolean =
+    path == EmbeddedTermuxWorkspaceRootGuestPath ||
+        path.startsWith("$EmbeddedTermuxWorkspaceRootGuestPath/")
 
 private fun isTermuxWorkspacePath(path: String): Boolean =
     path == "~" ||

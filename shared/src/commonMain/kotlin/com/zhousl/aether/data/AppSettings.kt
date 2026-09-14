@@ -173,6 +173,19 @@ enum class LocalRuntimeId(
         displayName = "内嵌 Termux",
     );
 
+    /**
+     * The runtime the Pi kernel behind the model actually executes in.
+     *
+     * The model's tools run through the Node bridge, and that bridge only knows
+     * two environments: Alpine and an external Termux. Its own process is
+     * started inside the Alpine guest. Every other value - the embedded Termux
+     * included - is served by Alpine on that side, so treating the configured
+     * runtime as the kernel runtime is what put photos in a workspace the model
+     * could not read.
+     */
+    val kernelRuntimeId: LocalRuntimeId
+        get() = if (this == EmbeddedTermux) Alpine else this
+
     companion object {
         fun fromStorage(value: String?): LocalRuntimeId? =
             entries.firstOrNull { it.storageValue == value }

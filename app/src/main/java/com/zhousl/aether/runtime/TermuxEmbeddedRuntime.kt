@@ -27,6 +27,16 @@ private const val TermuxProotAssetRoot = "runtimes/alpine/arm64-v8a"
 private const val TermuxGuestPrefix = "/data/data/com.termux/files/usr"
 private const val TermuxGuestHome = "/data/data/com.termux/files/home"
 private const val TermuxGuestBash = "$TermuxGuestPrefix/bin/bash"
+
+/**
+ * Guest path the embedded Termux workspace is mounted at.
+ *
+ * It is deliberately not the external Termux workspace
+ * (`$TermuxGuestHome/.aether/workspace`), so a workspace path on its own is
+ * enough to tell the two Termux runtimes apart instead of guessing.
+ */
+internal const val EmbeddedTermuxWorkspaceRootGuestPath = "$TermuxGuestHome/workspace"
+
 private const val TermuxSecondStageScript =
     "$TermuxGuestPrefix/etc/termux/termux-bootstrap/second-stage/termux-bootstrap-second-stage.sh"
 private val TermuxMirrorSources = """
@@ -60,7 +70,7 @@ class TermuxEmbeddedRuntime(
     override val id: LocalRuntimeId = LocalRuntimeId.EmbeddedTermux
     override val displayName: String = "内嵌 Termux"
     override val homeDirectory: String = TermuxGuestHome
-    override val workspaceRoot: String = "$TermuxGuestHome/workspace"
+    override val workspaceRoot: String = EmbeddedTermuxWorkspaceRootGuestPath
     override val managedCommandsDirectory: String = "$TermuxGuestHome/.aether/bash-runs"
 
     fun setEnvironmentVariables(variables: List<TermuxEnvironmentVariable>) {

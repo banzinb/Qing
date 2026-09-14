@@ -7224,6 +7224,12 @@ private fun EmbeddedTermuxSettingsPage(
                     style = MaterialTheme.typography.bodySmall,
                     color = AetherOnSurfaceVariant,
                 )
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    text = "模型自己执行 read / bash 的环境只会是 Alpine 或外部 Termux。内嵌 Termux 负责青的内置终端，以及附件与导出文件的工作区；把它设为默认运行时，模型仍然跑在 Alpine，文件也就放在 Alpine 的工作区里。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = AetherOnSurfaceVariant,
+                )
             }
         }
     }

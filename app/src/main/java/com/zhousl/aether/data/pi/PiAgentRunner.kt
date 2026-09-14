@@ -95,7 +95,12 @@ class PiAgentRunner(
                 val resolvedSessionId = sessionId.ifBlank {
                     "aether-session-${System.currentTimeMillis()}"
                 }
-                var currentRuntimeId = runtimeId
+                val currentRuntimeId = runtimeId
+                // A runtime switch asked for while the turn is running can only
+                // take effect from the next message: this turn's tools already
+                // run in the runtime above, and saying otherwise would misreport
+                // the environment the model just used.
+                var pendingRuntimeId: LocalRuntimeId? = null
                 val appendedPiEntryIds = ConcurrentLinkedQueue<String>()
                 val memoryContext = memoryRepository?.buildAutoInjectionContext().orEmpty()
                 val prompt = {
@@ -175,7 +180,7 @@ class PiAgentRunner(
                                 selfManagementTool = selfManagementTool,
                                 agentModeEnabled = agentModeEnabled,
                                 currentRuntimeId = { currentRuntimeId },
-                                onRuntimeChanged = { currentRuntimeId = it },
+                                onRuntimeChangeRequested = { pendingRuntimeId = it },
                                 updatedSystemPrompt = prompt,
                             )
                         }
@@ -252,7 +257,7 @@ class PiAgentRunner(
                                     selfManagementTool = selfManagementTool,
                                     agentModeEnabled = agentModeEnabled,
                                     currentRuntimeId = { currentRuntimeId },
-                                    onRuntimeChanged = { currentRuntimeId = it },
+                                    onRuntimeChangeRequested = { pendingRuntimeId = it },
                                     updatedSystemPrompt = prompt,
                                 )
                             } finally {
@@ -514,7 +519,7 @@ class PiAgentRunner(
                             piSessionId = completion.sessionId,
                             piSessionFile = completion.sessionFile,
                             piSessionLeafId = completion.sessionLeafId,
-                            runtime = completion.runtime,
+                            runtime = (pendingRuntimeId ?: currentRuntimeId).storageValue,
                             cwd = completion.cwd,
                             piEntryIds = appendedPiEntryIds.toList(),
                         )
@@ -552,7 +557,7 @@ class PiAgentRunner(
         selfManagementTool: AetherSelfManagementTool?,
         agentModeEnabled: Boolean,
         currentRuntimeId: () -> LocalRuntimeId,
-        onRuntimeChanged: suspend (LocalRuntimeId) -> Unit,
+        onRuntimeChangeRequested: suspend (LocalRuntimeId) -> Unit,
         updatedSystemPrompt: () -> String,
     ) {
         val toolRequestId = payload.optString("tool_request_id").trim()
@@ -593,7 +598,7 @@ class PiAgentRunner(
                 selfManagementTool = selfManagementTool,
                 agentModeEnabled = agentModeEnabled,
                 currentRuntimeId = currentRuntimeId(),
-                onRuntimeChanged = onRuntimeChanged,
+                onRuntimeChangeRequested = onRuntimeChangeRequested,
                 onProgress = { progress ->
                     bridge.sendHostToolProgress(
                         hostToolPayload(

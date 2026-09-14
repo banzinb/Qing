@@ -27,6 +27,7 @@ class AetherSelfManagementTool(
     private val deviceCapabilities: DeviceCapabilityHandler? = null,
     private val uiAutomation: QingUiToolHandler? = null,
     private val runtimeWorkspaceFileBridge: RuntimeWorkspaceFileBridge? = null,
+    private val runtimeId: LocalRuntimeId? = null,
 ) {
     fun toolDefinitions(): List<JSONObject> = listOf(
         buildAetherToolDefinition(
@@ -118,7 +119,9 @@ class AetherSelfManagementTool(
         ),
         buildAetherToolDefinition(
             name = "aether_runtime_manage",
-            description = "Read or switch the current chat session runtime. The switch applies to the next model call and preserves independent Alpine and Termux workspaces.",
+            description = "Read or switch the runtime that runs your own tools: alpine or termux. A switch takes effect " +
+                "from your next message, and Alpine and Termux keep independent workspaces. The embedded Termux is " +
+                "Qing's built-in terminal and cannot host your tools.",
             properties = JSONObject().apply {
                 put(
                     "action",
@@ -131,7 +134,7 @@ class AetherSelfManagementTool(
                     "runtime",
                     JSONObject().apply {
                         put("type", "string")
-                        put("enum", JSONArray(listOf("alpine", "termux", "embedded_termux")))
+                        put("enum", JSONArray(listOf("alpine", "termux")))
                     },
                 )
             },
@@ -692,8 +695,9 @@ class AetherSelfManagementTool(
      *
      * Listing photos is only half a feature: the model cannot tell a sunset from
      * a receipt by file name, so the picture has to land somewhere `read` can
-     * open. That copy runs inside the local runtime, so a runtime that is not set
-     * up is reported as such instead of pretending the photo arrived.
+     * open. That copy runs inside the session runtime, which is the runtime the
+     * kernel executes in, so a runtime that is not set up is reported as such
+     * instead of pretending the photo arrived.
      */
     private suspend fun exportPhoto(photoId: String): String {
         val capabilities = deviceCapabilities
@@ -716,6 +720,7 @@ class AetherSelfManagementTool(
             attachmentId = "photo-$id-${System.currentTimeMillis()}",
             displayName = photo.displayName,
             mode = settings.agentWorkspaceMode,
+            preferredRuntimeId = runtimeId,
         ).getOrElse { error ->
             return failure(
                 "Could not copy the photo into the workspace: ${error.message ?: error::class.java.simpleName}. " +

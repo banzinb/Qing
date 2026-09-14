@@ -552,6 +552,51 @@ class SessionExecutionManager(
                 "base_url" to DiagnosticRedactor.sanitizedBaseUrl(request.settings.baseUrl),
             ),
         )
+        val workspaceDirectory = workspaceFileBridge.workspaceDirectory(
+            sessionId = handle.sessionId,
+            mode = request.settings.agentWorkspaceMode,
+        )
+        // The kernel only runs inside Alpine or an external Termux, so the
+        // session runtime is its runtime too. Everything that places or looks up
+        // workspace files has to follow that same answer, otherwise a photo is
+        // copied into a workspace the model cannot read.
+        // Failing to work out the runtime must not kill the turn, so this stays
+        // best effort with a logged reason and the configured runtime as the
+        // answer. It runs before the turn's own error handling, on purpose.
+        val runtimeResolution = runCatching {
+            val metadata = chatRepository.getAgentSessionMetadata(handle.sessionId)
+                ?.takeIf { entry -> validateAgentSessionFile(entry.piSessionId, entry.jsonlPath) }
+            val recordedRuntimeId = LocalRuntimeId.fromStorage(metadata?.runtime)?.kernelRuntimeId
+            val resolvedRuntimeId = when {
+                recordedRuntimeId != null &&
+                    runtimeRouter.runtimeById(recordedRuntimeId).inspectSetup().isReady -> recordedRuntimeId
+                else ->
+                    runtimeRouter.resolveUsableRuntime(request.settings, null)?.id?.kernelRuntimeId
+                        ?: recordedRuntimeId
+                        ?: request.settings.defaultRuntimeId?.kernelRuntimeId
+                        ?: LocalRuntimeId.Alpine
+            }
+            metadata to resolvedRuntimeId
+        }
+        runtimeResolution.exceptionOrNull()?.let { error ->
+            diagnosticLogger.exception(
+                category = "session_runtime",
+                event = "resolve_failed",
+                throwable = error,
+                sessionId = handle.sessionId,
+            )
+        }
+        val resolvedRuntime = runtimeResolution.getOrNull()
+        val agentSessionMetadata = resolvedRuntime?.first
+        val activeRuntimeId = resolvedRuntime?.second
+            ?: request.settings.defaultRuntimeId?.kernelRuntimeId
+            ?: LocalRuntimeId.Alpine
+        val runtimeWorkspaceDirectory = when (activeRuntimeId) {
+            LocalRuntimeId.Termux -> workspaceDirectory
+            LocalRuntimeId.Alpine -> runtimeRouter.runtimeById(LocalRuntimeId.Alpine).workspaceRoot
+            LocalRuntimeId.EmbeddedTermux ->
+                runtimeRouter.runtimeById(LocalRuntimeId.EmbeddedTermux).workspaceRoot
+        }
         val selfManagementTool = AetherSelfManagementTool(
             settingsRepository = settingsRepository,
             extensionsRepository = extensionsRepository,
@@ -566,6 +611,7 @@ class SessionExecutionManager(
             deviceCapabilities = DeviceCapabilityHandler(application),
             uiAutomation = QingUiToolHandler(application),
             runtimeWorkspaceFileBridge = runtimeWorkspaceFileBridge,
+            runtimeId = activeRuntimeId,
         )
 
         updateExecutionState(handle.sessionId) {
@@ -601,28 +647,6 @@ class SessionExecutionManager(
                 activeMcpServerIds = emptyList(),
             )
 
-            val workspaceDirectory = workspaceFileBridge.workspaceDirectory(
-                sessionId = handle.sessionId,
-                mode = request.settings.agentWorkspaceMode,
-            )
-            val agentSessionMetadata = chatRepository.getAgentSessionMetadata(handle.sessionId)
-                ?.takeIf { metadata -> validateAgentSessionFile(metadata.piSessionId, metadata.jsonlPath) }
-            val sessionRuntimeId = LocalRuntimeId.fromStorage(agentSessionMetadata?.runtime)
-            val activeRuntimeId = when {
-                sessionRuntimeId != null && runtimeRouter.runtimeById(sessionRuntimeId).inspectSetup().isReady ->
-                    sessionRuntimeId
-                else ->
-                    runtimeRouter.resolveUsableRuntime(request.settings, null)?.id
-                        ?: sessionRuntimeId
-                        ?: request.settings.defaultRuntimeId
-                        ?: LocalRuntimeId.Alpine
-            }
-            val runtimeWorkspaceDirectory = when (activeRuntimeId) {
-                LocalRuntimeId.Termux -> workspaceDirectory
-                LocalRuntimeId.Alpine -> runtimeRouter.runtimeById(LocalRuntimeId.Alpine).workspaceRoot
-                LocalRuntimeId.EmbeddedTermux ->
-                    runtimeRouter.runtimeById(LocalRuntimeId.EmbeddedTermux).workspaceRoot
-            }
             val reasoningTraceToolRoutingEnabled = request.settings.supportsVisibleReasoningTrace()
             var providerRequestCheckpoint: ProviderRequestCheckpoint? = null
             val emitToolEvent: suspend (AgentToolEvent) -> Unit = { event ->

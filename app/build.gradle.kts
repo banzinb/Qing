@@ -117,7 +117,7 @@ android {
         // Alpine/Termux-style local runtimes install executable ELF files into app-private
         // storage. Android blocks execve() from that location for targetSdk >= 29.
         targetSdk = 28
-    versionCode = 25
+    versionCode = 26
         versionName = appVersionName
 
         ndk {

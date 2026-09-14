@@ -35,7 +35,7 @@ class AetherToolExecutor(
         selfManagementTool: AetherSelfManagementTool? = null,
         agentModeEnabled: Boolean = false,
         currentRuntimeId: LocalRuntimeId = settings.defaultRuntimeId ?: LocalRuntimeId.Alpine,
-        onRuntimeChanged: suspend (LocalRuntimeId) -> Unit = {},
+        onRuntimeChangeRequested: suspend (LocalRuntimeId) -> Unit = {},
         onProgress: (suspend (String) -> Unit)? = null,
     ): AetherToolExecutionResult {
         val rawOutput = when (toolName) {
@@ -66,7 +66,7 @@ class AetherToolExecutor(
                 workspaceDirectory = workspaceDirectory,
                 termuxWorkspaceDirectory = termuxWorkspaceDirectory,
                 argumentsJson = argumentsJson,
-                onRuntimeChanged = onRuntimeChanged,
+                onRuntimeChangeRequested = onRuntimeChangeRequested,
             )
 
             "memory_write" -> executeMemoryWrite(argumentsJson)
@@ -91,7 +91,7 @@ class AetherToolExecutor(
         workspaceDirectory: String,
         termuxWorkspaceDirectory: String,
         argumentsJson: String,
-        onRuntimeChanged: suspend (LocalRuntimeId) -> Unit,
+        onRuntimeChangeRequested: suspend (LocalRuntimeId) -> Unit,
     ): String {
         val arguments = runCatching { JSONObject(argumentsJson) }.getOrNull()
             ?: return JSONObject().put("ok", false).put("errmsg", "Invalid JSON arguments.").toString()
@@ -111,13 +111,42 @@ class AetherToolExecutor(
                         states.forEach { (runtimeId, state) -> put(runtimeId.storageValue, state.isReady) }
                     },
                 )
+                // Only these two can host the model's own tools. The embedded
+                // Termux runs the app's terminal and workspace files, and the
+                // kernel side serves it with Alpine.
+                put(
+                    "kernel_runtimes",
+                    JSONArray(
+                        listOf(
+                            LocalRuntimeId.Alpine.storageValue,
+                            LocalRuntimeId.Termux.storageValue,
+                        )
+                    ),
+                )
+                put(
+                    "note",
+                    "runtime is the environment your own tools run in; only alpine and termux can host them.",
+                )
             }.toString()
         }
         if (action != "set") {
             return JSONObject().put("ok", false).put("errmsg", "action must be 'status' or 'set'.").toString()
         }
         val requested = LocalRuntimeId.fromStorage(arguments.optString("runtime"))
-            ?: return JSONObject().put("ok", false).put("errmsg", "runtime must be 'alpine', 'termux' or 'embedded_termux'.").toString()
+            ?: return JSONObject().put("ok", false).put("errmsg", "runtime must be 'alpine' or 'termux'.").toString()
+        if (requested != requested.kernelRuntimeId) {
+            return JSONObject().apply {
+                put("ok", false)
+                put("errmsg", "${requested.displayName} cannot host your tools, so it is not a runtime to switch to.")
+                put(
+                    "detail",
+                    "Only alpine and termux run your tools. embedded_termux is Qing's built-in terminal, " +
+                        "and your tools keep running in ${currentRuntimeId.displayName}.",
+                )
+                put("runtime", currentRuntimeId.storageValue)
+                put("cwd", runtimeCwd(currentRuntimeId, workspaceDirectory, termuxWorkspaceDirectory))
+            }.toString()
+        }
         val setup = runtimeRouter.runtimeById(requested).inspectSetup()
         val enabled = settings.enabledRuntimeIds.isEmpty() || requested in settings.enabledRuntimeIds
         if (!setup.isReady || !enabled) {
@@ -129,12 +158,17 @@ class AetherToolExecutor(
                 put("cwd", runtimeCwd(currentRuntimeId, workspaceDirectory, termuxWorkspaceDirectory))
             }.toString()
         }
-        onRuntimeChanged(requested)
+        onRuntimeChangeRequested(requested)
         return JSONObject().apply {
             put("ok", true)
             put("action", "set")
-            put("runtime", requested.storageValue)
-            put("cwd", runtimeCwd(requested, workspaceDirectory, termuxWorkspaceDirectory))
+            put("runtime", currentRuntimeId.storageValue)
+            put("requested_runtime", requested.storageValue)
+            put("cwd", runtimeCwd(currentRuntimeId, workspaceDirectory, termuxWorkspaceDirectory))
+            put(
+                "note",
+                "Takes effect from your next message; this message keeps running in ${currentRuntimeId.displayName}.",
+            )
         }.toString()
     }
 

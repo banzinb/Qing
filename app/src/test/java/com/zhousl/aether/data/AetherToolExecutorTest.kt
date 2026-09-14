@@ -1,5 +1,6 @@
 package com.zhousl.aether.data
 
+import com.zhousl.aether.termux.TermuxContract
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -106,6 +107,37 @@ class AetherToolExecutorTest {
                 defaultRuntimeId = LocalRuntimeId.Termux,
             ),
         )
+        assertEquals(
+            LocalRuntimeId.EmbeddedTermux,
+            resolveWorkspaceRuntimeId(
+                path = "${TermuxContract.HomeDirectory}/workspace/uploads/photo.jpg",
+                workingDirectory = "",
+                defaultRuntimeId = LocalRuntimeId.Alpine,
+            ),
+        )
+        assertEquals(
+            LocalRuntimeId.EmbeddedTermux,
+            resolveWorkspaceRuntimeId(
+                path = "uploads/photo.jpg",
+                workingDirectory = "${TermuxContract.HomeDirectory}/workspace",
+                defaultRuntimeId = LocalRuntimeId.Termux,
+            ),
+        )
+        assertEquals(
+            LocalRuntimeId.Termux,
+            resolveWorkspaceRuntimeId(
+                path = "${TermuxContract.HomeDirectory}/.aether/workspace/output.png",
+                workingDirectory = "",
+                defaultRuntimeId = LocalRuntimeId.EmbeddedTermux,
+            ),
+        )
+    }
+
+    @Test
+    fun kernelRuntimeIdKeepsTheKernelWhereItCanRun() {
+        assertEquals(LocalRuntimeId.Alpine, LocalRuntimeId.Alpine.kernelRuntimeId)
+        assertEquals(LocalRuntimeId.Termux, LocalRuntimeId.Termux.kernelRuntimeId)
+        assertEquals(LocalRuntimeId.Alpine, LocalRuntimeId.EmbeddedTermux.kernelRuntimeId)
     }
 
 }

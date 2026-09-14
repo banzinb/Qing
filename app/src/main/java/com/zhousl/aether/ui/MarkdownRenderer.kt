@@ -2189,7 +2189,9 @@ private suspend fun loadWorkspaceImageBinary(
     val defaultRuntimeId = resolveWorkspaceRuntimeId(
         path = "",
         workingDirectory = workingDirectory,
-        defaultRuntimeId = LocalRuntimeId.Termux,
+        // Alpine is the environment the kernel actually runs in, so it is the
+        // honest fallback for a path that names no workspace at all.
+        defaultRuntimeId = LocalRuntimeId.Alpine,
     )
     val resolvedRuntimeId = resolveWorkspaceRuntimeId(
         path = resolvedPath,
