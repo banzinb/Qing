@@ -79,6 +79,7 @@ import androidx.compose.material.icons.rounded.Cloud
 import androidx.compose.material.icons.rounded.Compress
 import androidx.compose.material.icons.rounded.Extension
 import androidx.compose.material.icons.rounded.Image
+import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.Menu
 import androidx.compose.material.icons.rounded.OpenInNew
 import androidx.compose.material.icons.rounded.RadioButtonUnchecked
@@ -1001,6 +1002,15 @@ private fun ConversationTopBar(
         newChatDescription = stringResource(R.string.common_new_chat),
         onMenu = onMenu,
         onNewChat = onNewChat,
+        glass = AetherTopBarGlassStyle(
+            borderAlpha = 0f,
+            surfaceAlpha = 0.8f,
+            topHighlight = true,
+            controlSize = 32.dp,
+            controlIconSize = 17.dp,
+            controlBorder = false,
+            controlHalo = false,
+        ),
     ) {
         ConversationModelSelector(
             agentStatus = agentStatus,
@@ -1068,24 +1078,16 @@ private fun ConversationModelSelector(
         contentAlignment = Alignment.CenterStart,
     ) {
         Box(
-            modifier = Modifier.height(38.dp)
+            modifier = Modifier.height(32.dp)
                 .onGloballyPositioned { coordinates ->
                     val bounds = coordinates.boundsInWindow()
                     anchorHeightPx = bounds.height.toInt()
                 },
         ) {
-            Box(
-                modifier = Modifier.matchParentSize()
-                    .offset(y = 4.dp)
-                    .blur(14.dp, edgeTreatment = BlurredEdgeTreatment.Unbounded)
-                    .clip(RoundedCornerShape(999.dp))
-                    .background(ChatGptControlShadow),
-            )
             Row(
-                modifier = Modifier.height(38.dp)
+                modifier = Modifier.height(32.dp)
                     .clip(RoundedCornerShape(999.dp))
-                    .background(aetherGlassControlColor())
-                    .border(1.dp, aetherGlassBorderColor(), RoundedCornerShape(999.dp))
+                    .background(aetherGlassPillColor())
                     .clickable(enabled = options.isNotEmpty()) {
                         onOpened()
                         menuSelectedModelKey = selectedModelKey
@@ -1096,7 +1098,7 @@ private fun ConversationModelSelector(
             ) {
                 AetherGlassStatusDot(
                     status = agentStatus,
-                    modifier = Modifier.padding(start = 17.dp),
+                    modifier = Modifier.padding(start = 13.dp),
                 )
                 Spacer(modifier = Modifier.width(7.dp))
                 if (selectedDisplay != null) {
@@ -1104,7 +1106,7 @@ private fun ConversationModelSelector(
                         displayName = selectedDisplay,
                         modifier = Modifier
                             .widthIn(max = 240.dp)
-                            .padding(end = 17.dp),
+                            .padding(end = 6.dp),
                     )
                 } else {
                     Text(
@@ -1115,9 +1117,17 @@ private fun ConversationModelSelector(
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier
                             .widthIn(max = 220.dp)
-                            .padding(end = 17.dp),
+                            .padding(end = 6.dp),
                     )
                 }
+                Icon(
+                    imageVector = Icons.Rounded.KeyboardArrowDown,
+                    contentDescription = null,
+                    tint = AetherOnSurface.copy(alpha = 0.50f),
+                    modifier = Modifier
+                        .padding(end = 11.dp)
+                        .size(16.dp),
+                )
             }
         }
 

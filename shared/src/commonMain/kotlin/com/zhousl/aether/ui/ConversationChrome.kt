@@ -93,13 +93,23 @@ fun aetherGlassControlColor(): Color {
 }
 
 @Composable
+fun aetherGlassPillColor(): Color {
+    val dark = isGlassDarkTheme()
+    return if (dark) Color(0xCC2A3344) else Color(0xD9FFFFFF)
+}
+
+@Composable
 fun AetherGlassCapsule(
     modifier: Modifier = Modifier,
     cornerRadius: Dp = 20.dp,
+    borderAlpha: Float = 1f,
+    surfaceAlpha: Float = 1f,
+    topHighlight: Boolean = false,
     content: @Composable BoxScope.() -> Unit,
 ) {
     val shape = RoundedCornerShape(cornerRadius)
-    val surface = aetherGlassSurfaceColor()
+    val baseSurface = aetherGlassSurfaceColor()
+    val surface = baseSurface.copy(alpha = baseSurface.alpha * surfaceAlpha)
     val border = aetherGlassBorderColor()
     val shadow = aetherGlassShadowColor()
     Box(
@@ -111,11 +121,45 @@ fun AetherGlassCapsule(
                     colors = listOf(surface, surface.copy(alpha = surface.alpha * 0.80f)),
                 ),
             )
-            .border(1.dp, border, shape),
+            .then(
+                if (borderAlpha > 0.01f) {
+                    Modifier.border(1.dp, border.copy(alpha = border.alpha * borderAlpha), shape)
+                } else {
+                    Modifier
+                }
+            ),
     ) {
         content()
+        if (topHighlight) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .fillMaxWidth()
+                    .height(1.dp)
+                    .background(
+                        Brush.horizontalGradient(
+                            colors = listOf(
+                                Color.Transparent,
+                                Color.White.copy(alpha = 0.70f),
+                                Color.Transparent,
+                            ),
+                        ),
+                    ),
+            )
+        }
     }
 }
+
+data class AetherTopBarGlassStyle(
+    val borderAlpha: Float = 1f,
+    val surfaceAlpha: Float = 1f,
+    val topHighlight: Boolean = false,
+    val controlSize: Dp = 38.dp,
+    val controlIconSize: Dp = 19.dp,
+    val controlBorder: Boolean = true,
+    val controlHalo: Boolean = true,
+    val controlContainerColor: Color? = null,
+)
 
 @Composable
 fun AetherGlassStatusDot(
@@ -175,6 +219,7 @@ fun AetherConversationTopBarFrame(
     onNewChat: () -> Unit,
     showMenu: Boolean = true,
     modifier: Modifier = Modifier,
+    glass: AetherTopBarGlassStyle = AetherTopBarGlassStyle(),
     centerContent: @Composable BoxScope.() -> Unit,
 ) {
     AetherGlassCapsule(
@@ -182,6 +227,9 @@ fun AetherConversationTopBarFrame(
             .fillMaxWidth()
             .padding(horizontal = 12.dp, vertical = 6.dp),
         cornerRadius = 20.dp,
+        borderAlpha = glass.borderAlpha,
+        surfaceAlpha = glass.surfaceAlpha,
+        topHighlight = glass.topHighlight,
     ) {
         Row(
             modifier = Modifier
@@ -194,10 +242,11 @@ fun AetherConversationTopBarFrame(
                     icon = Icons.Rounded.Menu,
                     contentDescription = menuDescription,
                     onClick = onMenu,
-                    size = 38.dp,
-                    iconSize = 19.dp,
-                    containerColor = aetherGlassControlColor(),
-                    borderColor = aetherGlassBorderColor(),
+                    size = glass.controlSize,
+                    iconSize = glass.controlIconSize,
+                    containerColor = glass.controlContainerColor ?: aetherGlassControlColor(),
+                    borderColor = if (glass.controlBorder) aetherGlassBorderColor() else null,
+                    showHalo = glass.controlHalo,
                 )
             }
             Box(
@@ -213,10 +262,11 @@ fun AetherConversationTopBarFrame(
                 icon = LucideIcons.SquarePen,
                 contentDescription = newChatDescription,
                 onClick = onNewChat,
-                size = 38.dp,
-                iconSize = 19.dp,
-                containerColor = aetherGlassControlColor(),
-                borderColor = aetherGlassBorderColor(),
+                size = glass.controlSize,
+                iconSize = glass.controlIconSize,
+                containerColor = glass.controlContainerColor ?: aetherGlassControlColor(),
+                borderColor = if (glass.controlBorder) aetherGlassBorderColor() else null,
+                showHalo = glass.controlHalo,
             )
         }
     }
